@@ -1,5 +1,5 @@
 #description: Creates and associated a public IP address to each session host VM.
-#tags: Nerdio
+#tags: 
 <#
 Overview: This script assigns a Public IP to a VM.
 If it hasn't run before, it will create a public IP based on the name of the VM, and then assign it
