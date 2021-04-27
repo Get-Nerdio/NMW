@@ -1,9 +1,12 @@
 #description: Enable RDP Shortpath on each session host VMs
 #execution mode: IndividualWithRestart
 #tags: Nerdio
-# This script will setup windows OS for shortpath as defined here: https://docs.microsoft.com/en-us/azure/virtual-desktop/shortpath
-# A reboot is required after running this script for the configuration to take effect.
-# Please read the MS Doc to ensure Direct line of sight and NSG rules are considered in your environment.
+<#
+Notes:
+This script will setup windows OS for shortpath as defined here: https://docs.microsoft.com/en-us/azure/virtual-desktop/shortpath
+A reboot is required after running this script for the configuration to take effect.
+Please read the MS Doc to ensure Direct line of sight and NSG rules are considered in your environment!
+#>
 
 # Add registry keys
 $WinstationsKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations'

@@ -2,10 +2,7 @@
 #execution mode: IndividualWithRestart
 #tags: Nerdio
 <#
-IMPORTANT: REBOOT WILL BE REQUIRED after running this scripted action.
-Use "Individual with Restart" script execution mode.
-
-Sumamry:
+Notes:
 This script will install all windows updates using PSWindowsUpdate 
 See: https://www.powershellgallery.com/packages/PSWindowsUpdate for details
 #>

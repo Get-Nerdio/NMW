@@ -2,7 +2,7 @@
 #execution mode: IndividualWithRestart
 #tags: Nerdio
 <#
-Purpose:
+Notes:
 This script uses the Virtual Desktop Optimization tool, found here: 
 https://github.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool
 to remove default apps, disable tasks and services, and alter registry values in order to optimizze

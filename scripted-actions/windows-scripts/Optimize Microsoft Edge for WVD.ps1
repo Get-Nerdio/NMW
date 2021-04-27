@@ -1,7 +1,7 @@
 #description: (PREVIEW) Configures policy settings for Microsoft Edge meant to optimize performance in WVD
 #tags: Nerdio, Preview
-
 <#
+Notes:
 This script configures policy settings for Microsoft Edge meant to optimize performance.
 Policies Set: 
     - Enable Sleeping Tabs ("sleep" inactive browser tabs) 

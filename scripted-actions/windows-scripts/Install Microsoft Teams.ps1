@@ -2,8 +2,7 @@
 #execution mode: IndividualWithRestart
 #tags: Nerdio, Apps install
 <# 
-Notes:
-This script preforms the following:
+This script performs the following:
 1. Sets registry value for teams to WVD Mode
 2. Uninstall MSTeams and WebRTC program
 3. Downloads and Installs latest version of MSTeams machine-wide (Not per-user)
