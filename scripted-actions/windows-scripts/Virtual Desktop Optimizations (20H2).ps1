@@ -90,279 +90,280 @@ XboxNetApiSvc
 $DefaultUserSettings = @"
 [
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer",
         "KeyName": "ShellState",
         "PropertyType": "BINARY",
         "PropertyValue": "0x24,0x00,0x00,0x00,0x3C,0x28,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00",
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
         "KeyName": "IconsOnly",
         "PropertyType": "DWORD",
         "PropertyValue": 1,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
         "KeyName": "ListviewAlphaSelect",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
         "KeyName": "ListviewShadow",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
         "KeyName": "ShowCompColor",
         "PropertyType": "DWORD",
         "PropertyValue": 1,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
         "KeyName": "ShowInfoTip",
         "PropertyType": "DWORD",
         "PropertyValue": 1,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
         "KeyName": "TaskbarAnimations",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\VisualEffects",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\VisualEffects",
         "KeyName": "VisualFXSetting",
         "PropertyType": "DWORD",
         "PropertyValue": 3,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\DWM",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\DWM",
         "KeyName": "EnableAeroPeek",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\DWM",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\DWM",
         "KeyName": "AlwaysHiberNateThumbnails",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Control Panel\\Desktop",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Control Panel\\Desktop",
         "KeyName": "DragFullWindows",
         "PropertyType": "STRING",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Control Panel\\Desktop",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Control Panel\\Desktop",
         "KeyName": "FontSmoothing",
         "PropertyType": "STRING",
         "PropertyValue": 2,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Control Panel\\Desktop",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Control Panel\\Desktop",
         "KeyName": "UserPreferencesMask",
         "PropertyType": "BINARY",
         "PropertyValue": "0x90,0x32,0x07,0x80,0x10,0x00,0x00,0x00",
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Control Panel\\Desktop\\WindowMetrics",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Control Panel\\Desktop\\WindowMetrics",
         "KeyName": "MinAnimate",
         "PropertyType": "STRING",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\StorageSense\\Parameters\\StoragePolicy",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\StorageSense\\Parameters\\StoragePolicy",
         "KeyName": "01",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
         "KeyName": "SubscribedContent-338393Enabled",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
         "KeyName": "SubscribedContent-338393Enabled",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
         "KeyName": "SubscribedContent-353696Enabled",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
         "KeyName": "SubscribedContent-338388Enabled",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
         "KeyName": "SubscribedContent-338389Enabled",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
         "KeyName": "SystemPaneSuggestionsEnabled",
         "PropertyType": "DWORD",
-        "PropertyValue": 0
+        "PropertyValue": 0,
+        "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Control Panel\\International\\User Profile",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Control Panel\\International\\User Profile",
         "KeyName": "HttpAcceptLanguageOptOut",
         "PropertyType": "DWORD",
         "PropertyValue": 1,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.Windows.Photos_8wekyb3d8bbwe",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.Windows.Photos_8wekyb3d8bbwe",
         "KeyName": "Disabled",
         "PropertyType": "DWORD",
         "PropertyValue": 1,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.Windows.Photos_8wekyb3d8bbwe",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.Windows.Photos_8wekyb3d8bbwe",
         "KeyName": "DisabledByUser",
         "PropertyType": "DWORD",
         "PropertyValue": 1,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.SkypeApp_kzf8qxf38zg5c",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.SkypeApp_kzf8qxf38zg5c",
         "KeyName": "Disabled",
         "PropertyType": "DWORD",
         "PropertyValue": 1,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.SkypeApp_kzf8qxf38zg5c",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.SkypeApp_kzf8qxf38zg5c",
         "KeyName": "DisabledByUser",
         "PropertyType": "DWORD",
         "PropertyValue": 1,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.YourPhone_8wekyb3d8bbwe",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.YourPhone_8wekyb3d8bbwe",
         "KeyName": "Disabled",
         "PropertyType": "DWORD",
         "PropertyValue": 1,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.YourPhone_8wekyb3d8bbwe",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.YourPhone_8wekyb3d8bbwe",
         "KeyName": "DisabledByUser",
         "PropertyType": "DWORD",
         "PropertyValue": 1,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.MicrosoftEdge_8wekyb3d8bbwe",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.MicrosoftEdge_8wekyb3d8bbwe",
         "KeyName": "Disabled",
         "PropertyType": "DWORD",
         "PropertyValue": 1,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.MicrosoftEdge_8wekyb3d8bbwe",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.MicrosoftEdge_8wekyb3d8bbwe",
         "KeyName": "DisabledByUser",
         "PropertyType": "DWORD",
         "PropertyValue": 1,
         "SetProperty": "True"
     },    
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.549981C3F5F10_8wekyb3d8bbwe",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.549981C3F5F10_8wekyb3d8bbwe",
         "KeyName": "Disabled",
         "PropertyType": "DWORD",
         "PropertyValue": 1,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.549981C3F5F10_8wekyb3d8bbwe",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications\\Microsoft.549981C3F5F10_8wekyb3d8bbwe",
         "KeyName": "DisabledByUser",
         "PropertyType": "DWORD",
         "PropertyValue": 1,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\InputPersonalization",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\InputPersonalization",
         "KeyName": "RestrictImplicitInkCollection",
         "PropertyType": "DWORD",
         "PropertyValue": 1,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\InputPersonalization",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\InputPersonalization",
         "KeyName": "RestrictImplicitTextCollection",
         "PropertyType": "DWORD",
         "PropertyValue": 1,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\InputPersonalization\\TrainedDataStore",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\InputPersonalization\\TrainedDataStore",
         "KeyName": "HarvestContacts",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Personalization\\Settings",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Personalization\\Settings",
         "KeyName": "AcceptedPrivacyPolicy",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\UserProfileEngagement",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\UserProfileEngagement",
         "KeyName": "ScoobeSystemSettingEnabled",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\SearchSettings",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\SearchSettings",
         "KeyName": "IsAADCloudSearchEnabled",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\SearchSettings",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\SearchSettings",
         "KeyName": "IsDeviceSearchHistoryEnabled",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
         "SetProperty": "True"
     },
     {
-        "HivePath": "HKLM:\\DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\SearchSettings",
+        "HivePath": "HKLM:\\VDOT_TEMP\\Software\\Microsoft\\Windows\\CurrentVersion\\SearchSettings",
         "KeyName": "IsMSACloudSearchEnabled",
         "PropertyType": "DWORD",
         "PropertyValue": 0,
@@ -430,17 +431,17 @@ $WinVersion = '2009'
 mkdir C:\wvdtemp\Optimize_sa\optimize
 
 Invoke-WebRequest `
--Uri "https://github.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/archive/master.zip" `
+-Uri "https://github.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/archive/refs/heads/main.zip" `
 -OutFile "C:\wvdtemp\Optimize_sa\optimize.zip"
 
 Expand-Archive -Path "C:\wvdtemp\Optimize_sa\optimize.zip" -DestinationPath "C:\wvdtemp\Optimize_sa\optimize\"
 
 # remove json files
-Remove-Item -Path "C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-master\$WinVersion\ConfigurationFiles\AppxPackages.json" -Force
-Remove-Item -Path "C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-master\$WinVersion\ConfigurationFiles\Autologgers.Json" -Force
-Remove-Item -Path "C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-master\$WinVersion\ConfigurationFiles\DefaultUserSettings.json" -Force
-Remove-Item -Path "C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-master\$WinVersion\ConfigurationFiles\ScheduledTasks.json" -Force
-Remove-Item -Path "C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-master\$WinVersion\ConfigurationFiles\Services.json" -Force
+Remove-Item -Path "C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-main\$WinVersion\ConfigurationFiles\AppxPackages.json" -Force
+Remove-Item -Path "C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-main\$WinVersion\ConfigurationFiles\Autologgers.Json" -Force
+Remove-Item -Path "C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-main\$WinVersion\ConfigurationFiles\DefaultUserSettings.json" -Force
+Remove-Item -Path "C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-main\$WinVersion\ConfigurationFiles\ScheduledTasks.json" -Force
+Remove-Item -Path "C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-main\$WinVersion\ConfigurationFiles\Services.json" -Force
 
 # Build JSON and txt Configuration Files - These are built here according to the hash table variables specified above.
 
@@ -448,7 +449,7 @@ Remove-Item -Path "C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-
 $AppxPackages = ($AppxPackages -split "`n").trim()
 $AppxPackages = $AppxPackages | ConvertFrom-Csv -Delimiter ',' -Header "PackageName", "HelpURL"
 $AppxPackagesJson = $AppxPackages | ForEach-Object { [PSCustomObject]@{'AppxPackage' = $_.PackageName; 'VDIState' = 'Disabled'; 'Description' = $_.PackageName; 'URL' = $_.HelpURL } } | ConvertTo-Json
-$AppxPackagesJson | Out-File C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-master\$WinVersion\ConfigurationFiles\AppxPackages.json
+$AppxPackagesJson | Out-File C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-main\$WinVersion\ConfigurationFiles\AppxPackages.json
 
 #Autologgers JSON
 $AutoLoggers = ($AutoLoggers -split "`n").Trim() | ForEach-Object {
@@ -513,23 +514,23 @@ $AutoLoggers = ($AutoLoggers -split "`n").Trim() | ForEach-Object {
     }
     [PSCustomObject]$LogHash
 } | ConvertTo-Json
-$AutoLoggers | Out-File C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-master\$WinVersion\ConfigurationFiles\Autologgers.Json
+$AutoLoggers | Out-File C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-main\$WinVersion\ConfigurationFiles\Autologgers.Json
 
 # Scheduled Tasks JSON
 $ScheduledTasks = ($ScheduledTasks -split "`n").Trim()
 $ScheduledTasksJson = $ScheduledTasks | ForEach-Object { [PSCustomObject] @{'ScheduledTask' = $_; 'VDIState' = 'Disabled'; 'Description' = (Get-ScheduledTask $_ -ErrorAction SilentlyContinue).Description } } | ConvertTo-Json
-$ScheduledTasksJson | Out-File C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-master\$WinVersion\ConfigurationFiles\ScheduledTasks.json
+$ScheduledTasksJson | Out-File C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-main\$WinVersion\ConfigurationFiles\ScheduledTasks.json
  
 #Services JSON
 $Services = ($Services -split "`n").Trim()
 $ServicesJson = $Services | Foreach-Object { [PSCustomObject]@{Name = $_; 'VDIState' = 'Disabled' ; 'Description' = (Get-Service $_ -ErrorAction SilentlyContinue).DisplayName } } | ConvertTo-Json
-$ServicesJson | Out-File C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-master\$WinVersion\ConfigurationFiles\Services.json
+$ServicesJson | Out-File C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-main\$WinVersion\ConfigurationFiles\Services.json
 
 # Create Default User Settings JSON
-$DefaultUserSettings | Out-File C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-master\$WinVersion\ConfigurationFiles\DefaultUserSettings.Json
+$DefaultUserSettings | Out-File C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-main\$WinVersion\ConfigurationFiles\DefaultUserSettings.Json
 
 # run the Optimize Script with newly created JSON files 
-C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-master\Win10_VirtualDesktop_Optimize.ps1 -WindowsVersion $WinVersion
+C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-main\Win10_VirtualDesktop_Optimize.ps1 -WindowsVersion $WinVersion
 
 # Clean up Temp Folder
-Remove-Item C:\WVDTemp\Optimize_sa\ -Recurse -Force
+# Remove-Item C:\WVDTemp\Optimize_sa\ -Recurse -Force
