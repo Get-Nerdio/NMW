@@ -2,6 +2,7 @@
 #execution mode: IndividualWithRestart
 #tags: Nerdio, Apps install
 <# 
+Notes:
 This script will update Microsoft 365 apps on an Image VM without turning on automatic updates.
 It downloads automatically downloads the latest version of ODT and uses it to update M35 Apps.
 
@@ -16,8 +17,8 @@ See https://docs.microsoft.com/en-us/azure/virtual-desktop/install-office-on-wvd
 #>
 
 # Configure powershell logging
-mkdir "$env:windir\System32\NMWLogs\ScriptedActions\msoffice_sa" -Force
-Start-Transcript -Path "$env:windir\System32\NMWLogs\ScriptedActions\msoffice_sa\ps_log.log" -Append -IncludeInvocationHeader
+mkdir "$env:windir\Temp\NMWLogs\ScriptedActions\msoffice_sa" -Force
+Start-Transcript -Path "$env:windir\Temp\NMWLogs\ScriptedActions\msoffice_sa\ps_log.log" -Append -IncludeInvocationHeader
 Write-Host "######################################
 New Script Run, current time (UTC-0):"
 $Time = Get-Date
@@ -25,8 +26,6 @@ $Time.ToUniversalTime()
 
 # create directory to store ODT and setup files
 mkdir "$env:windir\Temp\odt_sa\raw" -Force
-
-
 
 # parse through the MS Download Center page to get the most up-to-date download link
 $MSDlSite2 = Invoke-WebRequest "https://www.microsoft.com/en-us/download/confirmation.aspx?id=49117" -UseBasicParsing
@@ -68,3 +67,5 @@ $ODTConfig | Out-File "$env:windir\Temp\odt_sa\raw\odtconfig.xml"
 
 # execute odt.exe using the newly created odtconfig.xml. This updates/installs office (takes a while)
 Start-Process -filepath "$env:windir\Temp\odt_sa\raw\setup.exe" -ArgumentList "/configure $env:windir\Temp\odt_sa\raw\odtconfig.xml" -Wait
+
+Stop-Transcript

@@ -2,6 +2,7 @@
 #execution mode: IndividualWithRestart
 #tags: Nerdio, Sophos
 <#
+Notes:
 This script installs Sophos Server Protection Endpoint software components. 
 Please refer to the NMW Knowledge Base: https://nmw.zendesk.com/hc/en-us/articles/1500004124602
 for instructions on using this script.
@@ -12,10 +13,9 @@ $apiKey = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 $auth = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 
 
-mkdir C:\Windows\System32\NMWLogs\ScriptedActions\sophos -ErrorAction SilentlyContinue
-Start-Transcript -Path "C:\windows\System32\NMWLogs\ScriptedActions\sophos\ps_log.txt"
-
-
+# Start logging
+mkdir C:\Windows\temp\NMWLogs\ScriptedActions\sophos -ErrorAction SilentlyContinue
+Start-Transcript -Path "C:\windows\temp\NMWLogs\ScriptedActions\sophos\ps_log.txt"
 
 $locationsApi = "https://api1.central.sophos.com/gateway/migration-tool/v1/deployment/agent/locations"
 
@@ -132,7 +132,7 @@ if (!(Test-Path $tempDir)) {
     return
 }
 
-$logFile = "C:\windows\System32\NMWLogs\ScriptedActions\sophos\logfile.log"
+$logFile = "C:\windows\temp\NMWLogs\ScriptedActions\sophos\logfile.log"
 try {
     # first attempt to log to a file, if does not exist file will be created otherwise it will append to an existing log file
     Log "Script processing has started, logging to $logFile"
