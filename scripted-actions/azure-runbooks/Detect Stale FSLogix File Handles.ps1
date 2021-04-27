@@ -1,7 +1,7 @@
 #description: Detects file handles that do not have an associated user session in WVD
 #tags: Nerdio, Preview
-
 <#
+Notes:
 This script will detect file handles that do not have an associated user session in WVD. 
 The variables below MUST be adjusted to target the correct storage account and hostpools
 

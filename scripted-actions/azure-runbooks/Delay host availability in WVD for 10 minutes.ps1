@@ -1,7 +1,10 @@
 # description: Sets session host to drain mode for 10 minutes (configurable). Useful when creating new session host VMs to delay user connections until all initial configs are done.
 #tags: Nerdio
-# This script deactivates (Sets to drain mode) a session host for X minutes (default is 10).
-# Adjust Variables below to alter to your preference:
+<#
+Notes:
+This script deactivates (Sets to drain mode) a session host for X minutes (default is 10).
+Adjust Variables below to alter to your preference:
+#>
 
 ##### Variables #####
 # Set the desired time in seconds for the host to be deactivated for

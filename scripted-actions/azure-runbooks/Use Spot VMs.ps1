@@ -1,13 +1,14 @@
 #description: (PREVIEW) Convert session hosts to spot VM instances for reduced costs in testing environments
 #tags: Nerdio, Preview
+<#
+Notes:
+This script recreates a VM as a spot instance. This Scripted Action can be attached to the CREATE VM task under a host pool's Properties->VM Deployment
+When used with a host pool, all VMs created for that host pool will be Spot VMs. This provides cost savings for testing/demo/non-production environments
+in which it is acceptable for a VM to be deallocated without warning
 
-# This script recreates a VM as a spot instance. This Scripted Action can be attached to the CREATE VM task under a host pool's Properties->VM Deployment
-# When used with a host pool, all VMs created for that host pool will be Spot VMs. This provides cost savings for testing/demo/non-production environments
-# in which it is acceptable for a VM to be deallocated without warning
-
-# See https://nmw.zendesk.com/hc/en-us/articles/360059485274-Scripted-Actions-Overview for more information on attaching scripted actions to VM deployments
-# See https://docs.microsoft.com/en-us/azure/virtual-machines/spot-vms for more information on Spot VMs and pricing
-
+See https://nmw.zendesk.com/hc/en-us/articles/360059485274-Scripted-Actions-Overview for more information on attaching scripted actions to VM deployments
+See https://docs.microsoft.com/en-us/azure/virtual-machines/spot-vms for more information on Spot VMs and pricing
+#>
 
 # Adjust Variables below to alter to your preference:
 

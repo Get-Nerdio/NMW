@@ -1,6 +1,7 @@
 #description: Enables OS disk encryption on session host VMs. Creates a new KeyVault, if required. Requires restart and downtime of VM while encrypting.
 #tags: Nerdio
 <# 
+Notes:
 !==== WARNING ====!
 THIS SCRIPT WILL RESTART THE VM, AND REQUIRES A 10-15 MINUTE DOWNTIME WHILE DISKS ARE ENCRYPTED.
 ANY CURRENT USER SESSIONS WILL BE INTERRUPTED!

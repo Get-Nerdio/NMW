@@ -1,12 +1,13 @@
 #description: Creates and associated a public IP address to each session host VM.
 #tags: Nerdio
 <#
-Overview: This script assigns a Public IP to a VM.
+Notes:
+This script assigns a Public IP to a VM.
 If it hasn't run before, it will create a public IP based on the name of the VM, and then assign it
 to the default NIC of the VM. If there is an existing Public IP created by 
 this script, then the existing public IP will be asscoiated instead.
 
-Note: VM must have one NIC (default setup), and these public IPs must be deleted seperately after
+Important: VM must have one NIC (default setup), and these public IPs must be deleted seperately after
 the VM is deleted. Nerdio will NOT remove public IPs automatically. Removing the public IP is
 only necessary if the vm is being deleted, and the name will not be used in the future or
 public IPs will no longer be needed.
