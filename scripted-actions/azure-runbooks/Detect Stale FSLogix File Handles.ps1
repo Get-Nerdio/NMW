@@ -1,4 +1,4 @@
-#description: Detects file handles that do not have an associated user session in WVD
+#description: (Preview) Detects file handles that do not have an associated WVD user session. 
 #tags: Nerdio, Preview
 <#
 Notes:
@@ -7,8 +7,6 @@ If your hostpool ARM Objects are in a different subscription than the storage ac
 this script will NOT account for them.
 
 #>
-
-# ___________________________ Script Logic ___________________________
 
 # Get all storage accounts
 $SAList = Get-AzStorageAccount | Select-Object *
@@ -66,13 +64,7 @@ foreach ($Handle in $SAHandlelist){
     # if handle doesn't have a path or isn't a VHD file, skip and move to next iteration
     if((!$Handle.Path) -or ($Handle.Path -notmatch '.vhd')){
         continue
-    }
-
-    # --- dev note: Currently commenting out, we are just going to scan the entire path for now.
-    # Parse handle file path for username 
-    # !!!!!!!!!!! This will require changes if not using default FSLogix naming !!!!!!!!!!!!!
-    # $UserAccount = ($Handle.Path).Split('_')[-2].trim('/Profile')
-
+    })
     
     $UserAccount = $Handle.Path
     # Take username from filepath and cross reference against usernames retrieved from sessions query
