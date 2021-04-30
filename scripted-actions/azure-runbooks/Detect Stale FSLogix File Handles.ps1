@@ -2,7 +2,10 @@
 #tags: Nerdio, Preview
 <#
 Notes:
-Currently this script is limited in scope to the single subsciption in which it is run.
+After running this script, results will be output to the task details log. They will appear
+in this format: "INFO: File Handle..."
+
+Please note: Currently this script is limited in scope to the single subsciption in which it is run.
 If your hostpool ARM Objects are in a different subscription than the storage account they use for fslogix,
 this script will NOT account for them.
 
