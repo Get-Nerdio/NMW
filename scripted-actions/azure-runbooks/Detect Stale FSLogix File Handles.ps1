@@ -8,7 +8,7 @@ profiles being locked due to sessions which are either:
 - WVD Sessions on hosts which have stopped sending updates to the WVD Management service
 
 After running this script, results will be output to the task details log. They will appear
-in this format: "INFO: File Handle..."
+in this format: "WARN: File Handle..."
 
 Please note: Currently this script is limited in scope to the single subsciption in which it is run.
 If your hostpool ARM Objects are in a different subscription than the storage account they use for fslogix,
@@ -67,6 +67,8 @@ foreach ($ADName in $UserSessions){
 }
 
 # Iterate through file handles
+$MatchCount = 0
+$ZombieCount = 0
 foreach ($Handle in $SAHandlelist){
 
     # if handle doesn't have a path or isn't a VHD file, skip and move to next iteration
@@ -78,15 +80,22 @@ foreach ($Handle in $SAHandlelist){
     # Take username from filepath and cross reference against usernames retrieved from sessions query
     foreach ($ADUser in $ADUsernames){
         if ($UserAccount -match $ADUser){
-            $match = $true
+            $Match = $true
+            $MatchCount += 1
         }
     }
 
     # if there was no match after cross referencing, print info on the file handle
     if (!$match){
-
-        Write-Output "INFO: Filehandle for $useraccount doesn't have matching user session. IP: $($Handle.ClientIP) File: $($Handle.path)"
+        Write-Output "WARN: Filehandle for $useraccount doesn't have matching user session. IP: $($Handle.ClientIP) File: $($Handle.path)"
+        $ZombieCount =+ $ZombieCount
     }
 
-    $match = $false
+    $Match = $false
 }
+
+if(!$ZombieCount){
+    Write-Output "INFO: All file handles have associated sessions. No further action necessary; FSLogix profiles are operational."
+}
+
+Write-Output "REPORT: $MatchCount File Handles scanned in total. $ZombieCount Handles found without session."
