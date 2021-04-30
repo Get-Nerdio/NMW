@@ -98,4 +98,4 @@ if(!$ZombieCount){
     Write-Output "INFO: All file handles have associated sessions. No further action necessary; FSLogix profiles are operational."
 }
 
-Write-Output "REPORT: $MatchCount File Handles scanned in total. $ZombieCount Handles found without session."
+Write-Output "REPORT: $MatchCount File Handles scanned in total. $ZombieCount Handles found without sessions."
