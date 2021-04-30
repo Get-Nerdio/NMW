@@ -1,4 +1,4 @@
-#description: (PREVIEW) Scans file handles(R/W locks) on a storage account, and reports ones do not have an associated WVD user session. 
+#description: (PREVIEW) Scans file handles (R/W locks) on a storage account, and reports ones do not have an associated WVD user session. 
 #tags: Nerdio, Preview
 <#
 Notes:
@@ -72,7 +72,7 @@ foreach ($Handle in $SAHandlelist){
     # if handle doesn't have a path or isn't a VHD file, skip and move to next iteration
     if((!$Handle.Path) -or ($Handle.Path -notmatch '.vhd')){
         continue
-    })
+    }
     
     $UserAccount = $Handle.Path
     # Take username from filepath and cross reference against usernames retrieved from sessions query
