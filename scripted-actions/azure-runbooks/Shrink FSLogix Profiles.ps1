@@ -1,4 +1,4 @@
-﻿#description: (PREVIEW) Convert session hosts to spot VM instances for reduced costs in testing environments
+﻿#description: (PREVIEW) Creates a temp vm which is used to shrink FSLogix profiles
 #tags: Nerdio, Preview
 
 <#
