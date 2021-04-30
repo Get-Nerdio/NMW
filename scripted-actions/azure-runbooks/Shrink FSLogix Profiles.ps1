@@ -6,7 +6,7 @@ Notes:
 This script creates a temporary VM and then runs FSLogix-ShrinkDisk.ps1 to reduce the size of the FSLogix VHD(X) files. 
 After completing, the temporary VM is deleted.
 
-You must provide some variables to this script as seen in the Required Variables section. 
+You must provide some secure variables to this script as seen in the Required Variables section. 
 Set these up in NMW under Settings->Nerdio Integrations.
 To adjust other variables, clone this scripted action and adjust to your requirements
 
