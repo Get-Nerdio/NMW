@@ -1,14 +1,20 @@
-#description: Detects file handles that do not have an associated user session in WVD
+#description: (PREVIEW) Scans file handles (R/W locks) on a storage account, and reports ones do not have an associated WVD user session. 
 #tags: Nerdio, Preview
 <#
 Notes:
-Currently this script is limited in scope to the single subsciption in which it is run.
+This script can be used to generate reports of "zombie" FSLoigx file handles. Useful to detect issues with FSLogix 
+profiles being locked due to sessions which are either:
+- Direct RDP Sessions (which can still use FSLogix and cause locks)
+- WVD Sessions on hosts which have stopped sending updates to the WVD Management service
+
+After running this script, results will be output to the task details log. They will appear
+in this format: "INFO: File Handle..."
+
+Please note: Currently this script is limited in scope to the single subsciption in which it is run.
 If your hostpool ARM Objects are in a different subscription than the storage account they use for fslogix,
 this script will NOT account for them.
 
 #>
-
-# ___________________________ Script Logic ___________________________
 
 # Get all storage accounts
 $SAList = Get-AzStorageAccount | Select-Object *
@@ -21,10 +27,6 @@ foreach ($SA in $SAList){
         $SANMWList += $SA
     }
 }
-
-# --- dev note: Not used right now. Add later when functionality to account for multiple subscription is implimented
-# Switch context for subscription with Storage Account 
-# $null = Set-AzContext -SubscriptionId $StorageSubscriptionID
 
 
 # Parse through refined storage account list
@@ -40,11 +42,6 @@ foreach ($SANMW in $SANMWList) {
         $SAHandlelist += $SAHandle
     }
 }
-
-# --- dev note: Not used right now. Add later when functionality to account for multiple subscription is implimented
-# switch context to subscription with hostpool 
-# $null = Set-AzContext -SubscriptionId $HostPoolSubscriptionID
-
 
 # Get all user sessions for hostpools in the subscription, then generate an array with AD Usernames
 
@@ -76,12 +73,6 @@ foreach ($Handle in $SAHandlelist){
     if((!$Handle.Path) -or ($Handle.Path -notmatch '.vhd')){
         continue
     }
-
-    # --- dev note: Currently commenting out, we are just going to scan the entire path for now.
-    # Parse handle file path for username 
-    # !!!!!!!!!!! This will require changes if not using default FSLogix naming !!!!!!!!!!!!!
-    # $UserAccount = ($Handle.Path).Split('_')[-2].trim('/Profile')
-
     
     $UserAccount = $Handle.Path
     # Take username from filepath and cross reference against usernames retrieved from sessions query
