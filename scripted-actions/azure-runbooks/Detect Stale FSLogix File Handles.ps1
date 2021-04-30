@@ -22,10 +22,6 @@ foreach ($SA in $SAList){
     }
 }
 
-# --- dev note: Not used right now. Add later when functionality to account for multiple subscription is implimented
-# Switch context for subscription with Storage Account 
-# $null = Set-AzContext -SubscriptionId $StorageSubscriptionID
-
 
 # Parse through refined storage account list
 $SAHandlelist = @()
@@ -40,11 +36,6 @@ foreach ($SANMW in $SANMWList) {
         $SAHandlelist += $SAHandle
     }
 }
-
-# --- dev note: Not used right now. Add later when functionality to account for multiple subscription is implimented
-# switch context to subscription with hostpool 
-# $null = Set-AzContext -SubscriptionId $HostPoolSubscriptionID
-
 
 # Get all user sessions for hostpools in the subscription, then generate an array with AD Usernames
 
