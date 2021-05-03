@@ -88,7 +88,7 @@ $azurePublicIp = Get-AzPublicIpAddress -Name $azurePublicIpName -ResourceGroupNa
 $ScriptBlock = @"
 Try {
 Invoke-Expression "net use $FSLogixFileShare /user:$StorageAccountUser $StorageAccountKey"
-Invoke-WebRequest -Uri 'https://github.com/FSLogix/Invoke-FslShrinkDisk/blob/master/Invoke-FslShrinkDisk.ps1' -OutFile 'C:\Windows\Temp\FSLogix-ShrinkDisk.ps1' -usebasicparsing -ea Stop
+Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/FSLogix/Invoke-FslShrinkDisk/master/Invoke-FslShrinkDisk.ps1' -OutFile 'C:\Windows\Temp\FSLogix-ShrinkDisk.ps1' -usebasicparsing -ea Stop
 Invoke-Expression "C:\Windows\Temp\$InvokeFslShrinkCommand"
 import-csv -Path $FSLogixLogFIle
 }
