@@ -42,7 +42,7 @@ if(!$ReactivateHost){
 Write-Output "INFO: Waiting $SleepTime Seconds. . ."
 Start-Sleep -s $SleepTime
 
-# Switch the sesion host back to available
+# Switch the session host back to available
 Write-Output "INFO: Setting Session Host $HostFQDN to Available"
 Update-AzWvdSessionHost `
     -ResourceGroupName $HostPoolRG `
