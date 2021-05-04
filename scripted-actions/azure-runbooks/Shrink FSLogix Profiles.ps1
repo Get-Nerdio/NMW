@@ -6,13 +6,24 @@ Notes:
 This script creates a temporary VM and then runs FSLogix-ShrinkDisk.ps1 to reduce the size of the FSLogix VHD(X) files. 
 After completing, the temporary VM is deleted.
 
-You must provide some secure variables to this script as seen in the Required Variables section. 
-Set these up in NMW under Settings->Nerdio Integrations.
+You must provide seven secure variables to this script as seen in the Required Variables section. 
+Set these up in NMW under Settings->Nerdio Integrations. The variables to create are:
+  FslResourceGroup - the resource group in which the temp vm will be created
+  FslRegion - the region in which the temp vm will be created
+  FslTempVmVnet - the vnet in which the temp vm will be created
+  FslTempVmSubnet - the subnet in which the temp vm will be created
+  FslStorageUser - Storage account key user, usually same as storage account name
+  FslStorageKey - Storage account key
+  FslFileshare - UNC path to the fslogix profiles share
+
 To adjust other variables, clone this scripted action and adjust to your requirements
 
 The Invoke-FslShrinkDisk script used here was written by Jim Moyle.
 See https://github.com/FSLogix/Invoke-FslShrinkDisk/blob/master/Invoke-FslShrinkDisk.ps1 for more 
 information on the FSLogix-ShrinkDisk.ps1 script and parameters you can pass to it.
+
+To adjust the parameters passed to FSLogix-ShrinkDisk.ps1 modify the $InvokeFslShrinkCommand variable 
+
 #>
 
 # Adjust Variables below to alter to your preference:
@@ -27,11 +38,11 @@ $azureVnetName = $SecureVars.FslTempVmVnet
 $azureVnetSubnetName = $SecureVars.FslTempVmSubnet
 
 #Define the storage account for the fslogix share
-$StorageAccountUser = $SecureVars.FslStorageUser
-$StorageAccountKey = $SecureVars.FslStorageKey 
-$FSLogixFileShare = $SecureVars.FslFileShare # e.g. \\storageaccount.file.core.windows.net\premiumfslogix01\
-$FSLogixLogFIle = "C:\Windows\Temp\FslShrinkDisk.log"
-$InvokeFslShrinkCommand = "FSLogix-ShrinkDisk.ps1 -Path $FSLogixFileShare -Recurse -LogFilePath $FSLogixLogFIle -PassThru"
+$StorageAccountUser = $SecureVars.FslStorageUser # Storage account key user, usually same as storage account name
+$StorageAccountKey = $SecureVars.FslStorageKey # Storage account key
+$FSLogixFileShare = $SecureVars.FslFileShare # in UNC path e.g. \\storageaccount.file.core.windows.net\premiumfslogix01\
+$FSLogixLogFile = "C:\Windows\Temp\FslShrinkDisk.log"
+$InvokeFslShrinkCommand = "FSLogix-ShrinkDisk.ps1 -Path $FSLogixFileShare -Recurse -LogFilePath $FSLogixLogFile -PassThru"
 
 
 ##### Optional Variables #####
@@ -103,8 +114,11 @@ catch {
 
 $scriptblock > .\scriptblock.ps1
 
-Invoke-AzVmRunCommand -ResourceGroupName $AzureResourceGroupName -VMName $azureVmName -ScriptPath .\scriptblock.ps1 -CommandId 'RunPowershellScript'
+$results = Invoke-AzVmRunCommand -ResourceGroupName $AzureResourceGroupName -VMName $azureVmName -ScriptPath .\scriptblock.ps1 -CommandId 'RunPowershellScript'
 
+$results | Out-String | Write-Output
+
+"Removing temporary VM" | Write-Output
 Remove-AzVM -Name $azureVmName -ResourceGroupName $AzureResourceGroupName -Force
 Remove-AzDisk -ResourceGroupName $AzureResourceGroupName -DiskName $azureVmOsDiskName -Force
 Remove-AzNetworkInterface -Name $azureNicName -ResourceGroupName $AzureResourceGroupName -Force
