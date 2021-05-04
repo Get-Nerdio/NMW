@@ -107,7 +107,7 @@ Write-Output "INFO: Expected Storage Account Name: $SAName"
 
 
 # check if storage account exists, create a new one if it doesnt
-$SAResource = Get-AzStorageAccount -ResourceGroupName $RGName -Name $SAName
+$SAResource = Get-AzStorageAccount -ResourceGroupName $RGName -Name $SAName -ErrorAction SilentlyContinue
 if($SAResource){
     Write-Output "INFO: Storage Account $SAName already exists, continuing with existing storage account"
 }
