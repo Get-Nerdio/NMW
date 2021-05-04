@@ -2,6 +2,9 @@
 #tags: Nerdio, Preview
 <#
 Notes:
+The App service plan used by the NMW App MUST be standard or premium in order to enable backups and use
+this script effectively.
+
 This script backs up NMW app components to a specified storage account (or creates one if needed). 
 See https://nmw.zendesk.com/hc/en-us/articles/360055728674-Backing-up-and-restoring-Nerdio-Manager-for-WVD-configuration
 for more details on methods used by this script.
@@ -55,6 +58,16 @@ $NMWAppQuery = Get-AzWebApp | where-object {$_.name -match "nmw-app"}
 # query second time with more verbose attributes to get more results from get-azwebapp cmdlet
 $NMWApp = Get-AzWebApp -ResourceGroupName $NMWAppQuery.ResourceGroup -Name $NMWAppQuery.Name -ErrorAction Stop
 
+# get app service plan
+$NMWAppPlanResource = Get-AzResource -ResourceId $NMWApp.ServerFarmId -ErrorAction Stop
+$NMWAppPlan = Get-AzAppServicePlan -ResourceGroupName $NMWAppPlanResource.ResourceGroupName -Name $NMWAppPlanResource.Name -ErrorAction Stop
+
+
+# check app service plan tier
+if ($NMWAppPlan.Sku.Family -ne "S" -and $NMWAppPlan.Sku.Family -ne "P") {
+    Write-Output "ERROR: Please upgrade app service plan to Standard or Premium tier to enable backups"
+    Write-Error "ERROR: Please upgrade app service plan to Standard or Premium tier to enable backups" -ErrorAction Stop
+}
 
 # Use NMWApp's Resource group, location, and subscription for backup target, if none specfied
 $RGName = $BackupResourceGroup
@@ -115,18 +128,6 @@ else {
 # switch back to NMW context
 Write-Output "INFO: Switching to subscription used by NMW App"
 Set-AzContext $NMWContext
-
-
-# get app service plan
-$NMWAppPlanResource = Get-AzResource -ResourceId $NMWApp.ServerFarmId -ErrorAction Stop
-$NMWAppPlan = Get-AzAppServicePlan -ResourceGroupName $NMWAppPlanResource.ResourceGroupName -Name $NMWAppPlanResource.Name -ErrorAction Stop
-
-
-# check app service plan tier
-if ($NMWAppPlan.Sku.Family -ne "S" -and $NMWAppPlan.Sku.Family -ne "P") {
-    Write-Error "ERROR: Please upgrade app service plan to Standard or Premium tier to enable backup"
-    exit
-}
 
 # get keyVault from app settings
 $appSettings = @{}
