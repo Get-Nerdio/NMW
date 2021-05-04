@@ -162,14 +162,13 @@ if (!$permissionsToCert.Contains("backup")) {
 if (!$permissionsToCert.Contains("list")) {
     $permissionsToCert.Add("list")
 }
-# Set-AzKeyVaultAccessPolicy -VaultName $vaultName -ObjectId $NMWPermissions.ObjectId -PermissionsToSecrets $permissionsToSecrets
+
 $KVPolicyParams = @{
     vaultname                 = $vaultName
     ObjectID                  = $NMWPermissions.ObjectId
     PermissionsToSecrets      = $permissionsToSecrets
     PermissionsToCertificates = $permissionsToCert
 }
-# Set-AzKeyVaultAccessPolicy -VaultName $vaultName -ObjectId $NMWPermissions.ObjectId -PermissionsToSecrets $permissionsToSecrets -PermissionsToCertificates $permissionsToCert
 Set-AzKeyVaultAccessPolicy @KVPolicyParams
 
 # get DB connection string from keyVault
@@ -211,7 +210,6 @@ Write-Output "INFO: Switching to subscription used by NMW App"
 Set-AzContext $NMWContext
 
 # enable backups
-# Edit-AzWebAppBackupConfiguration -WebApp $NMWApp -FrequencyInterval 1 -FrequencyUnit Day -RetentionPeriodInDays $retentionPeriodInDays -KeepAtLeastOneBackup -StartTime (Get-Date) -StorageAccountUrl $sasUri -Databases $dbSettings -ErrorAction Stop
 $AppBackupConfig = @{
     webapp = $NMWApp
     FrequencyInterval = 1
