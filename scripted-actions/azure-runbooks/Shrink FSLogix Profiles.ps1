@@ -10,7 +10,9 @@ You must provide some secure variables to this script as seen in the Required Va
 Set these up in NMW under Settings->Nerdio Integrations.
 To adjust other variables, clone this scripted action and adjust to your requirements
 
-See https://github.com/Deyda/Microsoft/blob/master/FSLogix/FSLogix-ShrinkDisk.ps1 for more information on the FSLogix-ShrinkDisk.ps1 script
+The Invoke-FslShrinkDisk script used here was written by Jim Moyle.
+See https://github.com/FSLogix/Invoke-FslShrinkDisk/blob/master/Invoke-FslShrinkDisk.ps1 for more 
+information on the FSLogix-ShrinkDisk.ps1 script and parameters you can pass to it.
 #>
 
 # Adjust Variables below to alter to your preference:
@@ -86,7 +88,7 @@ $azurePublicIp = Get-AzPublicIpAddress -Name $azurePublicIpName -ResourceGroupNa
 $ScriptBlock = @"
 Try {
 Invoke-Expression "net use $FSLogixFileShare /user:$StorageAccountUser $StorageAccountKey"
-Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/Deyda/Microsoft/master/FSLogix/FSLogix-ShrinkDisk.ps1' -OutFile 'C:\Windows\Temp\FSLogix-ShrinkDisk.ps1' -usebasicparsing -ea Stop
+Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/FSLogix/Invoke-FslShrinkDisk/master/Invoke-FslShrinkDisk.ps1' -OutFile 'C:\Windows\Temp\FSLogix-ShrinkDisk.ps1' -usebasicparsing -ea Stop
 Invoke-Expression "C:\Windows\Temp\$InvokeFslShrinkCommand"
 import-csv -Path $FSLogixLogFIle
 }
