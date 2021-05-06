@@ -14,11 +14,12 @@ When using a seperate subscription, the "Nerdio-nmw-app" service prinipal MUST h
 subscription, or resource group specified, to create a storage account.
 
 It is recomended to adjust the variables below to store this data in another region and resource group
-if redundancy is desired.#>
+if redundancy is desired.
+#>
 
 
 #________________ Adjustable Variables ________________ 
-#             (Recomended to change these)
+#             (Recommended to change these)
 
 # ID of Subscription that the storage account that holds backups will use. 
 # Optional, leave $null to use sub selected by scripted action UI
