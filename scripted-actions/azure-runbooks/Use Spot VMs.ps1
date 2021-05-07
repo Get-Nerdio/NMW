@@ -45,7 +45,8 @@ try {
 }
 catch {
     Write-Error "Error provisioning Spot VM. Deleting existing os disk and nic"
+    Write-Error $_.exception.message 
+    Write-Error $_.exception.innerexceptionmessage 
     Remove-AzNetworkInterface -Name $vm.NetworkProfile.NetworkInterfaces[0].id -ResourceGroupName $AzureResourceGroupName -Force
     Remove-AzDisk -ResourceGroupName $AzureResourceGroupName -DiskName $vm.StorageProfile.OsDisk.Name -Force
-    Throw $_ 
 }
