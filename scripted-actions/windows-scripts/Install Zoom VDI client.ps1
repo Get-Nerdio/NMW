@@ -29,6 +29,7 @@ ForEach ($Href in $ZoomDLSite.Links.Href)
 {
     if ($Href -match "ZoomInstallerVDI" ){
         $DLink = $href
+        break
     }
 }
 # Download Zoom installer from Zoom Website
