@@ -24,8 +24,8 @@ Write-host "Current time (UTC-0): $LogTime"
 # Make directory to hold install files
 mkdir "C:\Windows\Temp\zoom_sa\install" -Force
 
-# parse through the Zoom VDI Help page to get the most up-to-date download link
-Write-Host "Retrieving Zoom installer files. . ."
+# Parse through the Zoom VDI Help page to get the most up-to-date download link, then download installer files
+Write-Host "INFO: Retrieving Zoom installer files. . ."
 $ZoomDlSite = Invoke-WebRequest "https://support.zoom.us/hc/en-us/articles/360052984292" -UseBasicParsing
 ForEach ($Href in $ZoomDLSite.Links.Href)
 {
@@ -34,13 +34,13 @@ ForEach ($Href in $ZoomDLSite.Links.Href)
         break
     }
 }
-
-# Download Zoom installer from Zoom Website
 Invoke-WebRequest -Uri $DLink -OutFile "C:\Windows\Temp\zoom_sa\install\ZoomInstallerVDI.msi" -UseBasicParsing
 
-# install Zoom. Edit this as desired for customized installs: https://support.zoom.us/hc/en-us/articles/201362163
-Write-Host "Installing Zoom. . ."
-Start-Process C:\Windows\System32\msiexec.exe -ArgumentList "/i C:\Windows\Temp\zoom_sa\install\ZoomInstallerVDI.msi /l*v C:\Windows\Temp\NMWLogs\ScriptedActions\zoom_sa\zoom_install_log.txt /qn /norestart"
+# Install Zoom. Edit the argument list as desired for customized installs: https://support.zoom.us/hc/en-us/articles/201362163
+Write-Host "INFO: Installing Zoom. . ."
+Start-Process C:\Windows\System32\msiexec.exe `
+-ArgumentList "/i C:\Windows\Temp\zoom_sa\install\ZoomInstallerVDI.msi /l*v C:\Windows\Temp\NMWLogs\ScriptedActions\zoom_sa\zoom_install_log.txt /qn /norestart" -Wait
+Write-Host "INFO: Zoom install finished."
 
 # End Logging
 Stop-Transcript
