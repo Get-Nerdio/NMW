@@ -18,7 +18,8 @@ $VMTime = Get-Date
 $LogTime = $VMTime.ToUniversalTime()
 mkdir "C:\Windows\temp\NMWLogs\ScriptedActions\msteams" -Force
 Start-Transcript -Path "C:\Windows\temp\NMWLogs\ScriptedActions\msteams\ps_log.txt" -Append
-Write-Host "######### New Script Run. Current time (UTC-0): $LogTime"
+Write-Host "################# New Script Run #################"
+Write-host "Current time (UTC-0): $LogTime"
 
 # set registry values for Teams to use VDI optimization 
 Write-Host "INFO: Adjusting registry to set Teams to WVD Environment mode" -ForegroundColor Gray
