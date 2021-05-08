@@ -1,4 +1,5 @@
 #description: Adds user assigned to personal desktop to local Administrators group on session host VM. Use only with personal host pools.
+#execution mode: Combined
 #tags: Nerdio
 <#
 Notes: 
