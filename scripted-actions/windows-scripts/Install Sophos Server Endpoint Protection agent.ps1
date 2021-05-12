@@ -1,21 +1,32 @@
-#description: Installs Sophos Server Protection Endpoint agent and registers with Sophos Central (clone to modify with your unique API information)
+#description: Installs Sophos Server Protection Endpoint agent and registers with Sophos Central.
 #execution mode: IndividualWithRestart
 #tags: Nerdio, Sophos
 <#
 Notes:
-This script installs Sophos Server Protection Endpoint software components. 
-Please refer to the NMW Knowledge Base: https://nmw.zendesk.com/hc/en-us/articles/1500004124602
-for instructions on using this script.
-#>
-  
-# Update the variables here with what is provided from Sophos Central
-$apiKey = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-$auth = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+IMPORTANT: Refer to the Sophos Integration Article for instructions on how to use this script!
+https://nmw.zendesk.com/hc/en-us/articles/1500004124602
 
+This script installs Sophos Server Protection Endpoint software components. 
+#>
 
 # Start logging
-mkdir C:\Windows\temp\NMWLogs\ScriptedActions\sophos -ErrorAction SilentlyContinue
-Start-Transcript -Path "C:\windows\temp\NMWLogs\ScriptedActions\sophos\ps_log.txt"
+$SaveVerbosePreference = $VerbosePreference
+$VerbosePreference = 'continue'
+$VMTime = Get-Date
+$LogTime = $VMTime.ToUniversalTime()
+mkdir "C:\Windows\temp\NMWLogs\ScriptedActions\msteams" -Force
+Start-Transcript -Path "C:\windows\temp\NMWLogs\ScriptedActions\sophosinstall\ps_log.txt" -Append
+Write-Host "################# New Script Run #################"
+Write-host "Current time (UTC-0): $LogTime"
+  
+# Pass in secure variables from NMW
+$auth   = $SecureVars.sophosauth
+$apikey = $SecureVars.sophosapikey
+
+# Error out if required secure variables are not passed
+if(!$auth -or !$apikey){
+    Write-Error "ERROR: Required variables sophosauth and/or sophosapikey are not being passed from NMW. Please add these secure variables" -ErrorAction Stop
+}
 
 $locationsApi = "https://api1.central.sophos.com/gateway/migration-tool/v1/deployment/agent/locations"
 
@@ -89,7 +100,7 @@ function Get-InstallerLink {
 
     Log "Getting location of the $installerType from $locationsApi"
     $hdrs = @{}
-    $hdrs.Add("x-api-key", $apiKey)
+    $hdrs.Add("x-api-key", $apikey)
     $hdrs.Add("Authorization", "Basic $auth")
     $response = Invoke-RestMethod -Method 'Get' -Uri $locationsApi -Headers $hdrs
     # convert the response object (json) to the PowerShell's friendly json
@@ -142,7 +153,7 @@ try {
     return
 }
 
-if (!($apiKey) -or !($auth)) {
+if (!($SecureVars.sophosapikey) -or !($auth)) {
     Log "Invalid values for one or more script arguments: 'apiKey', 'auth'" -error 1
     return
 }
@@ -181,7 +192,9 @@ try {
     Log "Error on installing Sophos Server Protection - $($_.Exception.Message)" -error 1
 }
 
+# End Logging
 Stop-Transcript
+$VerbosePreference=$SaveVerbosePreference
 
 # LEGAL: 'Sophos' and 'Sophos Anti-Virus' are registered trademarks of Sophos Limited and Sophos Group. All other product
 # and company names mentioned are trademarks or registered trademarks of their respective owners.
