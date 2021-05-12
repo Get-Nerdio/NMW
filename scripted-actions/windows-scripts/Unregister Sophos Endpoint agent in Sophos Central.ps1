@@ -1,9 +1,8 @@
-#description: Unregisters endpoint agent from Sophos Central using API (clone to modify with your unique API information)
-#execution mode: Combined
+#description: Unregisters endpoint agent from Sophos Central using API.
 #tags: Nerdio, Sophos
 <#
 Notes:
-IMPORTANT: Refer to the Sophos Integration Article for instructions on how to alter this script!
+IMPORTANT: Refer to the Sophos Integration Article for instructions on how to use this script!
 https://nmw.zendesk.com/hc/en-us/articles/1500004124602
 
 This script uses the Sophos API to delete the associated VM from Sophos Central.
@@ -12,13 +11,27 @@ https://developer.sophos.com/intro
 https://developer.sophos.com/docs/endpoint-v1/1/overview
 #>
 
-# If you are a Partner or Organization with multiple Tenants, 
-# uncomment the lines below and enter the tenant ID and APIHost
-#$TenantID = "XXXXXXX"
-#$APIHost = "XXXXXXX"
+# Enable Logging
+$SaveVerbosePreference = $VerbosePreference
+$VerbosePreference = 'continue'
+$VMTime = Get-Date
+$LogTime = $VMTime.ToUniversalTime()
+mkdir "C:\Windows\temp\NMWLogs\ScriptedActions\sophosunregister" -Force
+Start-Transcript -Path "C:\Windows\temp\NMWLogs\ScriptedActions\sophosunregister\ps_log.txt" -Append
+Write-Host "################# New Script Run #################"
+Write-host "Current time (UTC-0): $LogTime"
 
-$ClientID= 'XXXXXXXXXXXXXXXXXX'
-$ClientSecret= 'XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
+# Pass in secure variables from NMW
+$ClientID     = $SecureVars.sophosclientid
+$ClientSecret = $SecureVars.sophosclientsecret
+$TenantID     = $SecureVars.sophostenantid
+$APIHost      = $SecureVars.sophosapihost
+
+# Error out if required secure variables are not passed
+if(!$ClientID -or !$ClientSecret){
+    Write-Error "ERROR: Required variables sophosclientiD and/or sophosclientSecret are not being passed from NMW. Please add these secure variables" -ErrorAction Stop
+
+}
 
 # Authenticate and get Bearer Token
 $AuthBody = @{
@@ -32,7 +45,7 @@ $AuthResponse = (Invoke-RestMethod -Method 'post' -Uri 'https://id.sophos.com/ap
 $AuthToken = $AuthResponse.access_token
 $AuthHeaders = @{Authorization = "Bearer $AuthToken"}
 
-$WhoAmIResponse = (Invoke-RestMethod -Method 'get' -headers $AuthHeaders -Uri 'https://api.central.sophos.com/whoami/v1')
+$WhoAmIResponse = (Invoke-RestMethod -Method 'get' -headers $AuthHeaders -Uri 'https://api.central.sophos.com/whoami/v1' -UseBasicParsing)
 if(!$TenantID -and !$APIHost){
     # Get Tenant info and APIHost/ if not specified 
     Write-Output 'INFO: Retrieving Tenant ID and APIHost/Data Region'
@@ -41,8 +54,7 @@ if(!$TenantID -and !$APIHost){
 }
 else{
     if($WhoAmIResponse.idtype -ne "tenant"){
-        Write-Output "ERROR: The API Client credentials given are not for a Tenant and the Tenant ID and API Host values were not specified."
-       exit
+        Write-Error "ERROR: The API Client credentials given are not for a Tenant and the Tenant ID and API Host values were not specified." -ErrorAction Stop
     }
 }
 
@@ -52,7 +64,7 @@ $TenantsHeader = @{
     'X-Tenant-ID' = $TenantID
 }
 Write-Output "INFO: Searching registered endpoints for matching VM hostname"
-$EndpointResponse = (Invoke-RestMethod -Method 'get' -Headers $TenantsHeader -uri "$APIHost/endpoint/v1/endpoints?hostnameContains=$AzureVMName")
+$EndpointResponse = (Invoke-RestMethod -Method 'get' -Headers $TenantsHeader -uri "$APIHost/endpoint/v1/endpoints?hostnameContains=$AzureVMName" -UseBasicParsing)
 if(!$EndpointResponse.items){
     Write-Host "ERROR: No endpoints found in sophos central that match the hostname. Ending script"
     exit
@@ -67,13 +79,18 @@ foreach($Endpoint in ($EndpointResponse.items)){
 
 # Send DELETE request to Sophos API and provide endpoint ID
 Write-Output "INFO: Attempting to Delete $AzureVMName from Sophos Central"
-$DeleteResponse = (Invoke-RestMethod -Method 'delete' -Headers $TenantsHeader -uri "$APIHost/endpoint/v1/endpoints/$EndpointID")
+$DeleteResponse = (Invoke-RestMethod -Method 'delete' -Headers $TenantsHeader -uri "$APIHost/endpoint/v1/endpoints/$EndpointID" -UseBasicParsing)
 
 # Check if request was successful
 Write-Output "INFO: Checking response to confirm deletion"
+Start-Sleep -Seconds 15
 if($DeleteResponse.deleted = "true"){
     Write-Output "INFO: Successfully deleted $AzureVMName from Sophos Central"
 }
 else {
     Write-Output "Error: Unable to delete endpoint from Sophos Central"
 }
+
+# End Logging
+Stop-Transcript
+$VerbosePreference=$SaveVerbosePreference
