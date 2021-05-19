@@ -13,6 +13,10 @@ NOTE: if there is insufficient capacity for the requested Spot VM size, this scr
 
 #>
 
+# Set Error Action Preference; it is best not to change this
+
+$errorActionPreference = "Stop" 
+
 # Adjust Variables below to alter to your preference:
 
 ##### Variables #####
@@ -25,8 +29,6 @@ NOTE: if there is insufficient capacity for the requested Spot VM size, this scr
 
 
 ##### Script Logic #####
-
-$errorActionPreference = "Stop" 
 
 Select-AzSubscription -Subscription $AzureSubscriptionName
 
