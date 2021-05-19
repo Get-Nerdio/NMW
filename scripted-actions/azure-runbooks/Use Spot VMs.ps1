@@ -21,7 +21,7 @@ NOTE: if there is insufficient capacity for the requested Spot VM size, this scr
 #   Enter a dollar amount, up to 5 digits. For example, $MaxPrice = .98765 means that the VM will be deallocated once the price for a spotVM goes about $.98765 per hour.
 #   -1 indicates that the VM will not be evicted based on price, only on capacity  
 
-$MaxPrice = -1
+[float]$MaxPrice = -1
 
 
 ##### Script Logic #####
@@ -33,18 +33,27 @@ Select-AzSubscription -Subscription $AzureSubscriptionName
 # Get the existing VM
 $VM = Get-AzVM -ResourceGroupName $AzureResourceGroupName -Name $AzureVmName 
 
-Write-Output "INFO: Remove existing VM"
-Remove-AzVM -Name $AzureVmName -ResourceGroupName $AzureResourceGroupName -Force
-
+try {
 # Configure new VM by adding NIC and os disk from previous VM
 $NewVMConfig = New-AzVMConfig  -VMName $AzureVmName -VMSize $vm.HardwareProfile.VmSize -Priority Spot -MaxPrice $MaxPrice -LicenseType $vm.LicenseType
 $NewVMConfig = Add-AzVMNetworkInterface -VM $NewVMConfig -Id $vm.NetworkProfile.NetworkInterfaces[0].id
-$NewVMConfig = Set-AzVMOSDisk -VM $NewVMConfig -ManagedDiskId $vm.StorageProfile.OsDisk.ManagedDisk.id -Name $vm.StorageProfile.OsDisk.Name -CreateOption Attach -StorageAccountType $vm.StorageProfile.OsDisk.ManagedDisk.StorageAccountType -Windows
-#$NewVMConfig.StorageProfile.OsDisk.vhd = $null 
+$Disk = Get-AzDisk -DiskName $vm.StorageProfile.OsDisk.Name -ResourceGroupName $AzureResourceGroupName
+$NewVMConfig = Set-AzVMOSDisk -VM $NewVMConfig -ManagedDiskId $vm.StorageProfile.OsDisk.ManagedDisk.id -Name $vm.StorageProfile.OsDisk.Name -CreateOption Attach -StorageAccountType $disk.sku.Name -Windows
+}
+Catch {
+    Write-Output "ERROR: invalid parameters for creating new VM. Will not replace with Spot VM."
+    Write-Output $_.message 
+    Write-Output $_.innerexception.message 
+    Throw $_ 
+}
+
+
+Write-Output "INFO: Removing existing VM"
+Remove-AzVM -Name $AzureVmName -ResourceGroupName $AzureResourceGroupName -Force
 
 try {
     write-output "INFO: Creating new VM"
-    $NewVM = New-AzVM -ResourceGroupName $AzureResourceGroupName -Location $vm.Location -VM $NewVMConfig -Tag $vm.Tags
+    $NewVM = New-AzVM -ResourceGroupName $AzureResourceGroupName -Location $vm.Location -VM $NewVMConfig -Tag $vm.Tags -ErrorAction Stop
 }
 catch {
     Write-Output $_.message 
@@ -53,12 +62,12 @@ catch {
     try {
         $NewVMConfig = New-AzVMConfig  -VMName $AzureVmName -VMSize $vm.HardwareProfile.VmSize -LicenseType $vm.LicenseType
         $NewVMConfig = Add-AzVMNetworkInterface -VM $NewVMConfig -Id $vm.NetworkProfile.NetworkInterfaces[0].id
-        $NewVMConfig = Set-AzVMOSDisk -VM $NewVMConfig -ManagedDiskId $vm.StorageProfile.OsDisk.ManagedDisk.id -Name $vm.StorageProfile.OsDisk.Name -CreateOption Attach -StorageAccountType $vm.StorageProfile.OsDisk.ManagedDisk.StorageAccountType -Windows
-        $NewVM = New-AzVM -ResourceGroupName $AzureResourceGroupName -Location $vm.Location -VM $NewVMConfig -Tag $vm.Tags
+        $NewVMConfig = Set-AzVMOSDisk -VM $NewVMConfig -ManagedDiskId $vm.StorageProfile.OsDisk.ManagedDisk.id -Name $vm.StorageProfile.OsDisk.Name -CreateOption Attach -StorageAccountType $disk.sku.Name -Windows
+        $NewVM = New-AzVM -ResourceGroupName $AzureResourceGroupName -Location $vm.Location -VM $NewVMConfig -Tag $vm.Tags -ErrorAction Stop
     }
     catch {
         write-output "ERROR: Unable to provision VM. Removing NIC and OS disk."
-        Remove-AzNetworkInterface -Name $vm.NetworkProfile.NetworkInterfaces[0].id -ResourceGroupName $AzureResourceGroupName -Force
+        Get-AzNetworkInterface -ResourceId $vm.NetworkProfile.NetworkInterfaces[0].id | Remove-AzNetworkInterface -Force
         Remove-AzDisk -ResourceGroupName $AzureResourceGroupName -DiskName $vm.StorageProfile.OsDisk.Name -Force
     }
 }
