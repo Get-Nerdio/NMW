@@ -14,7 +14,7 @@ $SaveVerbosePreference = $VerbosePreference
 $VerbosePreference = 'continue'
 $VMTime = Get-Date
 $LogTime = $VMTime.ToUniversalTime()
-mkdir "C:\Windows\temp\NMWLogs\ScriptedActions\msteams" -Force
+mkdir "C:\Windows\temp\NMWLogs\ScriptedActions\sophosinstall" -Force
 Start-Transcript -Path "C:\windows\temp\NMWLogs\ScriptedActions\sophosinstall\ps_log.txt" -Append
 Write-Host "################# New Script Run #################"
 Write-host "Current time (UTC-0): $LogTime"
