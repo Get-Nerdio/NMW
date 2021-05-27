@@ -509,7 +509,7 @@ $ServicesJson | Out-File C:\WVDTemp\Optimize_sa\Virtual-Desktop-Optimization-Too
 $DefaultUserSettings | Out-File C:\WVDTemp\Optimize_sa\Virtual-Desktop-Optimization-Tool-main\$WinVersion\ConfigurationFiles\DefaultUserSettings.Json
 
 # run the Optimize Script with newly created JSON files 
-C:\WVDTemp\Optimize_sa\Virtual-Desktop-Optimization-Tool-main\Win10_VirtualDesktop_Optimize.ps1 -WindowsVersion $WinVersion -AccceptEULA
+C:\WVDTemp\Optimize_sa\Virtual-Desktop-Optimization-Tool-main\Win10_VirtualDesktop_Optimize.ps1 -WindowsVersion $WinVersion -AcceptEULA
 
 # Clean up Temp Folder
 Remove-Item C:\WVDTemp\Optimize_sa\ -Recurse -Force
