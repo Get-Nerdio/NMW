@@ -143,7 +143,7 @@ if (!(Test-Path $tempDir)) {
     return
 }
 
-$logFile = "C:\windows\temp\NMWLogs\ScriptedActions\sophos\logfile.log"
+$logFile = "C:\windows\temp\NMWLogs\ScriptedActions\sophosinstall\logfile.log"
 try {
     # first attempt to log to a file, if does not exist file will be created otherwise it will append to an existing log file
     Log "Script processing has started, logging to $logFile"
