@@ -17,35 +17,37 @@ and have necessary access policies to use the Keyvault.
 #>
 
 # Uncomment and Edit this variable with keyvault name if using a pre-existing keyvault
-# $KeyVaultName = "<Keyvault-name>"
-
-# Set Error action
-$errorActionPreference = "Stop"
+# $EncryptKVName = "<Keyvault-name>"
 
 # Ensure context is using correct subscription
 Set-AzContext -SubscriptionId $AzureSubscriptionId | Out-Null
 
-# Query Azure for VM object using name
+# Query Azure for VM object using name, start VM
 $AzVM = Get-AzVM -Name $AzureVMName -ResourceGroupName $AzureResourceGroupName
+
 
 # Check if VM is already encrypted
 $report = Get-AzVmDiskEncryptionStatus -VMName $AzVM.Name -ResourceGroupName $AzVM.ResourceGroupName
-if(!$report.OsVolumeEncrypted -match "NotEncrypted"){
+if($report.OsVolumeEncrypted -notmatch "NotEncrypted"){
     Write-Output "INFO: OSDisk is already Encrypted. Stopping Script."
     exit
 }
+
+# Start VM to begin encryption
+Write-Output "INFO: Starting VM $AzureVMName ."
+$AzVM | Start-AzVM | Out-Null
 
 # Get Subscription of VM, turn into string, get first 8 characters for suffix
 $SubID = $AzVM.Id.Split('/')[-7]
 $KVSuffix = $SubID.Substring(0,8)
 
 # generate expected name for KV if none provided via parameter
-if(!$KeyVaultName){ # Generate name, uses first 8 character of subscription as UID
+if(!$EncryptKVName){ # Generate name, uses first 8 character of subscription as UID
     $KVName = "vm-encrypt-kv-$KVSuffix"
     Write-Output "INFO: No custom Keyvault Specified. Using default auto-generated KV Name: $KVName"
 }
 else { # use Keyvault Name provided
-    $KVName = $KeyVaultName
+    $KVName = $EncryptKVName
     Write-Output "INFO: Existing Keyvault Specified: $KVName"
 }
 
@@ -84,17 +86,25 @@ else { # use pre-existing keyvault
             -Force
     }
     else{
-       throw "ERROR: Keyvault $KVName is not enabled for disk encryption.
+        Write-Output "ERROR: Keyvault $KVName is not enabled for disk encryption.
        See: https://docs.microsoft.com/en-us/azure/virtual-machines/windows/disk-encryption-key-vault#set-key-vault-advanced-access-policies"
+        Write-Error "ERROR: Keyvault $KVName is not enabled for disk encryption.
+       See: https://docs.microsoft.com/en-us/azure/virtual-machines/windows/disk-encryption-key-vault#set-key-vault-advanced-access-policies" `
+       -ErrorAction Stop
     }
 }
+
+# Give Encryption Process 90 seconds to show result
+Write-Output "INFO: Waiting 90 Seconds for Encryption Status to update. . ."
+Start-Sleep -Seconds 90
 
 # Verify process complete
 Write-Output "INFO: Checking status of Encryption. . . "
 $report = Get-AzVmDiskEncryptionStatus -VMName $AzVM.Name -ResourceGroupName $AzVM.ResourceGroupName
-if(!$report.OsVolumeEncrypted -match "NotEncrypted"){
+if($report.OsVolumeEncrypted -notmatch "NotEncrypted"){
     Write-Output "INFO: OSDisk is Encrypted."
 }
 else {
-    throw 'ERROR: OSDisk is not Encrypted.'
+    Write-Output "ERROR: OSDisk did not sucessfully encrypt."
+    Write-Error "ERROR: OSDisk did not sucessfully encrypt." -ErrorAction Stop
 }
