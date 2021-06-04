@@ -1,4 +1,4 @@
-﻿#description: (PREVIEW) Resize a VM disk to 64GB
+﻿#description: (PREVIEW) Resize VM OS disk to 64GB
 #tags: Nerdio, Preview
 <#
 Notes:
