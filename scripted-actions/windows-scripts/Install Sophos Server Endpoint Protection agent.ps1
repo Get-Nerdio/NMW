@@ -12,7 +12,7 @@ This script installs Sophos Server Protection Endpoint software components.
 # Start logging
 $SaveVerbosePreference = $VerbosePreference
 $VerbosePreference = 'continue'
-$VMTime = Get-Date
+$VMTime  = Get-Date
 $LogTime = $VMTime.ToUniversalTime()
 mkdir "C:\Windows\temp\NMWLogs\ScriptedActions\sophosinstall" -Force
 Start-Transcript -Path "C:\windows\temp\NMWLogs\ScriptedActions\sophosinstall\ps_log.txt" -Append
@@ -20,15 +20,22 @@ Write-Host "################# New Script Run #################"
 Write-host "Current time (UTC-0): $LogTime"
   
 # Pass in secure variables from NMW
-$auth   = $SecureVars.sophosauth
+$auth = $SecureVars.sophosauth
 $apikey = $SecureVars.sophosapikey
+$locationsApi = $SecureVars.sophoslocationsapi
 
 # Error out if required secure variables are not passed
-if(!$auth -or !$apikey){
-    Write-Error "ERROR: Required variables sophosauth and/or sophosapikey are not being passed from NMW. Please add these secure variables" -ErrorAction Stop
+if(!$auth){
+    Write-Error "ERROR: Required variable sophosauth is not being passed from NMW. Please add it to secure variables" -ErrorAction Stop
+}
+elseif(!$apikey){
+    Write-Error "ERROR: Required variable sophosapikey is not being passed from NMW. Please add it to secure variables" -ErrorAction Stop
+}
+elseif(!$locationsApi){
+    Write-Output "WARN: Required variable sophoslocationsapi is not being passed from NMW. Please add it to secure variable. Attempting with api1.central.sophos. . ." -ErrorAction Continue
+    $locationsApi = "https://api1.central.sophos.com/gateway/migration-tool/v1/deployment/agent/locations"
 }
 
-$locationsApi = "https://api1.central.sophos.com/gateway/migration-tool/v1/deployment/agent/locations"
 
 # Determines how PowerShell responds to a non-terminating error. Stop will make the script stop execution in case of an error.
 # Please refer to the Microsoft PowerShell documentation for more details.
@@ -143,7 +150,7 @@ if (!(Test-Path $tempDir)) {
     return
 }
 
-$logFile = "C:\windows\temp\NMWLogs\ScriptedActions\sophos\logfile.log"
+$logFile = "C:\windows\temp\NMWLogs\ScriptedActions\sophosinstall\logfile.log"
 try {
     # first attempt to log to a file, if does not exist file will be created otherwise it will append to an existing log file
     Log "Script processing has started, logging to $logFile"
