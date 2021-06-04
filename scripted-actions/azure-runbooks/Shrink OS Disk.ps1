@@ -1,4 +1,16 @@
-﻿$ErrorActionPreference = "Stop"
+﻿#description: (PREVIEW) Resize a VM disk to 64GB
+#tags: Nerdio, Preview
+<#
+Notes:
+This script changes the os disk VM it is run against to 64GB. The disk can be changed to other sizes by changing the 
+$DiskSizeGB variable.
+
+NOTE: if the amount of data on the os disk is greater than the new size, the script will throw an error and will not resize the disk
+
+#>
+
+
+$ErrorActionPreference = "Stop"
 $DiskSizeGB = 64 # Set to the desired size of the new OS Disk
 
 $NewPartitionSize = $DiskSizeGB - 1
@@ -52,26 +64,14 @@ $DiskName = $Disk.Name
 # Get SAS URI for the Managed disk
 $SAS = Grant-AzDiskAccess -ResourceGroupName $resourceGroupName -DiskName $DiskName -Access 'Read' -DurationInSecond 600000;
 
-#Provide the managed disk name
-#$managedDiskName = "yourManagedDiskName" 
-
-#Provide Shared Access Signature (SAS) expiry duration in seconds e.g. 3600.
-#$sasExpiryDuration = "3600"
-
 #Provide storage account name where you want to copy the snapshot - the script will create a new one temporarily
 $storageAccountName = "shrink" + [system.guid]::NewGuid().tostring().replace('-','').substring(1,18)
 
 #Name of the storage container where the downloaded snapshot will be stored
 $storageContainerName = $storageAccountName
 
-#Provide the key of the storage account where you want to copy snapshot. 
-#$storageAccountKey = "yourStorageAccountKey"
-
 #Provide the name of the VHD file to which snapshot will be copied.
 $destinationVHDFileName = "$($VM.StorageProfile.OsDisk.Name).vhd"
-
-#Generate the SAS for the managed disk
-#$sas = Grant-AzureRmDiskAccess -ResourceGroupName $resourceGroupName -DiskName $managedDiskName -Access Read -DurationInSecond $sasExpiryDuration
 
 #Create the context for the storage account which will be used to copy snapshot to the storage account
 Write-Output "INFO: creating temporary storage for disk snapshot" 
@@ -90,9 +90,6 @@ Revoke-AzDiskAccess -ResourceGroupName $resourceGroupName -DiskName $DiskName
 
 # Emtpy disk to get footer from
 $emptydiskforfootername = "$($VM.StorageProfile.OsDisk.Name)-empty.vhd"
-
-# Empty disk URI
-#$EmptyDiskURI = $container.CloudBlobContainer.Uri.AbsoluteUri + "/" + $emptydiskforfooter
 
 $diskConfig = New-AzDiskConfig `
     -Location $VM.Location `
