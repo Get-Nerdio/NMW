@@ -1,12 +1,14 @@
 ﻿#description: (PREVIEW) Resize VM OS disk to 64GB
 #tags: Nerdio, Preview
 <#
+
 Notes:
 This script changes the os disk VM it is run against to 64GB. The disk can be changed to other sizes by changing the 
 $DiskSizeGB variable.
 
-NOTE: if the amount of data on the os disk is greater than the new size, the script will throw an error and will not resize the disk
+If the amount of data on the os disk is greater than the new size, the script will throw an error and will not resize the disk
 
+This script requires the target VM to be Windows 10.
 #>
 
 
@@ -192,7 +194,6 @@ Try {
 
         # Delete old blob storage
         $osdisk | Remove-AzStorageBlob -Force
-        $VM | Stop-AzVM -Force 
         Write-Output "INFO: Disk swap succeeded. Removing old osDisk"
     }
     else {
