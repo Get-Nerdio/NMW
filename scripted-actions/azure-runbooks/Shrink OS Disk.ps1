@@ -8,7 +8,9 @@ $DiskSizeGB variable.
 
 If the amount of data on the os disk is greater than the new size, the script will throw an error and will not resize the disk
 
-This script requires the target VM to be Windows 10.
+This script requires the target VM to be Windows 10 (Windows 7 is not supported).
+
+This script is intended to be used on a desktop image VM.  After shrinking the OS disk of a desktop image VM be sure to run "set as image" operation to be able to use the new image for session host creation.
 #>
 
 
