@@ -3,6 +3,8 @@
 #tags: Nerdio, Apps install
 <#
 This script downloads and installs the latest version of Remote Desktop Analyzer (RDAnalyzer) and places it on all users' desktop (C:\Users\Public\Desktop).
+
+Visit https://rdanalyzer.com/ for more information.
 #>
 
 Function Get-GitHubRelease {
