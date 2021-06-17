@@ -1,8 +1,8 @@
-#description: Installs the latest version of Remote Desktop Analyzer (RDAnalyzer) and places it on all users' desktop
+#description: Installs the latest version of Remote Display Analyzer (RDAnalyzer) and places it on all users' desktop
 #execution mode: Combined
 #tags: Nerdio, Apps install
 <#
-This script downloads and installs the latest version of Remote Desktop Analyzer (RDAnalyzer) and places it on all users' desktop (C:\Users\Public\Desktop).
+This script downloads and installs the latest version of Remote Display Analyzer (RDAnalyzer) and places it on all users' desktop (C:\Users\Public\Desktop).
 
 Visit https://rdanalyzer.com/ for more information.
 #>
