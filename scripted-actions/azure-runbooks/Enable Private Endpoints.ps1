@@ -3,9 +3,13 @@
 
 <# Notes:
 
-This script will add public
-
-
+This script will add private endpoints and service endpoints to allow the Nerdio Manager app service to communicate
+with the sql database and keyvault over a private network, with no traffic routed over the public internet.
+Access to the sql database and keyvault will be restricted to the private network. The MakeAppServicePrivate 
+parameter can be set to 'true' to further limit access to the app service to clients on the private network or
+peered network. Supplying a ResourceId for an existing network will cause that network to be peered to the new
+private network. Supplying a storage account will limit access for that storage account to the new private vnet
+and peered vnets.
 
 #>
 
