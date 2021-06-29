@@ -1,96 +1,233 @@
-﻿$AzureSubscriptionId = '81332d18-a6e5-47d6-9081-a2c9041aacc0'
-$AzureSubscriptionName = 'DenverNWM'
-$AzureResourceGroupName = 'denver-marketplace'
-$AzureRegionName = 'southcentralus'
+﻿#description: Restrict access to the sql database and keyvault used by Nerdio Manager. If the MakeAppServicePrivate parameter is set to 'true' then public access to the nerdio manager URL will be restricted.
+#tags: Nerdio, Preview
+
+<# Notes:
+
+This script will add public
 
 
-$WVDHostVnetId = '/subscriptions/81332d18-a6e5-47d6-9081-a2c9041aacc0/resourceGroups/QADenverCore5800/providers/Microsoft.Network/virtualNetworks/NerdioVnet'
 
-$PrivateLinkVnetName = 'NMW-PrivateLink'
-$VnetAddressRange = '10.250.250.0/23'
-$PrivateEndpointSubnetName = 'NMW-PrivateLink-EndpointSubnet'
-$PrivateEndpointSubnetRange = '10.250.250.0/24'
-$AppServiceSubnetName = 'NMW-PrivateLink-AppServiceSubnet'
-$AppServiceSubnetRange = '10.250.251.0/28'
+#>
 
+<# Variables:
+{
+  "PrivateLinkVnetName": {
+    "Description": "New VNet for private endpoints",
+    "IsRequired": true,
+    "DefaultValue": "NMW-PrivateLink"
+  },
+  "VnetAddressRange": {
+    "Description": "Address range for private endpoint vnet",
+    "IsRequired": true,
+    "DefaultValue": "10.250.250.0/23"
+  },
+  "PrivateEndpointSubnetName": {
+    "Description": "Name of private endpoint subnet",
+    "IsRequired": true,
+    "DefaultValue": "NMW-PrivateLink-EndpointSubnet"
+  },
+  "PrivateEndpointSubnetRange": {
+    "Description": "Address range for private endpoint subnet",
+    "IsRequired": true,
+    "DefaultValue": "10.250.250.0/24"
+  },
+  "AppServiceSubnetName": {
+    "Description": "App service subnet name",
+    "IsRequired": true,
+    "DefaultValue": "NMW-PrivateLink-AppServiceSubnet"
+  },
+  "AppServiceSubnetRange": {
+    "Description": "Address range for app service subnet",
+    "IsRequired": true,
+    "DefaultValue": "10.250.251.0/28"
+  },
+  "PeerVnetId": {
+    "Description": "Optional. Resource ID of vnet to peer to private endpoint vnet (e.g./subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rgname/providers/Microsoft.Network/virtualNetworks/VNetName ",
+    "IsRequired": false,
+    "DefaultValue": ""
+  },
+  "StorageAccountResourceId": {
+    "Description": "Optional. Storage account to be included in private endpoint subnet. Access to this storage account will be restricted to the nerdio application and peered vnets.",
+    "IsRequired": false,
+    "DefaultValue": ""
+  },
+  "MakeAppServicePrivate": {
+    "Description": "Limit access to the Nerdio Manager application. Only hosts on the vnet created by this script, or on peered vnets, will be able to access the app service URL.",
+    "IsRequired": false,
+    "DefaultValue": "false"
+  }
+}
+#>
 
-# $KeyVaultName = 'nwm-app-kv-herl7a5rkzp4u' # get from azure
-
-# $StorageAccountNames = @('samarnewappattachstorage')
+$ErrorActionPreference = 'Stop'
 
 $Prefix = ($KeyVaultName -split '-')[0]
 $NMWIdString = ($KeyVaultName -split '-')[3]
 $NMWAppName = "$Prefix-app-$NMWIdString"
 $AppServicePlanName = "$Prefix-app-plan-$NMWIdString"
+$KeyVault = Get-AzKeyVault -VaultName $KeyVaultName
+$Context = Get-AzContext
+$NMWSubscriptionName = $context.Subscription.Name
+$NMWSubscriptionId = $context.Subscription.Id
+$NMWResourceGroupName = $KeyVault.ResourceGroupName
+$NMWRegionName = $KeyVault.Location
+$SqlServerName = "$prefix-app-sql-$NMWIdString"
 
-<# test env only
-$SqlServerName = "nwm-app-sql-$NMWIdString"
-$NMWAppName = "nwm-app-$NMWIdString"
-$AppServicePlanName = "nwm-app-plan-$NMWIdString"
-#>
+$AppServicePlan = Get-AzAppServicePlan -ResourceGroupName $NMWResourceGroupName -Name $AppServicePlanName
+    
+if ($MakeAppServicePrivate -eq 'true') {
+    if ($AppServicePlan.sku.Tier -notmatch 'Premium') {
+        Write-Output "ERROR: The current NMW app service SKU does not allow private endpoints. Private endpoints can only be used with Premium app service SKUs"
+        Throw "The current NMW app service SKU does not allow private endpoints. Private endpoints can only be used with Premium app service SKUs"
+        exit
+    }
+}
 
-$AppServicePlan = Get-AzAppServicePlan -ResourceGroupName $AzureResourceGroupName -Name $AppServicePlanName
-if ($AppServicePlan.sku.Tier -notmatch 'Premium') {
-    Throw "The current NMW app service SKU does not allow private endpoints. Private endpoints can only be used with Premium app service SKUs"
+if ($AppServicePlan.sku.Tier -notmatch 'Standard|Premium')
+{
+    Write-Output "ERROR: The current NMW app service SKU does not VNet integration. VNet integration can only be used with Standard or Premium app service SKUs"
+    Throw "The current NMW app service SKU does not VNet integration. VNet integration can only be used with Standard or Premium app service SKUs"
     exit
 }
-$PrivateEndpointSubnet = New-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnetRange -PrivateEndpointNetworkPoliciesFlag Disabled
-$AppServiceSubnet = New-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -AddressPrefix $AppServiceSubnetRange 
-$VNet = New-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $AzureResourceGroupName -Location $AzureRegionName -AddressPrefix $VnetAddressRange -Subnet $PrivateEndpointSubnet,$AppServiceSubnet
 
-$KeyVaultDnsZone = New-AzPrivateDnsZone -ResourceGroupName $AzureResourceGroupName -Name privatelink.vaultcore.azure.net
-$SqlDnsZone = New-AzPrivateDnsZone -ResourceGroupName $AzureResourceGroupName -Name privatelink.database.azure.net
-$AppServiceDnsZone = New-AzPrivateDnsZone -ResourceGroupName $AzureResourceGroupName -Name privatelink.azurewebsites.net
-$StorageDnsZone = New-AzPrivateDnsZone -ResourceGroupName $AzureResourceGroupName -Name privatelink.file.core.windows.net
-
-New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $AzureResourceGroupName -ZoneName privatelink.vaultcore.azure.net -Name nmw-vault-privatelink -VirtualNetworkId $vnet.Id
-New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $AzureResourceGroupName -ZoneName privatelink.database.azure.net -Name nmw-database-privatelink -VirtualNetworkId $vnet.Id
-New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $AzureResourceGroupName -ZoneName privatelink.file.core.windows.net -Name nmw-file-privatelink -VirtualNetworkId $vnet.Id
-New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $AzureResourceGroupName -ZoneName privatelink.azurewebsites.net -Name nmw-appservice-privatelink -VirtualNetworkId $vnet.Id
-
-$KeyVault = Get-AzKeyVault -VaultName $KeyVaultName -ResourceGroupName $AzureResourceGroupName 
-$KvServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-kv-$NMWIdString-serviceconnection" -PrivateLinkServiceId $KeyVault.ResourceId -GroupId vault
-New-AzPrivateEndpoint -Name "$Prefix-app-kv-$NMWIdString-privateendpoint" -ResourceGroupName $AzureResourceGroupName -Location $AzureRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $KvServiceConnection
-$Config = New-AzPrivateDnsZoneConfig -Name privatelink.vaultcore.azure.net -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
-New-AzPrivateDnsZoneGroup -ResourceGroupName $AzureResourceGroupName -PrivateEndpointName "$Prefix-app-kv-$NMWIdString-privateendpoint" -Name "$Prefix-app-kv-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
-
-$SqlServer = Get-AzSqlServer -ResourceGroupName $AzureResourceGroupName -ServerName $SqlServerName 
-$SqlServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-sql-$NMWIdString-serviceconnection" -PrivateLinkServiceId $SqlServer.ResourceId -GroupId sqlserver
-New-AzPrivateEndpoint -Name "$Prefix-app-sql-$NMWIdString-privateendpoint" -ResourceGroupName $AzureResourceGroupName -Location $AzureRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $SqlServiceConnection
-$Config = New-AzPrivateDnsZoneConfig -Name 'privatelink.database.azure.net' -PrivateDnsZoneId $SqlDnsZone.ResourceId
-New-AzPrivateDnsZoneGroup -ResourceGroupName $AzureResourceGroupName -PrivateEndpointName "$Prefix-app-sql-$NMWIdString-privateendpoint" -Name "$Prefix-app-sql-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
-
-$AppService = Get-AzWebApp -ResourceGroupName $AzureResourceGroupName -Name $NMWAppName 
-$AppServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-$NMWIdString-serviceconnection" -PrivateLinkServiceId $AppService.Id -GroupId sites 
-New-AzPrivateEndpoint -Name "$Prefix-app-$NMWIdString-privateendpoint" -ResourceGroupName $AzureResourceGroupName -Location $AzureRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $AppServiceConnection 
-$Config = New-AzPrivateDnsZoneConfig -Name 'privatelink.azurewebsites.net' -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
-New-AzPrivateDnsZoneGroup -ResourceGroupName $AzureResourceGroupName -PrivateEndpointName "$Prefix-app-appservice-$NMWIdString-privateendpoint" -Name "$Prefix-app-appservice-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
-
-
-foreach ($StorageAccountName in $StorageAccountNames) {
-    $StorageAccount = Get-AzStorageAccount -ResourceGroupName $AzureResourceGroupName -Name $StorageAccountName
-    $StorageServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-files-$NMWIdString-serviceconnection" -PrivateLinkServiceId $StorageAccount.id -GroupId file
-    New-AzPrivateEndpoint -Name "$Prefix-app-files-$NMWIdString-privateendpoint" -ResourceGroupName $AzureResourceGroupName -Location $AzureRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $StorageServiceConnection 
-    $Config = New-AzPrivateDnsZoneConfig -Name 'privatelink.file.core.windows.net' -PrivateDnsZoneId $StorageDnsZone.ResourceId
-    New-AzPrivateDnsZoneGroup -ResourceGroupName $AzureResourceGroupName -PrivateEndpointName "$Prefix-app-files-$NMWIdString-privateendpoint" -Name "$Prefix-app-files-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
+if ($StorageAccountResourceId) {
+    $StorageAccount = Get-AzResource -ResourceId $StorageAccountResourceId
+    if ($StorageAccount.Location -ne $NMWRegionName) {
+        write-output "ERROR: Unable to create vnet integration to storage account.  Account must be in same region as the vnet."
+        throw "Unable to create vnet integration to storage account.  Account must be in same region as the vnet."
+        exit
+    }
+ 
 }
 
+
+$PrivateEndpointSubnet = New-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnetRange -PrivateEndpointNetworkPoliciesFlag Disabled 
+$AppServiceSubnet = New-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -AddressPrefix $AppServiceSubnetRange 
+$VNet = New-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -AddressPrefix $VnetAddressRange -Subnet $PrivateEndpointSubnet,$AppServiceSubnet
+
+$KeyVaultDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.vaultcore.azure.net
+$SqlDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.database.windows.net
+
+New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.vaultcore.azure.net -Name nmw-vault-privatelink -VirtualNetworkId $vnet.Id
+New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.database.windows.net -Name nmw-database-privatelink -VirtualNetworkId $vnet.Id
+
+$VNet = get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NMWResourceGroupName 
+$PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
+$AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
+
+$KeyVault = Get-AzKeyVault -VaultName $KeyVaultName -ResourceGroupName $NMWResourceGroupName 
+$KvServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-kv-$NMWIdString-serviceconnection" -PrivateLinkServiceId $KeyVault.ResourceId -GroupId vault
+New-AzPrivateEndpoint -Name "$Prefix-app-kv-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location 'South Central US' -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $KvServiceConnection
+$Config = New-AzPrivateDnsZoneConfig -Name privatelink.vaultcore.azure.net -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
+New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-kv-$NMWIdString-privateendpoint" -Name "$Prefix-app-kv-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
+
+$SqlServer = Get-AzSqlServer -ResourceGroupName $NMWResourceGroupName -ServerName $SqlServerName 
+$SqlServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-sql-$NMWIdString-serviceconnection" -PrivateLinkServiceId $SqlServer.ResourceId -GroupId sqlserver
+New-AzPrivateEndpoint -Name "$Prefix-app-sql-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $SqlServiceConnection
+$Config = New-AzPrivateDnsZoneConfig -Name 'privatelink.database.azure.net' -PrivateDnsZoneId $SqlDnsZone.ResourceId
+New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-sql-$NMWIdString-privateendpoint" -Name "$Prefix-app-sql-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
+
+#New-AzPrivateEndpoint -Name "$Prefix-app-sql-$NMWIdString-app-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $AppServiceSubnet -PrivateLinkServiceConnection $SqlServiceConnection
+
+
+# Add VNet integration for key vault and sql
+$PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
+$AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
+
+$VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NMWResourceGroupName 
+$VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnetRange -ServiceEndpoint Microsoft.KeyVault,Microsoft.Sql | Set-AzVirtualNetwork
+
+# add vnet integration to app service
+
+#delegate app service subnet to webfarms
+$VNet = get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NMWResourceGroupName 
+$AppSubnetDelegation = New-AzDelegation -Name "$Prefix-app-$NMWIdString-subnetdelegation" -ServiceName Microsoft.Web/serverFarms
+$AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
+$AppServiceSubnet.Delegations.Add($AppSubnetDelegation)
+Set-AzVirtualNetwork -VirtualNetwork $VNet
+
+#Creation of the VNet integration
 
 #Property array with the SubnetID
 $properties = @{
-  subnetResourceId = "/subscriptions/$AzureSubscriptionId/resourceGroups/$AzureResourceGroupName/providers/Microsoft.Network/virtualNetworks/$PrivateLinkVnetName/subnets/$AppServiceSubnetName"
+    subnetResourceId = "/subscriptions/$NMWSubscriptionId/resourceGroups/$NMWResourceGroupName/providers/Microsoft.Network/virtualNetworks/$PrivateLinkVnetName/subnets/$AppServiceSubnetName"
 }
 
-#delegate app service subnet to webfarms
-
-#Creation of the VNet integration
 $vNetParams = @{
-  ResourceName = "$NMWAppName/VirtualNetwork"
-  Location = $AzureRegionName
-  ResourceGroupName = $AzureResourceGroupName
-  ResourceType = 'Microsoft.Web/sites/networkConfig'
-  PropertyObject = $properties
+    ResourceName = "$NMWAppName/VirtualNetwork"
+    Location = $NMWRegionName
+    ResourceGroupName = $NMWResourceGroupName
+    ResourceType = 'Microsoft.Web/sites/networkConfig'
+    PropertyObject = $properties
 }
 New-AzResource @vNetParams -Force
 
-New-AzDnsRecordSet -Name 
+# add application settings to use private dns
+
+$app = Get-AzWebApp -Name $NMWAppName -ResourceGroupName $NMWResourceGroupName
+$appSettings = $app.SiteConfig.AppSettings
+$newAppSettings = @{}
+ForEach ($item in $appSettings) {
+    $newAppSettings[$item.Name] = $item.Value
+}
+$newAppSettings += @{WEBSITE_VNET_ROUTE_ALL = '1'; WEBSITE_DNS_SERVER = '168.63.129.16'}
+Set-AzWebApp -AppSettings $newAppSettings -Name $NMWAppName -ResourceGroupName $NMWResourceGroupName 
+
+
+# network rules for key vault and sql
+Add-AzKeyVaultNetworkRule -VaultName $KeyVaultName -VirtualNetworkResourceId $PrivateEndpointSubnet.id -ResourceGroupName $NMWResourceGroupName 
+Update-AzKeyVaultNetworkRuleSet -VaultName $KeyVaultName -Bypass None -ResourceGroupName $NMWResourceGroupName 
+Update-AzKeyVaultNetworkRuleSet -VaultName $KeyVaultName -DefaultAction Deny -ResourceGroupName $NMWResourceGroupName 
+
+New-AzSqlServerVirtualNetworkRule -VirtualNetworkRuleName 'Allow private endpoint subnet' -VirtualNetworkSubnetId $PrivateEndpointSubnet.id -ServerName $Prefix-app-sql-$NMWIdString -ResourceGroupName $NMWResourceGroupName
+#New-AzSqlServerVirtualNetworkRule -VirtualNetworkRuleName 'Allow app service subnet' -VirtualNetworkSubnetId $AppServiceSubnet.id -ServerName $Prefix-app-sql-$NMWIdString -ResourceGroupName $NMWResourceGroupName
+Set-AzSqlServer -ServerName $SqlServerName -ResourceGroupName $NMWResourceGroupName -PublicNetworkAccess "Disabled"
+
+
+Restart-AzWebApp  -Name $NMWAppName -ResourceGroupName $NMWResourceGroupName
+
+
+if ($MakeAppServicePrivate -eq 'true') {
+    $AppServiceDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.azurewebsites.net
+    New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.azurewebsites.net -Name nmw-appservice-privatelink -VirtualNetworkId $vnet.Id
+    $AppService = Get-AzWebApp -ResourceGroupName $NMWResourceGroupName -Name $NMWAppName 
+    $AppServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-$NMWIdString-serviceconnection" -PrivateLinkServiceId $AppService.Id -GroupId sites 
+    New-AzPrivateEndpoint -Name "$Prefix-app-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $AppServiceConnection 
+    $Config = New-AzPrivateDnsZoneConfig -Name 'privatelink.azurewebsites.net' -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
+    New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-$NMWIdString-privateendpoint" -Name "$Prefix-app-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
+
+}
+
+if ($StorageAccountResourceId) {
+    $StorageDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.file.core.windows.net
+    New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.file.core.windows.net -Name nmw-file-privatelink -VirtualNetworkId $vnet.Id
+
+    $StorageAccount = Get-AzResource -ResourceId $StorageAccountResourceId
+    $StorageServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-files-$NMWIdString-serviceconnection" -PrivateLinkServiceId $StorageAccount.id -GroupId file
+    New-AzPrivateEndpoint -Name "$Prefix-app-files-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $StorageServiceConnection 
+    $Config = New-AzPrivateDnsZoneConfig -Name 'privatelink.file.core.windows.net' -PrivateDnsZoneId $StorageDnsZone.ResourceId
+    New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-files-$NMWIdString-privateendpoint" -Name "$Prefix-app-files-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
+    Add-AzStorageAccountNetworkRule -ResourceGroupName $NMWResourceGroupName -Name $StorageAccount.Name -VirtualNetworkResourceId $PrivateEndpointSubnet.id 
+    Update-AzStorageAccountNetworkRuleSet -ResourceGroupName $NMWResourceGroupName -Name $StorageAccount.Name -DefaultAction Deny
+    if ($PeerVnetId) {
+        try {
+            Add-AzStorageAccountNetworkRule -ResourceGroupName $NMWResourceGroupName -Name $StorageAccount.Name -VirtualNetworkResourceId $PeerVnetId
+        }
+        Catch {
+            # Error here likely indicates storage account is not in a compatible region. Storage account must be in the same region as the vnet, or a paired region
+            Write-Output "ERROR: Unable to create vnet integration to storage account.  Account must be in same region as the vnet, or a paired region."
+        }
+    }
+}
+
+if ($PeerVnetId) {
+    $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NMWResourceGroupName 
+    $Resource = Get-AzResource -ResourceId $PeerVnetId
+    $PeerVnet = Get-AzVirtualNetwork -Name $Resource.Name -ResourceGroupName $Resource.ResourceGroupName
+    Add-AzVirtualNetworkPeering -Name "$($PeerVnet.name)-$PrivateLinkVnetName" -VirtualNetwork $PeerVnet -RemoteVirtualNetworkId $vnet.id 
+    Add-AzVirtualNetworkPeering -Name "$PrivateLinkVnetName-$($PeerVnet.name)" -VirtualNetwork $vnet -RemoteVirtualNetworkId $VNetId
+    New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.file.core.windows.net -Name nmw-file-privatelink -VirtualNetworkId $PeerVnetId
+    if ($MakeAppServicePrivate) {
+        New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.azurewebsites.net -Name nmw-appservice-privatelink -VirtualNetworkId $PeerVnetId
+    }
+}
