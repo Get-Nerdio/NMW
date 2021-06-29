@@ -1,4 +1,4 @@
-﻿#description: Restrict access to the sql database and keyvault used by Nerdio Manager. If the MakeAppServicePrivate parameter is set to 'true' then public access to the nerdio manager URL will be restricted.
+﻿#description: Restrict access to the sql database and keyvault used by Nerdio Manager. 
 #tags: Nerdio, Preview
 
 <# Notes:
@@ -56,7 +56,7 @@ and peered vnets.
     "DefaultValue": ""
   },
   "MakeAppServicePrivate": {
-    "Description": "Limit access to the Nerdio Manager application. Only hosts on the vnet created by this script, or on peered vnets, will be able to access the app service URL.",
+    "Description": "Limit access to the Nerdio Manager application. If set to true, only hosts on the vnet created by this script, or on peered vnets, will be able to access the app service URL.",
     "IsRequired": false,
     "DefaultValue": "false"
   }
