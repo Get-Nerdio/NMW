@@ -77,6 +77,7 @@ $NMWResourceGroupName = $KeyVault.ResourceGroupName
 $NMWRegionName = $KeyVault.Location
 $SqlServerName = "$prefix-app-sql-$NMWIdString"
 
+write-output "Set variables. Getting app service."
 $AppServicePlan = Get-AzAppServicePlan -ResourceGroupName $NMWResourceGroupName -Name $AppServicePlanName
     
 if ($MakeAppServicePrivate -eq 'true') {
@@ -104,11 +105,12 @@ if ($StorageAccountResourceId) {
  
 }
 
-
+Write-Output "Creating VNet"
 $PrivateEndpointSubnet = New-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnetRange -PrivateEndpointNetworkPoliciesFlag Disabled 
 $AppServiceSubnet = New-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -AddressPrefix $AppServiceSubnetRange 
 $VNet = New-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -AddressPrefix $VnetAddressRange -Subnet $PrivateEndpointSubnet,$AppServiceSubnet
 
+Write-Output "Creating Private DNS Zones"
 $KeyVaultDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.vaultcore.azure.net
 $SqlDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.database.windows.net
 
@@ -119,12 +121,14 @@ $VNet = get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NMWR
 $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
 $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
 
+Write-Output "Configuring keyvault service connection and DNS zone"
 $KeyVault = Get-AzKeyVault -VaultName $KeyVaultName -ResourceGroupName $NMWResourceGroupName 
 $KvServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-kv-$NMWIdString-serviceconnection" -PrivateLinkServiceId $KeyVault.ResourceId -GroupId vault
 New-AzPrivateEndpoint -Name "$Prefix-app-kv-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location 'South Central US' -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $KvServiceConnection
 $Config = New-AzPrivateDnsZoneConfig -Name privatelink.vaultcore.azure.net -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
 New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-kv-$NMWIdString-privateendpoint" -Name "$Prefix-app-kv-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
 
+Write-Output "Configuring sql service connection and DNS zone"
 $SqlServer = Get-AzSqlServer -ResourceGroupName $NMWResourceGroupName -ServerName $SqlServerName 
 $SqlServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-sql-$NMWIdString-serviceconnection" -PrivateLinkServiceId $SqlServer.ResourceId -GroupId sqlserver
 New-AzPrivateEndpoint -Name "$Prefix-app-sql-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $SqlServiceConnection
@@ -134,23 +138,21 @@ New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpo
 #New-AzPrivateEndpoint -Name "$Prefix-app-sql-$NMWIdString-app-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $AppServiceSubnet -PrivateLinkServiceConnection $SqlServiceConnection
 
 
-# Add VNet integration for key vault and sql
+Write-Output "Add VNet integration for key vault and sql"
 $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
 $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
 
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NMWResourceGroupName 
 $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnetRange -ServiceEndpoint Microsoft.KeyVault,Microsoft.Sql | Set-AzVirtualNetwork
 
-# add vnet integration to app service
-
-#delegate app service subnet to webfarms
+Write-Output "Delegate app service subnet to webfarms"
 $VNet = get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NMWResourceGroupName 
 $AppSubnetDelegation = New-AzDelegation -Name "$Prefix-app-$NMWIdString-subnetdelegation" -ServiceName Microsoft.Web/serverFarms
 $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
 $AppServiceSubnet.Delegations.Add($AppSubnetDelegation)
 Set-AzVirtualNetwork -VirtualNetwork $VNet
 
-#Creation of the VNet integration
+Write-Output "Create app service VNet integration"
 
 #Property array with the SubnetID
 $properties = @{
@@ -166,7 +168,7 @@ $vNetParams = @{
 }
 New-AzResource @vNetParams -Force
 
-# add application settings to use private dns
+Write-Output "Add application settings to use private dns"
 
 $app = Get-AzWebApp -Name $NMWAppName -ResourceGroupName $NMWResourceGroupName
 $appSettings = $app.SiteConfig.AppSettings
@@ -178,7 +180,7 @@ $newAppSettings += @{WEBSITE_VNET_ROUTE_ALL = '1'; WEBSITE_DNS_SERVER = '168.63.
 Set-AzWebApp -AppSettings $newAppSettings -Name $NMWAppName -ResourceGroupName $NMWResourceGroupName 
 
 
-# network rules for key vault and sql
+Write-Output "Network deny rules for key vault and sql"
 Add-AzKeyVaultNetworkRule -VaultName $KeyVaultName -VirtualNetworkResourceId $PrivateEndpointSubnet.id -ResourceGroupName $NMWResourceGroupName 
 Update-AzKeyVaultNetworkRuleSet -VaultName $KeyVaultName -Bypass None -ResourceGroupName $NMWResourceGroupName 
 Update-AzKeyVaultNetworkRuleSet -VaultName $KeyVaultName -DefaultAction Deny -ResourceGroupName $NMWResourceGroupName 
@@ -187,22 +189,23 @@ New-AzSqlServerVirtualNetworkRule -VirtualNetworkRuleName 'Allow private endpoin
 #New-AzSqlServerVirtualNetworkRule -VirtualNetworkRuleName 'Allow app service subnet' -VirtualNetworkSubnetId $AppServiceSubnet.id -ServerName $Prefix-app-sql-$NMWIdString -ResourceGroupName $NMWResourceGroupName
 Set-AzSqlServer -ServerName $SqlServerName -ResourceGroupName $NMWResourceGroupName -PublicNetworkAccess "Disabled"
 
-
+Write-Output "Restart App Service"
 Restart-AzWebApp  -Name $NMWAppName -ResourceGroupName $NMWResourceGroupName
 
 
 if ($MakeAppServicePrivate -eq 'true') {
-    $AppServiceDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.azurewebsites.net
-    New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.azurewebsites.net -Name nmw-appservice-privatelink -VirtualNetworkId $vnet.Id
-    $AppService = Get-AzWebApp -ResourceGroupName $NMWResourceGroupName -Name $NMWAppName 
-    $AppServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-$NMWIdString-serviceconnection" -PrivateLinkServiceId $AppService.Id -GroupId sites 
-    New-AzPrivateEndpoint -Name "$Prefix-app-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $AppServiceConnection 
-    $Config = New-AzPrivateDnsZoneConfig -Name 'privatelink.azurewebsites.net' -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
-    New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-$NMWIdString-privateendpoint" -Name "$Prefix-app-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
-
+  Write-Output "Making app service private"
+  $AppServiceDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.azurewebsites.net
+  New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.azurewebsites.net -Name nmw-appservice-privatelink -VirtualNetworkId $vnet.Id
+  $AppService = Get-AzWebApp -ResourceGroupName $NMWResourceGroupName -Name $NMWAppName 
+  $AppServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-$NMWIdString-serviceconnection" -PrivateLinkServiceId $AppService.Id -GroupId sites 
+  New-AzPrivateEndpoint -Name "$Prefix-app-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $AppServiceConnection 
+  $Config = New-AzPrivateDnsZoneConfig -Name 'privatelink.azurewebsites.net' -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
+  New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-$NMWIdString-privateendpoint" -Name "$Prefix-app-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
 }
 
 if ($StorageAccountResourceId) {
+  write-output   "Making storage account private"
     $StorageDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.file.core.windows.net
     New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.file.core.windows.net -Name nmw-file-privatelink -VirtualNetworkId $vnet.Id
 
@@ -225,6 +228,7 @@ if ($StorageAccountResourceId) {
 }
 
 if ($PeerVnetId) {
+  Write-Output "Creating vnet peering"
     $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NMWResourceGroupName 
     $Resource = Get-AzResource -ResourceId $PeerVnetId
     $PeerVnet = Get-AzVirtualNetwork -Name $Resource.Name -ResourceGroupName $Resource.ResourceGroupName
