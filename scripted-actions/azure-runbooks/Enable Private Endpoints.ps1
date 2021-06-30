@@ -114,8 +114,8 @@ Write-Output "Creating Private DNS Zones"
 $KeyVaultDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.vaultcore.azure.net
 $SqlDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.database.windows.net
 
-New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.vaultcore.azure.net -Name nmw-vault-privatelink -VirtualNetworkId $vnet.Id
-New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.database.windows.net -Name nmw-database-privatelink -VirtualNetworkId $vnet.Id
+New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.vaultcore.azure.net -Name $Prefix-vault-privatelink -VirtualNetworkId $vnet.Id
+New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.database.windows.net -Name $Prefix-database-privatelink -VirtualNetworkId $vnet.Id
 
 $VNet = get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NMWResourceGroupName 
 $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
@@ -196,7 +196,7 @@ Restart-AzWebApp  -Name $NMWAppName -ResourceGroupName $NMWResourceGroupName
 if ($MakeAppServicePrivate -eq 'true') {
   Write-Output "Making app service private"
   $AppServiceDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.azurewebsites.net
-  New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.azurewebsites.net -Name nmw-appservice-privatelink -VirtualNetworkId $vnet.Id
+  New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.azurewebsites.net -Name $prefix-appservice-privatelink -VirtualNetworkId $vnet.Id
   $AppService = Get-AzWebApp -ResourceGroupName $NMWResourceGroupName -Name $NMWAppName 
   $AppServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-$NMWIdString-serviceconnection" -PrivateLinkServiceId $AppService.Id -GroupId sites 
   New-AzPrivateEndpoint -Name "$Prefix-app-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $AppServiceConnection 
@@ -207,7 +207,7 @@ if ($MakeAppServicePrivate -eq 'true') {
 if ($StorageAccountResourceId) {
   write-output   "Making storage account private"
     $StorageDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.file.core.windows.net
-    New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.file.core.windows.net -Name nmw-file-privatelink -VirtualNetworkId $vnet.Id
+    New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.file.core.windows.net -Name $prefix-file-privatelink -VirtualNetworkId $vnet.Id
 
     $StorageAccount = Get-AzResource -ResourceId $StorageAccountResourceId
     $StorageServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-files-$NMWIdString-serviceconnection" -PrivateLinkServiceId $StorageAccount.id -GroupId file
@@ -234,8 +234,8 @@ if ($PeerVnetId) {
     $PeerVnet = Get-AzVirtualNetwork -Name $Resource.Name -ResourceGroupName $Resource.ResourceGroupName
     Add-AzVirtualNetworkPeering -Name "$($PeerVnet.name)-$PrivateLinkVnetName" -VirtualNetwork $PeerVnet -RemoteVirtualNetworkId $vnet.id 
     Add-AzVirtualNetworkPeering -Name "$PrivateLinkVnetName-$($PeerVnet.name)" -VirtualNetwork $vnet -RemoteVirtualNetworkId $VNetId
-    New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.file.core.windows.net -Name nmw-file-privatelink -VirtualNetworkId $PeerVnetId
+    New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.file.core.windows.net -Name $Prefix-file-privatelink -VirtualNetworkId $PeerVnetId
     if ($MakeAppServicePrivate) {
-        New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.azurewebsites.net -Name nmw-appservice-privatelink -VirtualNetworkId $PeerVnetId
+        New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.azurewebsites.net -Name $Prefix-appservice-privatelink -VirtualNetworkId $PeerVnetId
     }
 }
