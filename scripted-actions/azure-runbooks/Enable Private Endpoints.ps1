@@ -177,7 +177,13 @@ ForEach ($item in $appSettings) {
     $newAppSettings[$item.Name] = $item.Value
 }
 $newAppSettings += @{WEBSITE_VNET_ROUTE_ALL = '1'; WEBSITE_DNS_SERVER = '168.63.129.16'}
-Set-AzWebApp -AppSettings $newAppSettings -Name $NMWAppName -ResourceGroupName $NMWResourceGroupName 
+
+# getting around az.websites module bug preventing app settings update
+$module = Get-Module az.websites
+if ($module.Version -lt '2.7.0') {
+    Set-AzWebApp -AppSettings $newAppSettings -Name $NMWAppName -ResourceGroupName $NMWResourceGroupName -HttpsOnly
+}
+else {Set-AzWebApp -AppSettings $newAppSettings -Name $NMWAppName -ResourceGroupName $NMWResourceGroupName}
 
 
 Write-Output "Network deny rules for key vault and sql"
