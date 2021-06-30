@@ -54,17 +54,13 @@ Microsoft.ScreenSketch,"https://www.microsoft.com/en-us/p/snip-sketch/9mz95kl8mr
 $Services = @"
 autotimesvc
 BcastDVRUserService
-CDPSvc
-CDPUserSvc
-CscService
+CaptureService
 defragsvc
 DiagSvc
 DiagTrack
 DPS
-DsmSvc
 DusmSvc
 icssvc
-InstallService
 lfsvc
 MapsBroker
 MessagingService
@@ -75,11 +71,9 @@ SEMgrSvc
 SmsRouter
 SysMain
 TabletInputService
-UsoSvc
 VSS
 WdiSystemHost
 WerSvc
-WSearch
 XblAuthManager
 XblGameSave
 XboxGipSvc
