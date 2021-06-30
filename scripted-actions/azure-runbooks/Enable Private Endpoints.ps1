@@ -3,6 +3,8 @@
 
 <# Notes:
 
+After running this script, the Nerdio Manager site may load with status 503 "unavailable" for several minutes.
+
 This script will add private endpoints and service endpoints to allow the Nerdio Manager app service to communicate
 with the sql database and keyvault over a private network, with no traffic routed over the public internet.
 Access to the sql database and keyvault will be restricted to the private network. The MakeAppServicePrivate 
@@ -195,9 +197,10 @@ New-AzSqlServerVirtualNetworkRule -VirtualNetworkRuleName 'Allow private endpoin
 #New-AzSqlServerVirtualNetworkRule -VirtualNetworkRuleName 'Allow app service subnet' -VirtualNetworkSubnetId $AppServiceSubnet.id -ServerName $Prefix-app-sql-$NMWIdString -ResourceGroupName $NMWResourceGroupName
 Set-AzSqlServer -ServerName $SqlServerName -ResourceGroupName $NMWResourceGroupName -PublicNetworkAccess "Disabled"
 
-Write-Output "Restart App Service"
+Write-Output "Restart App Service and wait"
 Restart-AzWebApp  -Name $NMWAppName -ResourceGroupName $NMWResourceGroupName
 
+Sleep 120
 
 if ($MakeAppServicePrivate -eq 'true') {
   Write-Output "Making app service private"
