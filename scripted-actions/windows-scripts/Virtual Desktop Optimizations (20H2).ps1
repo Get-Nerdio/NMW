@@ -422,13 +422,21 @@ XblGameSaveTask
 
 
 # =========================== Logic Code to use previously specified values.
+# Enable Logging
+$SaveVerbosePreference = $VerbosePreference
+$VerbosePreference = 'continue'
+$VMTime = Get-Date
+$LogTime = $VMTime.ToUniversalTime()
+mkdir "C:\Windows\temp\NMWLogs\ScriptedActions\win10optimize2009" -Force
+Start-Transcript -Path "C:\Windows\temp\NMWLogs\ScriptedActions\win10optimize2009\ps_log.txt" -Append
+Write-Host "################# New Script Run #################"
+Write-host "Current time (UTC-0): $LogTime"
 
 # variables
-
 $WinVersion = '2009'
 
 # Download repo for WVD optimizations
-mkdir C:\wvdtemp\Optimize_sa\optimize
+mkdir C:\wvdtemp\Optimize_sa\optimize -Force
 
 Invoke-WebRequest `
 -Uri "https://github.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/archive/refs/heads/main.zip" `
@@ -436,7 +444,7 @@ Invoke-WebRequest `
 
 Expand-Archive -Path "C:\wvdtemp\Optimize_sa\optimize.zip" -DestinationPath "C:\wvdtemp\Optimize_sa\optimize\"
 
-# remove json files
+# Remove default json files 
 Remove-Item -Path "C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-main\$WinVersion\ConfigurationFiles\AppxPackages.json" -Force
 Remove-Item -Path "C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-main\$WinVersion\ConfigurationFiles\Autologgers.Json" -Force
 Remove-Item -Path "C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-main\$WinVersion\ConfigurationFiles\DefaultUserSettings.json" -Force
@@ -534,3 +542,7 @@ C:\wvdtemp\Optimize_sa\optimize\Virtual-Desktop-Optimization-Tool-main\Win10_Vir
 
 # Clean up Temp Folder
 Remove-Item C:\WVDTemp\Optimize_sa\ -Recurse -Force
+
+# End Logging
+Stop-Transcript
+$VerbosePreference=$SaveVerbosePreference

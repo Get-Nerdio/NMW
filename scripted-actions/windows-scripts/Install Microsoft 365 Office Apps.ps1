@@ -17,12 +17,14 @@ See https://docs.microsoft.com/en-us/azure/virtual-desktop/install-office-on-wvd
 #>
 
 # Configure powershell logging
+$SaveVerbosePreference = $VerbosePreference
+$VerbosePreference = 'continue'
+$VMTime = Get-Date
+$LogTime = $VMTime.ToUniversalTime()
 mkdir "$env:windir\Temp\NMWLogs\ScriptedActions\msoffice_sa" -Force
-Start-Transcript -Path "$env:windir\Temp\NMWLogs\ScriptedActions\msoffice_sa\ps_log.log" -Append -IncludeInvocationHeader
-Write-Host "######################################
-New Script Run, current time (UTC-0):"
-$Time = Get-Date
-$Time.ToUniversalTime()
+Start-Transcript -Path "$env:windir\Temp\NMWLogs\ScriptedActions\msoffice_sa\ps_log.txt" -Append -IncludeInvocationHeader
+Write-Host "################# New Script Run #################"
+Write-host "Current time (UTC-0): $LogTime"
 
 # create directory to store ODT and setup files
 mkdir "$env:windir\Temp\odt_sa\raw" -Force
@@ -68,4 +70,6 @@ $ODTConfig | Out-File "$env:windir\Temp\odt_sa\raw\odtconfig.xml"
 # execute odt.exe using the newly created odtconfig.xml. This updates/installs office (takes a while)
 Start-Process -filepath "$env:windir\Temp\odt_sa\raw\setup.exe" -ArgumentList "/configure $env:windir\Temp\odt_sa\raw\odtconfig.xml" -Wait
 
+# End Logging
 Stop-Transcript
+$VerbosePreference=$SaveVerbosePreference

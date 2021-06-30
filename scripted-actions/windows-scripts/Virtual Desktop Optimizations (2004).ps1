@@ -416,9 +416,17 @@ XblGameSaveTask
 
 
 # =========================== Logic Code to use previously specified values.
+# Enable Logging
+$SaveVerbosePreference = $VerbosePreference
+$VerbosePreference = 'continue'
+$VMTime = Get-Date
+$LogTime = $VMTime.ToUniversalTime()
+mkdir "C:\Windows\temp\NMWLogs\ScriptedActions\win10optimize2004" -Force
+Start-Transcript -Path "C:\Windows\temp\NMWLogs\ScriptedActions\win10optimize2004\ps_log.txt" -Append
+Write-Host "################# New Script Run #################"
+Write-host "Current time (UTC-0): $LogTime"
 
 # variables
-
 $WinVersion = '2004'
 
 # Download repo for WVD optimizations
@@ -528,3 +536,7 @@ C:\WVDTemp\Optimize_sa\Virtual-Desktop-Optimization-Tool-main\Win10_VirtualDeskt
 
 # Clean up Temp Folder
 Remove-Item C:\WVDTemp\Optimize_sa\ -Recurse -Force
+
+# End Logging
+Stop-Transcript
+$VerbosePreference=$SaveVerbosePreference
