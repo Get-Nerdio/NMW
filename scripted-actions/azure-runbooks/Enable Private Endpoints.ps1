@@ -137,8 +137,9 @@ New-AzPrivateEndpoint -Name "$Prefix-app-sql-$NMWIdString-privateendpoint" -Reso
 $Config = New-AzPrivateDnsZoneConfig -Name 'privatelink.database.azure.net' -PrivateDnsZoneId $SqlDnsZone.ResourceId
 New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-sql-$NMWIdString-privateendpoint" -Name "$Prefix-app-sql-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
 
-#New-AzPrivateEndpoint -Name "$Prefix-app-sql-$NMWIdString-app-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $AppServiceSubnet -PrivateLinkServiceConnection $SqlServiceConnection
-
+# Configure DNS for storage  
+$StorageDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.file.core.windows.net
+New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.file.core.windows.net -Name $prefix-file-privatelink -VirtualNetworkId $vnet.Id
 
 Write-Output "Add VNet integration for key vault and sql"
 $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
@@ -215,9 +216,6 @@ if ($MakeAppServicePrivate -eq 'true') {
 
 if ($StorageAccountResourceId) {
   write-output   "Making storage account private"
-    $StorageDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.file.core.windows.net
-    New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.file.core.windows.net -Name $prefix-file-privatelink -VirtualNetworkId $vnet.Id
-
     $StorageAccount = Get-AzResource -ResourceId $StorageAccountResourceId
     $StorageServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-files-$NMWIdString-serviceconnection" -PrivateLinkServiceId $StorageAccount.id -GroupId file
     New-AzPrivateEndpoint -Name "$Prefix-app-files-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $StorageServiceConnection 
