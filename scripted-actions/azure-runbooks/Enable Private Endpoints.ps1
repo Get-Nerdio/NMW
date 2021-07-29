@@ -3,7 +3,8 @@
 
 <# Notes:
 
-After running this script, the Nerdio Manager site may load with status 503 "unavailable" for several minutes.
+After running this script, the Nerdio Manager site may load with status 503 "unavailable" for several seconds. 
+This will not impact access to the AVD desktops.
 
 This script will add private endpoints and service endpoints to allow the Nerdio Manager app service to communicate
 with the sql database and keyvault over a private network, with no traffic routed over the public internet.
