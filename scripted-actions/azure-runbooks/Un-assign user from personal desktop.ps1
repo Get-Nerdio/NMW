@@ -31,22 +31,34 @@ else {
 
 $VMResourceGroupName = $AzureResourceGroupName
 $HostPoolResourceGroupName = $HostPoolId.Split('/', [System.StringSplitOptions]::RemoveEmptyEntries)[3]
+
+write-output "getting vm"
 $VM = Get-AzVM -ResourceGroupName $VMResourceGroupName -Name $AzureVMName
 
 $VMStatus = Get-AzVM -ResourceGroupName $VMResourceGroupName -Name $AzureVMName -Status
 if ($VMStatus.code -notmatch 'running') {
+    Write-Output "Starting VM $AzureVMName"
     $VM | Start-AzVM 
 }
 
 
 # Generate New Registration Token
+Write-Output "Generate New Registration Token"
 $RegistrationKey = New-AzWvdRegistrationInfo -ResourceGroupName $HostPoolResourceGroupName -HostPoolName $HostPoolName -ExpirationTime $((get-date).ToUniversalTime().AddDays(1).ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ'))
  
 # Making AzureVMName Fully Qualified
-$AzureVMNameFQDN = $vm.Tags['NMW_VM_FQDN']
- 
+$tag = $vm.tags.Keys -match 'VM_FQDN'
+$AzureVMNameFQDN = $vm.Tags[$tag][0]
+
+# Removing Host from App Group
+Write-Output "Removing host $AzureVMNameFQDN from the app group $AppGroupName"
+
+#Remove-AzRoleAssignment -SignInName $DesktopUser -RoleDefinitionName 'Desktop Virtualization User' -ResourceName "$AppGroupName" -ResourceGroupName $HostPoolResourceGroupName -ResourceType 'Microsoft.DesktopVirtualization/applicationGroups' 
+
 # Removing Host from the HostPool"
-Remove-AzWvdSessionHost -ResourceGroupName $HostPoolResourceGroupName -HostPoolName $HostPoolName -Name $AzureVMNameFQDN -Force
+write-output "Removing Host $AzureVMNameFQDN from the HostPool $HostPoolName"
+
+Remove-AzWvdSessionHost -ResourceGroupName $HostPoolResourceGroupName -HostPoolName $HostPoolName -Name $AzureVMNameFQDN -Force 
  
 # Execute local script on remote VM
 $Script = @"
@@ -58,8 +70,10 @@ Start-service RDAgentBootLoader
 $Script | Out-File ".\RemoveAssignment.ps1"
  
 # Execute local script on remote VM
-Invoke-AzVMRunCommand -ResourceGroupName $VMResourceGroupName -VMName $AzureVMName -CommandId 'RunPowerShellScript' -ScriptPath '.\RemoveAssignment.ps1'
+write-output "Execute local script on remote VM"
+Invoke-AzVMRunCommand -ResourceGroupName $VMResourceGroupName -VMName "$AzureVMName" -CommandId 'RunPowerShellScript' -ScriptPath '.\RemoveAssignment.ps1' 
 
 if ($VMStatus.code -notmatch 'running') {
+    write-output "stopping VM"
     $VM | Stop-AzVM -Force
 }
