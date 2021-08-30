@@ -51,9 +51,10 @@ $tag = $vm.tags.Keys -match 'VM_FQDN'
 $AzureVMNameFQDN = $vm.Tags[$tag][0]
 
 # Removing Host from App Group
+$AppGroupName = "$HostPoolName-AppGroup"
 Write-Output "Removing host $AzureVMNameFQDN from the app group $AppGroupName"
 
-#Remove-AzRoleAssignment -SignInName $DesktopUser -RoleDefinitionName 'Desktop Virtualization User' -ResourceName "$AppGroupName" -ResourceGroupName $HostPoolResourceGroupName -ResourceType 'Microsoft.DesktopVirtualization/applicationGroups' 
+Remove-AzRoleAssignment -SignInName $DesktopUser -RoleDefinitionName 'Desktop Virtualization User' -ResourceName "$AppGroupName" -ResourceGroupName $HostPoolResourceGroupName -ResourceType 'Microsoft.DesktopVirtualization/applicationGroups' 
 
 # Removing Host from the HostPool"
 write-output "Removing Host $AzureVMNameFQDN from the HostPool $HostPoolName"
