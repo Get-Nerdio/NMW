@@ -30,6 +30,12 @@ else {
    exit
 }
 
+if ($AzureResourceGroupName -eq '')
+{
+  Write-Error "Unable to resolve ResourceGroupName. Host Pool may not be ARM (Spring 2020) release."
+  exit
+}
+
 
 $VMResourceGroupName = $AzureResourceGroupName
 $HostPoolResourceGroupName = $HostPoolId.Split('/', [System.StringSplitOptions]::RemoveEmptyEntries)[3]
@@ -60,6 +66,11 @@ $AppGroupName = ($hp.ApplicationGroupReference -split '/')[-1]
 
 $SessionHost = Get-AzWvdSessionHost -HostPoolName $HostPoolName -Name $AzureVMNameFQDN -ResourceGroupName $HostPoolResourceGroupName
 $DesktopUser = $SessionHost.AssignedUser
+
+if ($DesktopUser -eq $null) {
+    Write-Error "No user is assigned to session host"
+    exit
+}
 
 Write-Output "Removing user $desktopUser from the app group $AppGroupName"
 
