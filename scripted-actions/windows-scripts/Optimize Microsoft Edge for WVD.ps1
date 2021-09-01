@@ -1,4 +1,4 @@
-#description: (PREVIEW) Configures policy settings for Microsoft Edge meant to optimize performance in WVD
+#description: (PREVIEW) Configures policy settings for Microsoft Edge meant to optimize performance in AVD
 #tags: Nerdio, Preview
 <#
 Notes:
