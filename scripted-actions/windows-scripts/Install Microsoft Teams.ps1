@@ -1,10 +1,10 @@
-#description: Installs/Updates MS Teams and WebRTC Service with newest versions. Enables Teams WVD Optimization mode. Recommend to run regularly on Desktop Images.
+#description: Installs/Updates MS Teams and WebRTC Service with newest versions. Enables Teams AVD Optimization mode. Recommend to run regularly on Desktop Images.
 #execution mode: IndividualWithRestart
 #tags: Nerdio, Apps install
 <# 
 Notes:
 This script performs the following:
-1. Sets registry value for MS Teams to WVD Mode
+1. Sets registry value for MS Teams to AVD Mode
 2. Uninstall MSTeams and WebRTC program
 3. Downloads and Installs latest version of MS Teams machine-wide (Not per-user)
 4. Downloads and Installs latest version of WebRTC component
@@ -22,7 +22,7 @@ Write-Host "################# New Script Run #################"
 Write-host "Current time (UTC-0): $LogTime"
 
 # set registry values for Teams to use VDI optimization 
-Write-Host "INFO: Adjusting registry to set Teams to WVD Environment mode" -ForegroundColor Gray
+Write-Host "INFO: Adjusting registry to set Teams to AVD Environment mode" -ForegroundColor Gray
 reg add HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Teams /v "IsWVDEnvironment" /t REG_DWORD /d 1 /f
 
 # uninstall any previous versions of MS Teams or Web RTC
