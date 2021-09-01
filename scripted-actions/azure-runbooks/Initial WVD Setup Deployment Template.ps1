@@ -1,10 +1,10 @@
-#description: (PREVIEW) Create a working WVD environment with desktop image and autoscale host pool
+#description: (PREVIEW) Create a working AVD environment with desktop image and autoscale host pool
 #tags: Nerdio, Preview
 
 <#
 
-This script creates a working WVD environment, including:
- - WVD Workspace
+This script creates a working AVD environment, including:
+ - AVD Workspace
  - Desktop Image
  - Dynamic Host Pool with Autoscale enabled
  - Assigns users to host pool
@@ -34,7 +34,7 @@ $SubscriptionId = 'XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX'
 $ResourceGroupName = "YourResourceGroup"
 
 $VnetName = 'YourVNet'
-$SubnetName = 'YourSubnet' # subnet where wvd hosts will be provisioned
+$SubnetName = 'YourSubnet' # subnet where AVD hosts will be provisioned
 $RegionName = "YourRegion" # e.g. "northcentralus"
 
 
