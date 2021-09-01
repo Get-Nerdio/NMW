@@ -1,12 +1,12 @@
-#description: (PREVIEW) Scans file handles (R/W locks) on a storage account, and reports ones which do not have an associated WVD user session.
+#description: (PREVIEW) Scans file handles (R/W locks) on a storage account, and reports ones which do not have an associated AVD user session.
 #tags: Nerdio, Preview
 <#
 Notes:
 This script can be used to generate reports of "zombie" FSLoigx file handles. Useful to detect issues with FSLogix 
 profiles being locked due to sessions which are either:
 - Direct RDP Sessions (which can still use FSLogix and cause locks)
-- WVD Sessions on hosts which have stopped sending updates to the WVD Management service
-- Rogue programs reading and writing to FSLogix outside of WVD sessions
+- AVD Sessions on hosts which have stopped sending updates to the AVD Management service
+- Rogue programs reading and writing to FSLogix outside of AVD sessions
 
 After running this script, positive results will be output to the task details log. They will appear
 in this format: "WARN: File Handle..."
