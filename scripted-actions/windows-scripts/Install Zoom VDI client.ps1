@@ -1,9 +1,9 @@
-#description: Downloads and installs Zoom VDI client for WVD. Reference https://support.zoom.us/hc/en-us/articles/360052984292 (under "Windows Virtual Desktop") for more information
+#description: Downloads and installs Zoom VDI client for AVD. Reference https://support.zoom.us/hc/en-us/articles/360052984292 (under "Windows Virtual Desktop") for more information
 #execution mode: IndividualWithRestart
 #tags: Nerdio, Apps install
 <# 
 Notes:
-This script installs the Zoom VDI client for use on WVD Session hosts. 
+This script installs the Zoom VDI client for use on AVD Session hosts. 
 
 IMPORTANT: In order to use Zoom's redirection, you must install the 
 plugin for the Zoom client which used on the remote desktop client's machine.
