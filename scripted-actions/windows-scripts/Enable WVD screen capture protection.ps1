@@ -1,4 +1,4 @@
-#description: Enables screen capture protection on WVD session host VMs
+#description: Enables screen capture protection on AVD session host VMs
 #execution mode: IndividualWithRestart
 #tags: Nerdio
 <#
