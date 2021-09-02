@@ -62,8 +62,6 @@ $AzureVMNameFQDN = $vm.Tags[$tag][0]
 $hp = Get-AzWvdHostPool -Name $HostPoolName -ResourceGroupName $HostPoolResourceGroupName
 $AppGroupName = ($hp.ApplicationGroupReference -split '/')[-1]
 
-# Removing user from App Group
-
 $SessionHost = Get-AzWvdSessionHost -HostPoolName $HostPoolName -Name $AzureVMNameFQDN -ResourceGroupName $HostPoolResourceGroupName
 $DesktopUser = $SessionHost.AssignedUser
 
@@ -71,10 +69,6 @@ if ($DesktopUser -eq $null) {
     Write-Error "No user is assigned to session host"
     exit
 }
-
-Write-Output "Removing user $desktopUser from the app group $AppGroupName"
-
-Remove-AzRoleAssignment -SignInName $DesktopUser -RoleDefinitionName 'Desktop Virtualization User' -ResourceName "$AppGroupName" -ResourceGroupName $HostPoolResourceGroupName -ResourceType 'Microsoft.DesktopVirtualization/applicationGroups' 
 
 # Removing Host from the HostPool"
 write-output "Removing Host $AzureVMNameFQDN from the HostPool $HostPoolName"
