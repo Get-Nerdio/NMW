@@ -66,6 +66,7 @@ try {
     $DesktopUser = $SessionHost.AssignedUser
 
     if ([string]::IsNullOrEmpty($DesktopUser)) {
+        Write-Error "No user is assigned to this session host"
         Throw "No user is assigned to session host"
     }
 
