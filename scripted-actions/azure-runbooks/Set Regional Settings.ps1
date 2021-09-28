@@ -43,14 +43,19 @@ $JsonParams = '{
 $errorActionPreference = "Stop"
 
 # Get region settings from script or Nerdio Secure Variable
-if (!$JsonParams -and !$SecureVars.RegionSettings){
-    Write-Error "RegionSettings secure variable is not define, and parameters are not defined in script. Define regional settings to proceed."
-    Exit
+
+
+
+if (!$JsonParams){
+    if (!$SecureVars.RegionSettings) {
+        Write-Error 'Parameters not set. Either define a RegionSettings secure variable or specify the region settings in the $JsonParams variable in this script'
+        Throw 'Parameters not set. Either define a RegionSettings secure variable or specify the region settings in the $JsonParams variable in this script'
+    } 
+    else {
+        $JsonParams = $SecureVars.RegionSettings
+    }
 }
 
-elseif (!$JsonParams){
-    $JsonParams = $SecureVars.RegionSettings 
-}
 
 
 # Ensure context is using correct subscription
