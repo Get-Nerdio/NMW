@@ -3,9 +3,11 @@
 <#
 Notes:
 This script is used to configure the Regional Settings on a VM. Keyboard layouts, Geo Id, MUI and User Locale are configured.
-If the tag should not be called RegionalSettings, then you must change this in the variable.
+
 The parameters to be defined are stored within a JSON string, which can be specified in this script or in a 
 Nerdio Secure Variable called RegionSettings.
+
+New region settings will be applied for all users who log in after running this script.
 
 Requires:
 - Install the needed language packs first
