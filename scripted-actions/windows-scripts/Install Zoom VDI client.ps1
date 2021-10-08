@@ -1,15 +1,16 @@
-#description: Downloads and installs Zoom VDI client for AVD. Reference https://support.zoom.us/hc/en-us/articles/360052984292 (under "Windows Virtual Desktop") for more information
+#description: Downloads and installs Zoom VDI client for WVD. Reference https://support.zoom.us/hc/en-us/articles/360052984292 (under "Windows Virtual Desktop") for more information
 #execution mode: IndividualWithRestart
 #tags: Nerdio, Apps install
 <# 
 Notes:
-This script installs the Zoom VDI client for use on AVD Session hosts. 
+This script installs the Zoom VDI client for use on WVD Session hosts, as well as the 
+Zoom AVD/WVD Media Plugin. 
 
-IMPORTANT: In order to use Zoom's redirection, you must install the 
-plugin for the Zoom client which used on the remote desktop client's machine.
-The plugin can be found here: https://support.zoom.us/hc/en-us/articles/360052984292
-under "Windows Virtual Desktop"
+To install specific versions, update the URL variables below with links to the .msi installers.
 #>
+
+$ZoomClientUrl= "https://zoom.us/download/vdi/5.8.0/ZoomInstallerVDI.msi"
+$ZoomAvdPluginUrl = "https://zoom.us/download/vdi/5.8.0/ZoomWVDMediaPlugin.msi"
 
 # Start powershell logging
 $SaveVerbosePreference = $VerbosePreference
@@ -24,23 +25,19 @@ Write-host "Current time (UTC-0): $LogTime"
 # Make directory to hold install files
 mkdir "C:\Windows\Temp\zoom_sa\install" -Force
 
-# Parse through the Zoom VDI Help page to get the most up-to-date download link, then download installer files
-Write-Host "INFO: Retrieving Zoom installer files. . ."
-$ZoomDlSite = Invoke-WebRequest "https://support.zoom.us/hc/en-us/articles/360052984292" -UseBasicParsing
-ForEach ($Href in $ZoomDLSite.Links.Href)
-{
-    if ($Href -match "ZoomInstallerVDI" ){
-        $DLink = $href
-        break
-    }
-}
-Invoke-WebRequest -Uri $DLink -OutFile "C:\Windows\Temp\zoom_sa\install\ZoomInstallerVDI.msi" -UseBasicParsing
+Invoke-WebRequest -Uri $ZoomClientUrl -OutFile "C:\Windows\Temp\zoom_sa\install\ZoomInstallerVDI.msi" -UseBasicParsing
+Invoke-WebRequest -Uri $ZoomAvdPluginUrl -OutFile "C:\Windows\Temp\zoom_sa\install\ZoomAvdPluginVDI.msi" -UseBasicParsing
 
 # Install Zoom. Edit the argument list as desired for customized installs: https://support.zoom.us/hc/en-us/articles/201362163
-Write-Host "INFO: Installing Zoom. . ."
+Write-Host "INFO: Installing Zoom client. . ."
 Start-Process C:\Windows\System32\msiexec.exe `
 -ArgumentList "/i C:\Windows\Temp\zoom_sa\install\ZoomInstallerVDI.msi /l*v C:\Windows\Temp\NMWLogs\ScriptedActions\zoom_sa\zoom_install_log.txt /qn /norestart" -Wait
-Write-Host "INFO: Zoom install finished."
+Write-Host "INFO: Zoom client install finished."
+
+Write-Host "INFO: Installing Zoom AVD Plugin. . ."
+Start-Process C:\Windows\System32\msiexec.exe `
+-ArgumentList "/i C:\Windows\Temp\zoom_sa\install\ZoomAvdPluginVDI.msi /l*v C:\Windows\Temp\NMWLogs\ScriptedActions\zoom_sa\zoom_install_log.txt /qn /norestart" -Wait
+Write-Host "INFO: Zoom plugin install finished."
 
 # End Logging
 Stop-Transcript
