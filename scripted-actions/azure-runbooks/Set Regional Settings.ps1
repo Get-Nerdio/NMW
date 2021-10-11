@@ -12,6 +12,7 @@ New region settings will be applied for all users who log in after running this 
 Requires:
 - Install the needed language packs first
 - The $JsonParams variable must be defined in this script, or a SecureVariable called RegionSettings must be defined in Nerdio
+- If a user has an existing profile, they will need to change their default region settings manually, or their profile will need to be recreated
 
 To define the settings as a secure variable, in Nerdio manager, select Settings->Nerdio Environment, and create a 
 new secure variable called RegionSettings. The value for this variable should be in the following format:
