@@ -41,6 +41,11 @@ $GetVMinfo = Get-AzVM -ResourceGroupName $rgname -Name $vmName
 if ($GetVMinfo.zones -eq $Zone) {
     throw "VM is already in zone $zone"
 }
+$SkuInfo = Get-AzComputeResourceSku -Location $GetVMinfo.location | ? name -eq $GetVMinfo.HardwareProfile.vmsize
+if ($SkuInfo.locationinfo.zones -notcontains $Zone) {
+    Throw "VM size $($GetVMinfo.hardwareprofile.VmSize) is not available in zone $zone."
+}
+
 Write-Output -Message "Exporting VM configuration to the follwoing location $env:temp \$vmname.json" 
 
 #import from json
