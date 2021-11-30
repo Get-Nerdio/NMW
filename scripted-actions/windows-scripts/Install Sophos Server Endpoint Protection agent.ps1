@@ -19,17 +19,34 @@ Start-Transcript -Path "C:\windows\temp\NMWLogs\ScriptedActions\sophosinstall\ps
 Write-Host "################# New Script Run #################"
 Write-host "Current time (UTC-0): $LogTime"
   
-# Pass in secure variables from NMW
-$auth = $SecureVars.sophosauth
-$apikey = $SecureVars.sophosapikey
-$locationsApi = $SecureVars.sophoslocationsapi
+try {
+    # Pass in secure variables from NMW
+    Write-host "Setting variables"
+    $auth = $SecureVars.sophosauth
+    $apikey = $SecureVars.sophosapikey
+    $locationsApi = $SecureVars.sophoslocationsapi
+
+    $sophosClientId = $SecureVars.sophosClientId
+    $sophosClientSecret = $SecureVars.sophosClientSecret
+
+}
+catch {
+    Write-host "Unable to set variables from Nerdio"
+}
+
 
 # Error out if required secure variables are not passed
-if(!$auth){
-    Write-Error "ERROR: Required variable sophosauth is not being passed from NMW. Please add it to secure variables" -ErrorAction Stop
+if ($sophosClientId -and $sophosClientSecret){
+    $ApiVersion = 2021
+    Write-Host "Using 2021 Sophos API with client and secret"
 }
-elseif(!$apikey){
-    Write-Error "ERROR: Required variable sophosapikey is not being passed from NMW. Please add it to secure variables" -ErrorAction Stop
+elseif(!$auth){
+    Write-Host "ERROR: Required variables for authentication to Sophos not available. Please see documentation for this scripted action"
+    Write-Error "ERROR: Required variables for authentication to Sophos not available. Please see documentation for this scripted action" -ErrorAction Stop
+}
+elseif(!$sophosClientSecret){
+    Write-host "ERROR: Required variables for authentication to Sophos not available. Please see documentation for this scripted action"
+    Write-Error "ERROR: Required variables for authentication to Sophos not available. Please see documentation for this scripted action" -ErrorAction Stop
 }
 elseif(!$locationsApi){
     Write-Output "WARN: Required variable sophoslocationsapi is not being passed from NMW. Please add it to secure variable. Attempting with api1.central.sophos. . ." -ErrorAction Continue
@@ -105,23 +122,39 @@ function Get-InstallerLink {
     [CmdletBinding()]
     Param([Parameter(Position=0, Mandatory=$true)] [string]$installerType)
 
-    Log "Getting location of the $installerType from $locationsApi"
-    $hdrs = @{}
-    $hdrs.Add("x-api-key", $apikey)
-    $hdrs.Add("Authorization", "Basic $auth")
-    $response = Invoke-RestMethod -Method 'Get' -Uri $locationsApi -Headers $hdrs
-    # convert the response object (json) to the PowerShell's friendly json
-    $json = $response | ConvertTo-Json
-    # convert the PowerShell json into an object so we can access its properties directly for searching/filtering purposes
-    $x = $json | ConvertFrom-Json
-    # filter by given installer type
-    $installer = $x.installerInfo | where { $_.platform -eq $installerType }
-    $installerUrl = $installer.url
-    [regex]$linkRegex = '^https:\/\/.+\.sophos.com\/api\/download\/.*\.exe$'
-    if (!($linkRegex.Matches($installerUrl).Success)) {
-        throw "Invalid format of the installer location: $installerUrl"
+    if ($ApiVersion -eq 2021) {
+        $AuthUrl = 'https://id.sophos.com/api/v2/oauth2/token'
+        $body = "grant_type=client_credentials&client_id=$sophosClientId&client_secret=$sophosClientSecret&scope=token"
+        $response = Invoke-RestMethod -Body $body -Uri $AuthUrl -ContentType 'application/x-www-form-urlencoded' -Method Post
+        $token = $response.access_token
+        $Headers = @{Authorization = "Bearer $token"}
+        $whoAmI = Invoke-RestMethod -Method Get -Uri 'https://api.central.sophos.com/whoami/v1' -Headers $Headers
+        $DataRegion = $whoAmI.apiHosts.dataRegion 
+        $Headers += @{'X-Tenant-ID' = $whoAmI.id
+                    Accept = 'application/json'}
+        $DownloadApi = "$DataRegion/endpoint/v1/downloads?requestedProducts=coreAgent&requestedProducts=interceptX&requestedProducts=endpointProtection&platforms=windows"
+        $DownloadInfo = Invoke-RestMethod -Uri $DownloadApi -Method Get -Headers $Headers
+        $DownloadInfo.installers | Where-Object type -eq server | Select-Object downloadurl -ExpandProperty downloadurl    
     }
-    return $installerUrl
+    else{
+        Log "Getting location of the $installerType from $locationsApi"
+        $hdrs = @{}
+        $hdrs.Add("x-api-key", $apikey)
+        $hdrs.Add("Authorization", "Basic $auth")
+        $response = Invoke-RestMethod -Method 'Get' -Uri $locationsApi -Headers $hdrs
+        # convert the response object (json) to the PowerShell's friendly json
+        $json = $response | ConvertTo-Json
+        # convert the PowerShell json into an object so we can access its properties directly for searching/filtering purposes
+        $x = $json | ConvertFrom-Json
+        # filter by given installer type
+        $installer = $x.installerInfo | where { $_.platform -eq $installerType }
+        $installerUrl = $installer.url
+        [regex]$linkRegex = '^https:\/\/.+\.sophos.com\/api\/download\/.*\.exe$'
+        if (!($linkRegex.Matches($installerUrl).Success)) {
+            throw "Invalid format of the installer location: $installerUrl"
+        }
+        return $installerUrl
+    }
 }
 
 function Download-Installer {
@@ -160,10 +193,6 @@ try {
     return
 }
 
-if (!($SecureVars.sophosapikey) -or !($auth)) {
-    Log "Invalid values for one or more script arguments: 'apiKey', 'auth'" -error 1
-    return
-}
 
 if (!(Is-OSVersionSupported)) {
     Log "OS version is not supported." -error 1
