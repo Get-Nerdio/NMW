@@ -65,7 +65,7 @@ $NMWAppPlan = Get-AzAppServicePlan -ResourceGroupName $NMWAppPlanResource.Resour
 
 
 # check app service plan tier
-if ($NMWAppPlan.Sku.Family -ne "S" -and $NMWAppPlan.Sku.Family -ne "P") {
+if ($NMWAppPlan.Sku.Tier -notmatch 'Standard|Premium') {
     Write-Output "ERROR: Please upgrade app service plan to Standard or Premium tier to enable backups"
     Write-Error "ERROR: Please upgrade app service plan to Standard or Premium tier to enable backups" -ErrorAction Stop
 }
