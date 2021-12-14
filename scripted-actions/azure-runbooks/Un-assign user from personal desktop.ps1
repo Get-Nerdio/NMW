@@ -50,17 +50,17 @@ if (!($VMStatus.Statuses.code -match 'running')) {
 }
 
 try {
-    # Generate New Registration Token
-    Write-Output "Generate New Registration Token"
-    $RegistrationKey = New-AzWvdRegistrationInfo -ResourceGroupName $HostPoolResourceGroupName -HostPoolName $HostPoolName -ExpirationTime $((get-date).ToUniversalTime().AddDays(1).ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ'))
-    
+    # Get registration token
+    $RegistrationKey = Get-AzWvdRegistrationInfo -ResourceGroupName $HostPoolResourceGroupName -HostPoolName $HostPoolName
+    if (-not $RegistrationKey.Token) {
+        # Generate New Registration Token
+        Write-Output "Generate New Registration Token"
+        $RegistrationKey = New-AzWvdRegistrationInfo -ResourceGroupName $HostPoolResourceGroupName -HostPoolName $HostPoolName -ExpirationTime $((get-date).ToUniversalTime().AddDays(1).ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ'))
+    }
+
     # Making AzureVMName Fully Qualified
     $tag = $vm.tags.Keys -match 'VM_FQDN'
     $AzureVMNameFQDN = $vm.Tags[$tag][0]
-
-    # Get host pool and app group
-    $hp = Get-AzWvdHostPool -Name $HostPoolName -ResourceGroupName $HostPoolResourceGroupName
-    $AppGroupName = ($hp.ApplicationGroupReference -split '/')[-1]
 
     $SessionHost = Get-AzWvdSessionHost -HostPoolName $HostPoolName -Name $AzureVMNameFQDN -ResourceGroupName $HostPoolResourceGroupName
     $DesktopUser = $SessionHost.AssignedUser
@@ -82,11 +82,11 @@ Set-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\RDInfraAgent\ -Name Registration
 Restart-Service RDAgent
 Start-service RDAgentBootLoader
 "@
-$Script | Out-File ".\RemoveAssignment.ps1"
+$Script | Out-File ".\RemoveAssignment-$($vm.Name).ps1"
 
     # Execute local script on remote VM
     write-output "Execute local script on remote VM"
-    Invoke-AzVMRunCommand -ResourceGroupName $VMResourceGroupName -VMName "$AzureVMName" -CommandId 'RunPowerShellScript' -ScriptPath '.\RemoveAssignment.ps1' 
+    Invoke-AzVMRunCommand -ResourceGroupName $VMResourceGroupName -VMName "$AzureVMName" -CommandId 'RunPowerShellScript' -ScriptPath ".\RemoveAssignment-$($vm.Name).ps1"
 }
 
 Catch {
