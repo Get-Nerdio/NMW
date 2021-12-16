@@ -28,6 +28,8 @@ To adjust the parameters passed to FSLogix-ShrinkDisk.ps1 modify the $InvokeFslS
 
 # Adjust Variables below to alter to your preference:
 
+$ErrorActionPreference = 'Stop'
+
 ##### Required Variables #####
 
 $AzureResourceGroupName = $SecureVars.FslResourceGroup
@@ -72,18 +74,23 @@ $azureVmSkus = "2019-datacenter-core-g2"
 
 
 #Get the subnet details for the specified virtual network + subnet combination.
+Write-Output "Getting subnet details"
 $azureVnetSubnet = (Get-AzVirtualNetwork -Name $azureVnetName -ResourceGroupName $azureResourceGroup).Subnets | Where-Object {$_.Name -eq $azureVnetSubnetName}
  
 #Create the public IP address.
+Write-Output "Creating public ip"
 $azurePublicIp = New-AzPublicIpAddress -Name $azurePublicIpName -ResourceGroupName $azureResourceGroup -Location $azureLocation -AllocationMethod Dynamic
  
 #Create the NIC and associate the public IpAddress.
+Write-Output "Creating NIC"
 $azureNIC = New-AzNetworkInterface -Name $azureNicName -ResourceGroupName $azureResourceGroup -Location $azureLocation -SubnetId $azureVnetSubnet.Id -PublicIpAddressId $azurePublicIp.Id
  
 #Store the credentials for the local admin account.
+Write-Output "Creating VM credentials"
 $vmCredential = New-Object System.Management.Automation.PSCredential ($vmAdminUsername, $vmAdminPassword)
  
 #Define the parameters for the new virtual machine.
+Write-Output "Creating VM config"
 $VirtualMachine = New-AzVMConfig -VMName $azureVmName -VMSize $azureVmSize
 $VirtualMachine = Set-AzVMOperatingSystem -VM $VirtualMachine -Windows -ComputerName $vmComputerName -Credential $vmCredential -ProvisionVMAgent -EnableAutoUpdate
 $VirtualMachine = Add-AzVMNetworkInterface -VM $VirtualMachine -Id $azureNIC.Id
@@ -92,6 +99,7 @@ $VirtualMachine = Set-AzVMBootDiagnostic -VM $VirtualMachine -Disable
 $VirtualMachine = Set-AzVMOSDisk -VM $VirtualMachine -StorageAccountType "Premium_LRS" -Caching ReadWrite -Name $azureVmOsDiskName -CreateOption FromImage
  
 #Create the virtual machine.
+Write-Output "Creating new VM"
 $VM = New-AzVM -ResourceGroupName $azureResourceGroup -Location $azureLocation -VM $VirtualMachine -Verbose -ErrorAction stop
 $azurePublicIp = Get-AzPublicIpAddress -Name $azurePublicIpName -ResourceGroupName $AzureResourceGroupName
 
@@ -113,6 +121,8 @@ catch {
 
 
 $scriptblock > .\scriptblock.ps1
+
+Write-Output "Running shrink script on temp vm"
 
 $results = Invoke-AzVmRunCommand -ResourceGroupName $AzureResourceGroupName -VMName $azureVmName -ScriptPath .\scriptblock.ps1 -CommandId 'RunPowershellScript'
 
