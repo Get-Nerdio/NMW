@@ -75,7 +75,7 @@ $azureVmSkus = "2019-datacenter-core-g2"
 
 #Get the subnet details for the specified virtual network + subnet combination.
 Write-Output "Getting subnet details"
-$azureVnetSubnet = (Get-AzVirtualNetwork -Name $azureVnetName -ResourceGroupName $azureResourceGroup).Subnets | Where-Object {$_.Name -eq $azureVnetSubnetName}
+$azureVnetSubnet = (Get-AzVirtualNetwork -Name $azureVnetName).Subnets | Where-Object {$_.Name -eq $azureVnetSubnetName}
  
 #Create the public IP address.
 Write-Output "Creating public ip"
