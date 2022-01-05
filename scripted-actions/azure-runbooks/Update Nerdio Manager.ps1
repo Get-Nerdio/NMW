@@ -44,6 +44,38 @@ $Headers = @{'Install-Id' = $InstallId}
 
 $PublishedVersions = Invoke-RestMethod $ApiUri/api/package -Method Get -Headers $Headers
 
+#Check for a previous run of this script. If one exists, it means this script was re-started after the last run and we should exit
+
+Function Check-LastRunResults {
+Param()
+    $KeyVault = get-azkeyvault -vaultname $KeyVaultName
+    $MinutesAgo = 10
+    $NmeString = ($keyvaultname -split '-')[3]
+    $app = Get-AzWebApp -ResourceGroupName nme-qa-manual-app -Name nmw-app-$NmeString
+    if ($app.LastModifiedTimeUtc -gt (get-date).AddMinutes(-$MinutesAgo)) {
+        Write-Output "Web job has been restarted recently. Checking for previous script run"
+        $AutomationAccount = Get-AzAutomationAccount -ResourceGroupName $keyvault.ResourceGroupName | where-object automationaccountname -Match 'runbooks'
+        $ThisJob = Get-AzAutomationJob -id $PSPrivateMetadata['JobId'].Guid -resourcegroupname $keyvault.resourcegroupname -AutomationAccountName $automationAccount.automationAccountname 
+        Invoke-WebRequest -UseBasicParsing -Uri $ThisJob.JobParameters.scriptUri -OutFile .\ThisScript.ps1
+        $ThisScriptHash = Get-FileHash .\ThisScript.ps1
+
+        $jobs = Get-AzAutomationJob -resourcegroupname $keyvault.resourcegroupname -AutomationAccountName $automationAccount.automationAccountname | ? status -eq completed | ? {$_.EndTime.datetime -gt (get-date).AddMinutes(-$MinutesAgo)}
+        foreach ($job in $jobs){
+            $details = Get-AzAutomationJob -id $job.JobId -resourcegroupname $keyvault.resourcegroupname -AutomationAccountName $automationAccount.automationAccountname 
+            Invoke-WebRequest -UseBasicParsing -Uri $details.JobParameters.scriptUri -OutFile .\JobScript.ps1 
+            $JobHash = Get-FileHash .\JobScript.ps1 
+            if ($JobHash.hash -eq $ThisScriptHash.hash){
+                Write-Output "Output of previous script run:"
+                Get-AzAutomationJobOutput -Id $details.JobId -resourcegroupname $keyvault.resourcegroupname -AutomationAccountName $automationAccount.automationAccountname | select summary -ExpandProperty summary
+                Write-Output "App Service restarted after successfully running this script."
+                Exit
+            }
+        }
+    }
+}
+
+Check-LastRunResults
+
 function Get-CurrentAppVersion {
 param(
     $SubscriptionId,
@@ -456,34 +488,5 @@ function Update-NME {
 
     NWM-After-Publish -rg $resourceGroupName -appName $webAppName
 }
-Function Check-LastRunResults {
-Param()
-    $KeyVault = get-azkeyvault -vaultname $KeyVaultName
-    $MinutesAgo = 10
-    $NmeString = ($keyvaultname -split '-')[3]
-    $app = Get-AzWebApp -ResourceGroupName nme-qa-manual-app -Name nmw-app-$NmeString
-    if ($app.LastModifiedTimeUtc -gt (get-date).AddMinutes(-$MinutesAgo)) {
-        Write-Output "Web job has been restarted recently. Checking for previous script run"
-        $AutomationAccount = Get-AzAutomationAccount -ResourceGroupName $keyvault.ResourceGroupName | where-object automationaccountname -Match 'runbooks'
-        $ThisJob = Get-AzAutomationJob -id $PSPrivateMetadata['JobId'].Guid -resourcegroupname $keyvault.resourcegroupname -AutomationAccountName $automationAccount.automationAccountname 
-        Invoke-WebRequest -UseBasicParsing -Uri $ThisJob.JobParameters.scriptUri -OutFile .\ThisScript.ps1
-        $ThisScriptHash = Get-FileHash .\ThisScript.ps1
 
-        $jobs = Get-AzAutomationJob -resourcegroupname $keyvault.resourcegroupname -AutomationAccountName $automationAccount.automationAccountname | ? status -eq completed | ? {$_.EndTime.datetime -gt (get-date).AddMinutes(-$MinutesAgo)}
-        foreach ($job in $jobs){
-            $details = Get-AzAutomationJob -id $job.JobId -resourcegroupname $keyvault.resourcegroupname -AutomationAccountName $automationAccount.automationAccountname 
-            Invoke-WebRequest -UseBasicParsing -Uri $details.JobParameters.scriptUri -OutFile .\JobScript.ps1 
-            $JobHash = Get-FileHash .\JobScript.ps1 
-            if ($JobHash.hash -eq $ThisScriptHash.hash){
-                Write-Output "Output of previous script run:"
-                Get-AzAutomationJobOutput -Id $details.JobId -resourcegroupname $keyvault.resourcegroupname -AutomationAccountName $automationAccount.automationAccountname | select summary -ExpandProperty summary
-                Write-Output "App Service restarted after successfully running this script."
-                Exit
-            }
-        }
-    }
-}
-    
-
-Check-LastRunResults
 Update-NME -sourceUri $sourceUri -azureEnv $azureEnv -subscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -WebAppName $webAppName 
