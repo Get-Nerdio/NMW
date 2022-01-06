@@ -7,7 +7,7 @@ This Scripted Action will update the NME (Nerdio Manager) application to the lat
 You can schedule this SA to keep Nerdio up to date automatically. During the update process
 The NME interface may be momentarily unavailable, but AVD hosts will be unaffected.
 
-This SA requires the Az.Profile and Az.Websites modules to be installed in the Azure Automation
+This SA requires the Az.Accounts and Az.Websites modules to be installed in the Azure Automation
 Account that runs the Nerdio scripted actions
 
 #>
@@ -36,7 +36,7 @@ $subscriptionId = ($Context.Subscription).id
 
 
 Import-Module Az.Websites
-Import-Module Az.Profile
+Import-Module Az.Accounts
 
 $InstallId = Get-AzKeyVaultSecret -VaultName $keyVaultName -Name InstallParams--Id -AsPlainText
 
@@ -44,17 +44,18 @@ $Headers = @{'Install-Id' = $InstallId}
 
 $PublishedVersions = Invoke-RestMethod $ApiUri/api/package -Method Get -Headers $Headers
 
-#Check for a previous run of this script. If one exists, it means this script was re-started after the last run and we should exit
+# Check for a previous run of this script. If one exists, it means this script was re-started after the last run  
+# we show the previous output and exit
 
 Function Check-LastRunResults {
 Param()
     $KeyVault = get-azkeyvault -vaultname $KeyVaultName
     $MinutesAgo = 10
     $NmeString = ($keyvaultname -split '-')[3]
-    $app = Get-AzWebApp -ResourceGroupName nme-qa-manual-app -Name nmw-app-$NmeString
+    $app = Get-AzWebApp -ResourceGroupName $keyvault.ResourceGroupName -Name nmw-app-$NmeString
     if ($app.LastModifiedTimeUtc -gt (get-date).AddMinutes(-$MinutesAgo)) {
         Write-Output "Web job has been restarted recently. Checking for previous script run"
-        $AutomationAccount = Get-AzAutomationAccount -ResourceGroupName $keyvault.ResourceGroupName | where-object automationaccountname -Match 'runbooks'
+        $AutomationAccount = Get-AzAutomationAccount -ResourceGroupName $keyvault.ResourceGroupName | where-object automationaccountname -Match 'runbooks|scripted\-actions'
         $ThisJob = Get-AzAutomationJob -id $PSPrivateMetadata['JobId'].Guid -resourcegroupname $keyvault.resourcegroupname -AutomationAccountName $automationAccount.automationAccountname 
         Invoke-WebRequest -UseBasicParsing -Uri $ThisJob.JobParameters.scriptUri -OutFile .\ThisScript.ps1
         $ThisScriptHash = Get-FileHash .\ThisScript.ps1
@@ -201,8 +202,6 @@ function Update-NME {
         $mgmtUri = "https://management.usgovcloudapi.net"
         $scmUriSiffix = ".scm.azurewebsites.us"
     }
-
-    Import-Module Az.Profile
 
     function Get-AzCachedAccessToken()
     {
