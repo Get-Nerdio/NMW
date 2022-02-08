@@ -75,6 +75,12 @@ try {
 
     Remove-AzWvdSessionHost -ResourceGroupName $HostPoolResourceGroupName -HostPoolName $HostPoolName -Name $AzureVMNameFQDN -Force 
     
+    # Remove the NMW_USERNAME tag
+    Write-Output "Removing the NMW_USERNAME tag"
+    $key = $vm.tags.keys | ? {$_ -match '^N\w\w_USERNAME'}
+    $Deletetag = @{$key= $vm.tags.$($key)}
+    Update-AzTag -ResourceID $vm.ID -tag $deletetag -Operation Delete 
+
     # Execute local script on remote VM
     $Script = @"
 Set-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\RDInfraAgent\ -Name IsRegistered -Value 0
