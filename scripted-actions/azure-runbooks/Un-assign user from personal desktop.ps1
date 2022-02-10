@@ -78,11 +78,11 @@ try {
     # Remove the NMW_USERNAME tag
     Write-Output "Removing the NMW_USERNAME tag"
     $key = $vm.tags.keys | ? {$_ -match '^N\w\w_USERNAME'}
-    try {
+    if ($key)  {
         $Deletetag = @{$key= $vm.tags.$($key)} 
-        Update-AzTag -ResourceID $vm.ID -tag $deletetag -Operation Delete 
+        Update-AzTag -ResourceID $vm.ID -tag $deletetag -Operation Delete
     }
-    Catch [System.ArgumentNullException]{
+    else {
         Write-Output "Username tag does not exist"
     }
     # Execute local script on remote VM
