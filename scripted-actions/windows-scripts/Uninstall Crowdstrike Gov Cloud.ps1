@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Uninstalls Crowdstrike with Uninstall Token
+    Uninstalls Crowdstrike with Uninstall Token & Unregisters from CrowdStrike portal.
 .DESCRIPTION
 	Pre Reqs:
 	- Crowdstrike API Key with the following permissions:
