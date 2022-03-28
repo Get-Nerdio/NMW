@@ -3,10 +3,10 @@
 
 <# Notes:
 
-When run against hosts in a host pool, this script will turn on all VMs and ensure that Nerdio does not turn the VMs 
-off again until X hours have passed. The number of hours is defined by the $RestrictScaleInForHours variable below, 
-which defaults to 24. To use a different duration for the scale in restriction, clone this script and modify the 
-variable below.
+When run against hosts in a host pool, this script will turn on all VMs and ensure that Nerdio does
+not turn the VMs off again until X hours have passed. The number of hours is defined by the 
+$RestrictScaleInForHours variable below, which defaults to 24. To use a different duration for the 
+scale in restriction, clone this script and modify the variable below.
 
 #>
 
