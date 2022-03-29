@@ -45,7 +45,10 @@ If ($TargetOSDiskType -notmatch 'Standard_SSD|Premium_SSD|Standard_HDD') {
 
 $DiskDict = @{Standard_HDD = 'Standard_LRS'; Standard_SSD = 'StandardSSD_LRS'; Premium_SSD = 'Premium_LRS' }
 
-$HostPoolRG = (Get-AzResource -ResourceId $HostpoolID).ResourceGroupName
+# Get Host Pool RG and Name
+$HostPool = Get-AzResource -ResourceId $HostpoolID
+$HostPoolRG = $HostPool.ResourceGroupName
+$HostPoolName = $Hostpool.Name
 
 # Parse the VM names from the host names
 $VmNames = (Get-AzWvdSessionHost -HostPoolName $HostPoolName -ResourceGroupName $HostPoolRG).name | ForEach-Object {($_ -replace "$HostPoolName/",'' -split '\.')[0]}
