@@ -34,6 +34,7 @@ Standard_HDD
 }
 #>
 
+$ErrorActionPreference = 'Stop'
 
 # Ensure correct subscription context is selected
 Set-AzContext -SubscriptionId $AzureSubscriptionID
@@ -42,8 +43,30 @@ If ($TargetOSDiskType -notmatch 'Standard_SSD|Premium_SSD|Standard_HDD') {
     Throw "Provided TargetOSDiskType is not Standard_SSD, Premium_SSD, or Standard_HDD"
 }
 
-$Prefix = ($KeyVaultName -split '-')[0].ToUpper()
+$DiskDict = @{Standard_HDD = 'Standard_LRS'; Standard_SSD = 'StandardSSD_LRS'; Premium_SSD = 'Premium_LRS' }
 
-$vm = Get-AzVM -Name $AzureVMName -ResourceGroupName $AzureResourceGroupName
+$HostPoolRG = (Get-AzResource -ResourceId $HostpoolID).ResourceGroupName
+
+# Parse the VM names from the host names
+$VmNames = (Get-AzWvdSessionHost -HostPoolName $HostPoolName -ResourceGroupName $HostPoolRG).name | ForEach-Object {($_ -replace "$HostPoolName/",'' -split '\.')[0]}
+
+$VMStatus = $VmNames | ForEach-Object {Get-AzVM -Name $_  -Status}
+
+$PoweredOffVms = $VMStatus | Where-Object PowerState -eq 'VM deallocated'
+
+Write-output "Retrieved powered off VMs"
+
+Foreach ($VM in $PoweredOffVms) {
+    $Disk = Get-AzResource -ResourceId $vm.StorageProfile.OsDisk.ManagedDisk.id
+    $Disk = get-azdisk -DiskName $disk.name -ResourceGroupName $Disk.ResourceGroupName
+    if ($disk.sku.name -ne $DiskDict[$targetosdisktype]){
+        Write-output "Changing disk type for $($disk.name)"
+        $disk.Sku = [Microsoft.Azure.Management.Compute.Models.DiskSku]::new($DiskDict[$targetosdisktype])
+        $disk | Update-AzDisk
+    }
+    else {
+        Write-output "Disk $($disk.name) is already target disk type"
+    }
+}
 
 
