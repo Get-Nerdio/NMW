@@ -26,7 +26,7 @@ to 24. To use a different duration for the scale in restriction, clone this scri
 # Ensure correct subscription context is selected
 Set-AzContext -SubscriptionId $AzureSubscriptionID
 
-$ErrorActionPreference = Stop
+$ErrorActionPreference = 'Stop'
 
 $Prefix = ($KeyVaultName -split '-')[0].ToUpper()
 
