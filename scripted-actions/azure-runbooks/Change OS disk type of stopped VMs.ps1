@@ -57,7 +57,12 @@ $VMStatus = $VmNames | ForEach-Object {Get-AzVM -Name $_  -Status}
 
 $PoweredOffVms = $VMStatus | Where-Object PowerState -eq 'VM deallocated'
 
-Write-output "Retrieved powered off VMs"
+if ($PoweredOffVms){
+    Write-output "Retrieved powered off VMs"
+}
+else {
+    Write-output "No powered off VMs"
+}
 
 Foreach ($VM in $PoweredOffVms) {
     $Disk = Get-AzResource -ResourceId $vm.StorageProfile.OsDisk.ManagedDisk.id
