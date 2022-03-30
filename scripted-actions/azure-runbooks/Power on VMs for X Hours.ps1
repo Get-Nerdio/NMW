@@ -53,14 +53,14 @@ foreach ($VM in $VMs) {
 }
 
 
-# Start VMs in parallel
+write-output "Starting VMs in parallel"
 $Jobs = @()
 
 foreach ($VM in $VMs) {
     $Job = Start-Azvm -Name $vm.name -ResourceGroupName $vm.ResourceGroupName -asjob
     $Jobs += $job
 }
-# Wait for it all to complete
+write-output "Waiting for Start-AzVM jobs to complete"
 Wait-Job -Job $Jobs
 
 $jobs | Receive-Job
