@@ -52,4 +52,15 @@ foreach ($VM in $VMs) {
     Set-AzResource -ResourceGroupName $vm.ResourceGroupName -Name $vm.name -ResourceType "Microsoft.Compute/VirtualMachines" -Tag $tags -Force 
 }
 
-$VMs | Start-AzVM 
+
+# Start VMs in parallel
+$Jobs = @()
+
+foreach ($VM in $VMs) {
+    $Job = Start-Job -ScriptBlock {
+        $VM | Start-Azvm 
+    }
+    $Jobs += $job
+}
+# Wait for it all to complete
+Wait-Job -Job $Jobs
