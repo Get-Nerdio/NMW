@@ -33,17 +33,20 @@ $ErrorActionPreference = 'Stop'
 $Prefix = ($KeyVaultName -split '-')[0].ToUpper()
 
 # Get hostpool resource group
+Write-output "Getting Host Pool Information"
 $HostPool = Get-AzResource -ResourceId $HostpoolID
 $HostPoolRG = $HostPool.ResourceGroupName
 $HostPoolName = $Hostpool.Name
 
 # Parse the VM names from the host names
+Write-output "Getting VMs from host pool"
 $VmNames = (Get-AzWvdSessionHost -HostPoolName $HostPoolName -ResourceGroupName $HostPoolRG).name | ForEach-Object {($_ -replace "$HostPoolName/",'' -split '\.')[0]}
 
-$VMs = $VmNames | ForEach-Object {Get-AzVM -Name $_ }
+$VMs = $VmNames | ForEach-Object {Get-AzVM -Name $_ -Status }
 $RestrictUntil = (Get-Date).AddHours([int]$RestrictScaleInForHours)
 $TimeZoneId = (Get-TimeZone).id
 
+Write-output "Setting VM Tags"
 foreach ($VM in $VMs) {
     $tags = $vm.tags
 
@@ -52,4 +55,15 @@ foreach ($VM in $VMs) {
     Set-AzResource -ResourceGroupName $vm.ResourceGroupName -Name $vm.name -ResourceType "Microsoft.Compute/VirtualMachines" -Tag $tags -Force 
 }
 
-$VMs | Start-AzVM 
+
+write-output "Starting VMs in parallel"
+$Jobs = @()
+
+foreach ($VM in $VMs) {
+    $Job = Start-Azvm -Name $vm.name -ResourceGroupName $vm.ResourceGroupName -asjob
+    $Jobs += $job
+}
+write-output "Waiting for Start-AzVM jobs to complete"
+Wait-Job -Job $Jobs
+
+$jobs | Receive-Job
