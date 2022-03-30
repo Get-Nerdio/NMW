@@ -40,7 +40,7 @@ $HostPoolName = $Hostpool.Name
 # Parse the VM names from the host names
 $VmNames = (Get-AzWvdSessionHost -HostPoolName $HostPoolName -ResourceGroupName $HostPoolRG).name | ForEach-Object {($_ -replace "$HostPoolName/",'' -split '\.')[0]}
 
-$VMs = $VmNames | ForEach-Object {Get-AzVM -Name $_ }
+$VMs = $VmNames | ForEach-Object {Get-AzVM -Name $_ -Status }
 $RestrictUntil = (Get-Date).AddHours([int]$RestrictScaleInForHours)
 $TimeZoneId = (Get-TimeZone).id
 
@@ -57,10 +57,10 @@ foreach ($VM in $VMs) {
 $Jobs = @()
 
 foreach ($VM in $VMs) {
-    $Job = Start-Job -ScriptBlock {
-        $VM | Start-Azvm 
-    }
+    $Job = Start-Azvm -Name $vm.name -ResourceGroupName $vm.ResourceGroupName -asjob
     $Jobs += $job
 }
 # Wait for it all to complete
 Wait-Job -Job $Jobs
+
+$jobs | Receive-Job
