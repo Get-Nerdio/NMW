@@ -33,17 +33,20 @@ $ErrorActionPreference = 'Stop'
 $Prefix = ($KeyVaultName -split '-')[0].ToUpper()
 
 # Get hostpool resource group
+Write-output "Getting Host Pool Information"
 $HostPool = Get-AzResource -ResourceId $HostpoolID
 $HostPoolRG = $HostPool.ResourceGroupName
 $HostPoolName = $Hostpool.Name
 
 # Parse the VM names from the host names
+Write-output "Getting VMs from host pool"
 $VmNames = (Get-AzWvdSessionHost -HostPoolName $HostPoolName -ResourceGroupName $HostPoolRG).name | ForEach-Object {($_ -replace "$HostPoolName/",'' -split '\.')[0]}
 
 $VMs = $VmNames | ForEach-Object {Get-AzVM -Name $_ -Status }
 $RestrictUntil = (Get-Date).AddHours([int]$RestrictScaleInForHours)
 $TimeZoneId = (Get-TimeZone).id
 
+Write-output "Setting VM Tags"
 foreach ($VM in $VMs) {
     $tags = $vm.tags
 
