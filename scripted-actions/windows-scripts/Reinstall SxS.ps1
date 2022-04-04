@@ -11,14 +11,19 @@ if (-not (Test-Path -Path $wvdAppsLogsPath)) {
     New-Item -Path $logsPath -Name $wvdAppsLogsFolderName -ItemType Directory -Force | Out-Null
 }
 
+$SxSGuids = get-wmiobject Win32_Product | where-Object Name -eq 'Remote Desktop Services SxS Network Stack' | select identifyingnumber -ExpandProperty identifyingnumber
+
 Write-Output "Uninstalling any previous versions of RD SxS Network Stack on VM"
-$sxs_uninstall_status = Start-Process -FilePath "msiexec.exe" -ArgumentList "/x {41B5388E-5594-498C-9864-7F5C1300250E}", "/quiet", "/qn", "/norestart", "/passive", "/l* $wvdAppsLogsPath\SxSNetworkStackUninstall.log" -Wait -Passthru
-$sts = $sxs_uninstall_status.ExitCode
-Write-Output "Uninstalling RD SxS Network Stack on VM Complete. Exit code=$sts`n"
+Foreach ($guid in $SxSGuids) {
+    $sxs_uninstall_status = Start-Process -FilePath "msiexec.exe" -ArgumentList "/x $guid", "/quiet", "/qn", "/norestart", "/passive", "/l* $wvdAppsLogsPath\SxSNetworkStackUninstall.log" -Wait -Passthru
+    $sts = $sxs_uninstall_status.ExitCode
+    Write-Output "Uninstalling RD SxS Network Stack on VM Complete. Exit code=$sts`n"
+    
+}
 
 
 $SxSInstaller = Get-ChildItem -path 'C:\Program Files\Microsoft RDInfra' | Where-Object Name -Match '^SxsStack-' | sort LastWriteTime -Descending | select -First 1
 Write-output "Got SxS installer file $($SxSInstaller.FullName)"
-$sxs_install_status = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i $($SxSInstaller.FullName)", "/quiet", "/qn", "/norestart", "/passive", "/l* $wvdAppsLogsPath\SxSNetworkStackUninstall.log" -Wait -Passthru
+$sxs_install_status = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i $($SxSInstaller.FullName)", "/quiet", "/qn", "/norestart", "/passive", "/l* $wvdAppsLogsPath\SxSNetworkStackInstall.log" -Wait -Passthru
 $sts = $sxs_install_status.ExitCode
 Write-Output "Installing RD SxS Network Stack on VM Complete. Exit code=$sts`n"
