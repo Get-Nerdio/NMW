@@ -18,7 +18,7 @@ Write-Output "Uninstalling RD SxS Network Stack on VM Complete. Exit code=$sts`n
 
 
 $SxSInstaller = Get-ChildItem -path 'C:\Program Files\Microsoft RDInfra' | Where-Object Name -Match '^SxsStack-' | sort LastWriteTime -Descending | select -First 1
-$sxs_install_status = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i $($SxSInstaller.FullName)" "/quiet", "/qn", "/norestart", "/passive", "/l* $wvdAppsLogsPath\SxSNetworkStackUninstall.log" -Wait -Passthru
+Write-output "Got SxS installer file $($SxSInstaller.FullName)"
+$sxs_install_status = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i $($SxSInstaller.FullName)", "/quiet", "/qn", "/norestart", "/passive", "/l* $wvdAppsLogsPath\SxSNetworkStackUninstall.log" -Wait -Passthru
 $sts = $sxs_install_status.ExitCode
-$sts = $sxs_uninstall_status.ExitCode
 Write-Output "Installing RD SxS Network Stack on VM Complete. Exit code=$sts`n"
