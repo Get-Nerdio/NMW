@@ -45,7 +45,15 @@ $Script | Out-File ".\Uninstall-AVDAgent-$($vm.Name).ps1"
 
     # Execute local script on remote VM
 write-output "Execute uninstall script on remote VM"
-Invoke-AzVMRunCommand -ResourceGroupName $vm.ResourceGroupName -VMName "$AzureVMName" -CommandId 'RunPowerShellScript' -ScriptPath ".\Uninstall-AVDAgent-$($vm.Name).ps1"
+$RunCommand = Invoke-AzVMRunCommand -ResourceGroupName $vm.ResourceGroupName -VMName "$AzureVMName" -CommandId 'RunPowerShellScript' -ScriptPath ".\Uninstall-AVDAgent-$($vm.Name).ps1"
+
+#Check for errors
+$errors = $RunCommand.Value | ? Code -eq 'ComponentStatus/StdErr/succeeded'
+if ($errors.message) {
+    Throw "Error when uninstalling RD components. $($errors.message)"
+}
+Write-output "Output from RunCommand:"
+$RunCommand.Value | ? Code -eq 'ComponentStatus/StdOut/succeeded' | select message -ExpandProperty message
 
 write-output "Restarting VM after uninstall"
 $vm | Restart-AzVM 
@@ -96,7 +104,15 @@ $Script | Out-File ".\Reinstall-AVDAgent-$($vm.Name).ps1"
 
     # Execute local script on remote VM
 write-output "Execute reinstall script on remote VM"
-Invoke-AzVMRunCommand -ResourceGroupName $vm.ResourceGroupName -VMName "$AzureVMName" -CommandId 'RunPowerShellScript' -ScriptPath ".\Reinstall-AVDAgent-$($vm.Name).ps1"
+$RunCommand = Invoke-AzVMRunCommand -ResourceGroupName $vm.ResourceGroupName -VMName "$AzureVMName" -CommandId 'RunPowerShellScript' -ScriptPath ".\Reinstall-AVDAgent-$($vm.Name).ps1"
+
+#check for errors
+$errors = $RunCommand.Value | ? Code -eq 'ComponentStatus/StdErr/succeeded'
+if ($errors.message) {
+    Throw "Error when reinstalling RD agent. $($errors.message)"
+}
+Write-output "Output from RunCommand:"
+$RunCommand.Value | ? Code -eq 'ComponentStatus/StdOut/succeeded' | select message -ExpandProperty message
 
 write-output "Restarting VM after reinstall"
 $vm | Restart-AzVM 
