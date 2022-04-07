@@ -116,3 +116,7 @@ $RunCommand.Value | ? Code -eq 'ComponentStatus/StdOut/succeeded' | select messa
 
 write-output "Restarting VM after reinstall"
 $vm | Restart-AzVM 
+
+if ($SessionHost.assigneduser) {
+    Update-AzWvdSessionHost -HostPoolName $hostpoolname -Name $SessionHost.name -AssignedUser $SessionHost.AssignedUser
+}
