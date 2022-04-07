@@ -86,7 +86,7 @@ if (-not (Test-Path -Path `$wvdAppsLogsPath)) {
     New-Item -Path `$logsPath -Name `$wvdAppsLogsFolderName -ItemType Directory -Force | Out-Null
 }
 
-`$AgentInstaller = (Get-ChildItem 'C:\Program Files\Microsoft RDInfra\' | ? name -Match Microsoft.RDInfra.RDAgent | sort lastwritetime -Descending | select -First 1).fullname
+`$AgentInstaller = (Get-ChildItem 'C:\Program Files\Microsoft RDInfra\' | ? name -Match Microsoft.RDInfra.RDAgent.Installer | sort lastwritetime -Descending | select -First 1).fullname
 `$InstallerPath = '"' + `$AgentInstaller + '"'
 
 Write-Output "Installing RD Infra Agent on VM `$InstallerPath"
