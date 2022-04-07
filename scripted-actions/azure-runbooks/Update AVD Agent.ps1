@@ -6,7 +6,11 @@ Notes:
 
 This scripted action is intended to be used with Nerdio's Auto-heal feature. It uninstalls
 the RDAgent and all Remote Desktop related software, removes the VM from the host pool, downloads
-and installs the most RDAgent and bootloader, and adds the host back to the host pool. 
+and installs the most RDAgent and bootloader, and adds the host back to the host pool. Because
+this process requires removing and re-adding the host to the host pool, this can take several 
+minutes to complete. It is recommended that you allow Azure to update the RDAgent automatically
+rather than to force the update, but for troubleshooting and host recovery, this script can be 
+used to install the latest version of the RDAgent software.
 
 #>
 
