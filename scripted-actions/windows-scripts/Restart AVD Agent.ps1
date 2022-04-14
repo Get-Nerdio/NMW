@@ -1,4 +1,4 @@
-#description: Resart the AVD Agent on host vm
+#description: Restart the AVD Agent on host vm
 #tags: Nerdio, Preview
 <#
 Notes:
