@@ -12,6 +12,9 @@ minutes to complete. It is recommended that you allow Azure to update the RDAgen
 rather than to force the update, but for troubleshooting and host recovery, this script can be 
 used to install the latest version of the RDAgent software.
 
+This script is compatible with the ARM version of AVD (Spring 2020), and is not compatible with 
+v1 (Fall 2019) Azure WVD.
+
 #>
 
 $ErrorActionPreference = 'Stop'
