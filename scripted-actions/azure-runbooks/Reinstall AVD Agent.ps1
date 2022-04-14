@@ -8,6 +8,9 @@ This scripted action is intended to be used with Nerdio's Auto-heal feature. It 
 the RDAgent, removes the VM from the host pool, reinstalls the RDAgent, and adds the host
 back to the host pool. 
 
+This script is compatible with the ARM version of AVD (Spring 2020), and is not compatible with 
+v1 (Fall 2019) Azure WVD.
+
 #>
 
 Write-output "Getting Host Pool Information"
