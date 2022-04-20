@@ -1,4 +1,4 @@
-#description: Enable RDP Shortpath for public networks on session host VMs
+#description: Enable RDP Shortpath for public networks (Preview) on session host VMs
 #execution mode: IndividualWithRestart
 #tags: Nerdio, Preview
 <#
@@ -14,4 +14,5 @@ A reboot is required after running this script for the configuration to take eff
 
 # Add registry keys
 
-REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations" /v ICEControl /t REG_DWORD  /d 2 /f
+$WinstationsKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations'
+New-ItemProperty -Path $WinstationsKey -Name 'ICEControl' -ErrorAction:SilentlyContinue -PropertyType:dword -Value 2 -Force
