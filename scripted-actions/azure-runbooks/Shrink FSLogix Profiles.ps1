@@ -27,9 +27,9 @@ To adjust other variables, clone this scripted action and adjust to your require
 
 The Invoke-FslShrinkDisk script used here was written by Jim Moyle.
 See https://github.com/FSLogix/Invoke-FslShrinkDisk/blob/master/Invoke-FslShrinkDisk.ps1 for more 
-information on the FSLogix-ShrinkDisk.ps1 script and parameters you can pass to it.
+information on the FSLogix-ShrinkDisk.ps1 script and arguments you can pass to it.
 
-To adjust the parameters passed to FSLogix-ShrinkDisk.ps1, use the AddtionalShrinkDiskParameters
+To adjust the arguments passed to FSLogix-ShrinkDisk.ps1, use the AddtionalShrinkDiskParameters
 when running this script.
 
 #>
@@ -101,6 +101,13 @@ if ($TempVmResourceGroup) {
 $FSLogixLogFile = "C:\Windows\Temp\FslShrinkDisk.log"
 $InvokeFslShrinkCommand = "FSLogix-ShrinkDisk.ps1 -Path $FSLogixFileShare -Recurse -LogFilePath $FSLogixLogFile $AddtionalShrinkDiskParameters -PassThru"
 
+Write-Output "Variables set: 
+VNet for temp vm is $azureVnetName
+Subnet is $azureVnetSubnetName
+Path to fslogix share is $FSLogixFileShare
+User account to access share is $StorageAccountUser
+Resource Group for temp vm is $azureResourceGroup"
+
 ##### Optional Variables #####
 
 #Define the following parameters for the temp vm
@@ -138,7 +145,7 @@ if ([string]::IsNullOrEmpty($StorageAccountUser) -or [string]::IsNullOrEmpty($St
 }
 
 #Get the subnet details for the specified virtual network + subnet combination.
-Write-Output "Getting subnet details"
+Write-Output "Getting vnet details"
 $Vnet = Get-AzVirtualNetwork -Name $azureVnetName
 
 # use resource group of vnet if not specified in parameters or securevars
@@ -147,7 +154,7 @@ if ([string]::IsNullOrEmpty($AzureResourceGroup)) {
 }
 $AzureRegionName = $vnet.Location
 $azureVnetSubnet = $Vnet.Subnets | Where-Object {$_.Name -eq $azureVnetSubnetName}
-Write-Output "Vnet is $($Vnet.name). Region is $($vnet.Location)"
+Write-Output "Region is $($vnet.Location)"
 
 Try {
   #Create the public IP address.
