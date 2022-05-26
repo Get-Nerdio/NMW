@@ -217,9 +217,71 @@ try {
   if ($SetExtension.StatusCode -eq 'OK') {
     write-output "VM successfully added to hybrid worker group"
   }
+
+  if ($AutomationAccount -eq 'ScriptedActions') {
+    $AzureAutomationCertificateName = 'ScriptedActionRunAsCert'
+  }
+  else {
+    $AzureAutomationCertificateName = 'AzureRunAsCertificate'
+  }
+
+  $Script = @"
+  function Ensure-AutomationCertIsImported
+  {
+      # ------------------------------------------------------------
+      # Import Azure Automation certificate if it's not imported yet
+      # ------------------------------------------------------------
+  
+      Param (
+          [Parameter(mandatory=`$true)]
+          [string]`$AzureAutomationCertificateName
+      )
+  
+      # Get the management certificate that will be used to make calls into Azure Service Management resources
+      `$runAsCert = Get-AutomationCertificate -Name `$AzureAutomationCertificateName
+  
+      # Check if cert is already imported
+      `$certStore = New-Object System.Security.Cryptography.X509Certificates.X509Store -ArgumentList "\\`$(`$env:COMPUTERNAME)\My", "LocalMachine"
+      `$certStore.Open('ReadOnly') | Out-Null
+      if (`$certStore.Certificates.Contains(`$runAsCert)) {
+          return
+      }
+  
+      # Generate the password
+      Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue | Out-Null
+      `$password = [System.Web.Security.Membership]::GeneratePassword(25, 10)
+  
+      # location to store temporary certificate in the Automation service host
+      `$certPath = Join-Path `$env:TEMP "`$AzureAutomationCertificateName.pfx"
+  
+      # Save the certificate
+      `$cert = `$runAsCert.Export("pfx", `$password)
+      try {
+          Set-Content -Value `$cert -Path `$certPath -Force -Encoding Byte | Out-Null
+  
+          `$securePassword = ConvertTo-SecureString `$password -AsPlainText -Force
+          Import-PfxCertificate -FilePath `$certPath -CertStoreLocation Cert:\LocalMachine\My -Password `$securePassword | Out-Null
+      }
+      finally {
+          Remove-Item -Path `$certPath -ErrorAction SilentlyContinue | Out-Null
+      }
+  }
+
+  Ensure-AutomationCertIsImported -AzureAutomationCertificateName $AzureAutomationCertificateName 
+"@
+
+  $Script > .\Ensure-AutomationCertIsImported.ps1 
+  $InstallCertificate = Invoke-AzVMRunCommand -VMName $vmname -ResourceGroupName $VMResourceGroup -CommandId 'RunPowerShellScript' -ScriptPath .\Ensure-AutomationCertIsImported.ps1 
+
+  if ($InstallCertificate.Value[1].Message) {
+    Throw $InstallCertificate.Value[1].Message
+  }
+
+  Write-Output $InstallCertificate.Value[0].Message
+  
 }
 catch {
-  write-output "Encountered error $_"
+  Write-Error "Encountered error $_"
   write-output "Rolling back changes"
 
   write-output "Removing worker from hybrid worker group"
