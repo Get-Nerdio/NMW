@@ -22,15 +22,10 @@ functionality when using private endpoints on Nerdio's scripted actions storage 
     "Description": "Subnet for the hybrind worker vm",
     "IsRequired": true
   },
-  "HybridWorkerVMName": {
+  "VMName": {
     "Description": "Name of new hybrid worker VM. Must be fewer than 15 characters.",
     "IsRequired": true,
     "DefaultValue": "nerdio-hw-vm"
-  },
-  "HybridWorkerGroupName": {
-    "Description": "Name of new hybrid worker group created in the Azure automation account",
-    "IsRequired": true,
-    "DefaultValue": "nerdio-hybridworker-group"
   },
   "VMResourceGroup": {
     "Description": "Resource group for the new vm. If not specified, rg of Nerdio Manager will be used.",
@@ -45,6 +40,16 @@ functionality when using private endpoints on Nerdio's scripted actions storage 
     "Description": "Use AHB if you have a Software Assurance-enabled Windows Server license",
     "IsRequired": false,
     "DefaultValue": "false"
+  },
+  "HybridWorkerGroupName": {
+    "Description": "Name of new hybrid worker group created in the Azure automation account",
+    "IsRequired": true,
+    "DefaultValue": "nerdio-hybridworker-group"
+  },
+  "AutomationAccount": {
+    "Description": "Which automation account will the hybrid worker be used with. Valid values are "ScriptedActions" or "NerdioManager",
+    "IsRequired": true,
+    "DefaultValue": "ScriptedActions"
   }
 }
 #>
@@ -69,14 +74,14 @@ $NMERegionName = $KeyVault.Location
 #Define the following parameters for the temp vm
 $vmAdminUsername = "LocalAdminUser"
 $vmAdminPassword = ConvertTo-SecureString "LocalAdminP@sswordHere" -AsPlainText -Force
-$vmComputerName = $HybridWorkerVMName
+$vmComputerName = $VMName
  
 #Define the following parameters for the Azure resources.
-$azureVmOsDiskName = "$HybridWorkerVMName-osdisk"
+$azureVmOsDiskName = "$VMName-osdisk"
  
 #Define the networking information.
-$azureNicName = "$HybridWorkerVMName-nic"
-#$azurePublicIpName = "$HybridWorkerVMName-IP"
+$azureNicName = "$VMName-nic"
+#$azurePublicIpName = "$VMName-IP"
  
  
 #Define the VM marketplace image details.
@@ -101,6 +106,17 @@ else {
 
 $LAW = Get-AzOperationalInsightsWorkspace -Name "$Prefix-app-law-$NMEIdString" -ResourceGroupName $NMEResourceGroupName
 
+
+if ($AutomationAccount -eq 'ScriptedActions') {
+  $AA = Get-AzAutomationAccount -ResourceGroupName $NMEResourceGroupName | Where-Object AutomationAccountName -Match 'runbooks'
+}
+elseif ($AutomationAccount -eq 'NerdioManager') {
+  $AA = Get-AzAutomationAccount -ResourceGroupName $NMEResourceGroupName -Name "$Prefix-app-automation-$NMEIdString"
+}
+else {
+  Throw "AutomationAccount parameter must be either 'ScriptedActions' or 'NerdioManager'"
+}
+
 ##### Script Logic #####
 
 #Get the subnet details for the specified virtual network + subnet combination.
@@ -121,7 +137,7 @@ $vmCredential = New-Object System.Management.Automation.PSCredential ($vmAdminUs
  
 #Define the parameters for the new virtual machine.
 Write-Output "Creating VM config"
-$VirtualMachine = New-AzVMConfig -VMName $HybridWorkerVMName -VMSize $VMSize -LicenseType $LicenseType -IdentityType SystemAssigned
+$VirtualMachine = New-AzVMConfig -VMName $VMName -VMSize $VMSize -LicenseType $LicenseType -IdentityType SystemAssigned
 $VirtualMachine = Set-AzVMOperatingSystem -VM $VirtualMachine -Windows -ComputerName $vmComputerName -Credential $vmCredential -ProvisionVMAgent -EnableAutoUpdate
 $VirtualMachine = Add-AzVMNetworkInterface -VM $VirtualMachine -Id $azureNIC.Id
 $VirtualMachine = Set-AzVMSourceImage -VM $VirtualMachine -PublisherName $azureVmPublisherName -Offer $azureVmOffer -Skus $azureVmSkus -Version "latest" 
@@ -131,25 +147,7 @@ $VirtualMachine = Set-AzVMOSDisk -VM $VirtualMachine -StorageAccountType "Standa
 #Create the virtual machine.
 Write-Output "Creating new VM"
 $VM = New-AzVM -ResourceGroupName $VMResourceGroup -Location $azureLocation -VM $VirtualMachine -Verbose -ErrorAction stop
-$VM = get-azvm -ResourceGroupName $VMResourceGroup -Name $HybridWorkerVMName
-
-$AA = Get-AzAutomationAccount -ResourceGroupName $NMEResourceGroupName | Where-Object AutomationAccountName -Match 'runbooks'
-
-<#
-Set-AzKeyVaultAccessPolicy -VaultName $keyvaultName -ObjectId $vm.Identity.PrincipalId -PermissionsToSecrets get 
-
-
-$cert = Get-AzKeyVaultCertificate -VaultName $KeyVaultName -name "$Prefix-automation-cert"
-$secret = Get-AzKeyVaultSecret -VaultName $keyvaultName -Name $cert.Name
-$secretByte = [Convert]::FromBase64String(($secret.SecretValue | ConvertFrom-SecureString -AsPlainText))
-#>
-
-#"Install-Script -Name New-OnPremiseHybridWorker -Force" > .\hw-script.ps1
-
-#$InstallHwScript = Invoke-AzVMRunCommand -ResourceGroupName $VMResourceGroup -VMName $HybridWorkerVMName -CommandId 'RunPowerShellScript' -ScriptPath .\hw-script.ps1
-
-#$ClientSecret = Get-AzKeyVaultSecret -VaultName $keyvaultName -Name 'AzureAD--ClientSecret' -AsPlainText
-
+$VM = get-azvm -ResourceGroupName $VMResourceGroup -Name $VMName
 
 $azProfile = [Microsoft.Azure.Commands.Common.Authentication.Abstractions.AzureRmProfileProvider]::Instance.Profile
 $profileClient = New-Object -TypeName Microsoft.Azure.Commands.ResourceManager.Common.RMProfileClient -ArgumentList ($azProfile)
@@ -166,7 +164,8 @@ $CreateWorkerGroup = Invoke-WebRequest `
                       -Headers $authHeader `
                       -Method PUT `
                       -ContentType 'application/json' `
-                      -Body '{}'
+                      -Body '{}' `
+                      -UseBasicParsing
                 
 
 $Body = "{ `"properties`": {`"vmResourceId`": `"$($vm.id)`"} }"
@@ -179,13 +178,15 @@ $AddVmToAA = Invoke-WebRequest `
                 -Headers $authHeader `
                 -Method PUT `
                 -ContentType 'application/json' `
-                -Body $Body
+                -Body $Body `
+                -UseBasicParsing
 
 
 write-output "Get automation hybrid service url"
 $Response = Invoke-WebRequest `
               -uri "https://westcentralus.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)?api-version=2021-06-22" `
-              -Headers $authHeader
+              -Headers $authHeader `
+              -UseBasicParsing
 
 $AAProperties =  ($response.Content | ConvertFrom-Json).properties
 $AutomationHybridServiceUrl = $AAProperties.automationHybridServiceUrl
@@ -197,7 +198,7 @@ $settings = @{
 Write-Output "Adding VM to hybrid worker group"
 $SetExtension = Set-AzVMExtension -ResourceGroupName $VMResourceGroup `
                   -Location $azureLocation `
-                  -VMName $HybridWorkerVMName `
+                  -VMName $VMName `
                   -Name "HybridWorkerExtension" `
                   -Publisher "Microsoft.Azure.Automation.HybridWorker" `
                   -ExtensionType HybridWorkerForWindows `
