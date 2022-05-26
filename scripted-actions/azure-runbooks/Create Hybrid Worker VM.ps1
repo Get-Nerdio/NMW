@@ -3,6 +3,9 @@
 
 <# Notes:
 
+Use this scripted action to create a new hybrid worker VM. This is necessary for the Azure runbooks
+functionality when using private endpoints on Nerdio's scripted actions storage account
+
 #>
 
 <# Variables:
@@ -132,19 +135,22 @@ $VM = get-azvm -ResourceGroupName $VMResourceGroup -Name $HybridWorkerVMName
 
 $AA = Get-AzAutomationAccount -ResourceGroupName $NMEResourceGroupName | Where-Object AutomationAccountName -Match 'runbooks'
 
+<#
 Set-AzKeyVaultAccessPolicy -VaultName $keyvaultName -ObjectId $vm.Identity.PrincipalId -PermissionsToSecrets get 
 
 
 $cert = Get-AzKeyVaultCertificate -VaultName $KeyVaultName -name "$Prefix-automation-cert"
 $secret = Get-AzKeyVaultSecret -VaultName $keyvaultName -Name $cert.Name
 $secretByte = [Convert]::FromBase64String(($secret.SecretValue | ConvertFrom-SecureString -AsPlainText))
-
+#>
 
 #"Install-Script -Name New-OnPremiseHybridWorker -Force" > .\hw-script.ps1
 
 #$InstallHwScript = Invoke-AzVMRunCommand -ResourceGroupName $VMResourceGroup -VMName $HybridWorkerVMName -CommandId 'RunPowerShellScript' -ScriptPath .\hw-script.ps1
 
-$ClientSecret = Get-AzKeyVaultSecret -VaultName $keyvaultName -Name 'AzureAD--ClientSecret' -AsPlainText
+#$ClientSecret = Get-AzKeyVaultSecret -VaultName $keyvaultName -Name 'AzureAD--ClientSecret' -AsPlainText
+
+
 $azProfile = [Microsoft.Azure.Commands.Common.Authentication.Abstractions.AzureRmProfileProvider]::Instance.Profile
 $profileClient = New-Object -TypeName Microsoft.Azure.Commands.ResourceManager.Common.RMProfileClient -ArgumentList ($azProfile)
 $token = $profileClient.AcquireAccessToken($context.Subscription.TenantId)
@@ -153,8 +159,34 @@ $authHeader = @{
    'Authorization'='Bearer ' + $token.AccessToken
 }
 
-# Get automation hybrid service url
-$Response = Invoke-WebRequest "https://westcentralus.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)?api-version=2021-06-22" -Headers $authHeader
+write-output "Creating new hybrid worker group in automation account"
+
+$CreateWorkerGroup = Invoke-WebRequest `
+                      -uri "https://$azureLocation.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)/hybridRunbookWorkerGroups/$HybridWorkerGroupName`?api-version=2021-06-22" `
+                      -Headers $authHeader `
+                      -Method PUT `
+                      -ContentType 'application/json' `
+                      -Body '{}'
+                
+
+$Body = "{ `"properties`": {`"vmResourceId`": `"$($vm.id)`"} }"
+
+$VmGuid = New-Guid
+
+write-output "Associating VM with automation account"
+$AddVmToAA = Invoke-WebRequest `
+                -uri "https://$azureLocation.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)/hybridRunbookWorkerGroups/$HybridWorkerGroupName/hybridRunbookWorkers/$VmGuid`?api-version=2021-06-22" `
+                -Headers $authHeader `
+                -Method PUT `
+                -ContentType 'application/json' `
+                -Body $Body
+
+
+write-output "Get automation hybrid service url"
+$Response = Invoke-WebRequest `
+              -uri "https://westcentralus.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)?api-version=2021-06-22" `
+              -Headers $authHeader
+
 $AAProperties =  ($response.Content | ConvertFrom-Json).properties
 $AutomationHybridServiceUrl = $AAProperties.automationHybridServiceUrl
 
@@ -162,530 +194,16 @@ $settings = @{
   "AutomationAccountURL"  = "$AutomationHybridServiceUrl"
 }
 
-Set-AzVMExtension -ResourceGroupName $VMResourceGroup -Location $azureLocation -VMName $HybridWorkerVMName -Name "HybridWorkerExtension" -Publisher "Microsoft.Azure.Automation.HybridWorker" -ExtensionType HybridWorkerForWindows -TypeHandlerVersion 0.1 -Settings $settings -AsJob 
+Write-Output "Adding VM to hybrid worker group"
+$SetExtension = Set-AzVMExtension -ResourceGroupName $VMResourceGroup `
+                  -Location $azureLocation `
+                  -VMName $HybridWorkerVMName `
+                  -Name "HybridWorkerExtension" `
+                  -Publisher "Microsoft.Azure.Automation.HybridWorker" `
+                  -ExtensionType HybridWorkerForWindows `
+                  -TypeHandlerVersion 0.1 `
+                  -Settings $settings
 
-
-
-
-
-
-
-automationAccount automationAccountLocation workerGroupName virtualMachineName adminUsername adminPassword vmLocation vmSize osVersion dnsNameForPublicIP
-$ArmTemplate = @"
-{
-  "`$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-  "contentVersion": "1.0.0.0",
-  "parameters": {
-    "nicName": {
-      "type": "string"
-    },
-    "addressPrefix": {
-      "type": "string"
-    },
-    "subnetName": {
-      "type": "string"
-    },
-    "subnetPrefix": {
-      "type": "string"
-    },
-    "virtualNetworkName": {
-      "type": "string"
-    },
-    "publicIPAddressName": {
-      "type": "string"
-    },
-    "networkSecurityGroupName": {
-      "type": "string"
-    },
-    "automationAccount": {
-      "type": "string"
-    },
-    "automationAccountLocation": {
-      "type": "string"
-    },
-    "workerGroupName": {
-      "type": "string"
-    },
-    "virtualMachineName": {
-      "type": "string",
-      "defaultValue": "simple-vm",
-      "metadata": {
-        "description": "Name of the virtual machine."
-      }
-    },
-    "adminUsername": {
-      "type": "string",
-      "metadata": {
-        "description": "Username for the Virtual Machine."
-      }
-    },
-    "adminPassword": {
-      "type": "securestring",
-      "minLength": 12,
-      "metadata": {
-        "description": "Password for the Virtual Machine."
-      }
-    },
-    "vmLocation": {
-      "type": "string",
-      "defaultValue": "North Central US",
-      "metadata": {
-        "description": "Location for the VM."
-      }
-    },
-    "vmSize": {
-      "type": "string",
-      "defaultValue": "Standard_DS1_v2",
-      "metadata": {
-        "description": "Size of the virtual machine."
-      }
-    },
-    "osVersion": {
-      "type": "string",
-      "defaultValue": "2019-Datacenter",
-      "allowedValues": [
-        "2008-R2-SP1",
-        "2012-Datacenter",
-        "2012-R2-Datacenter",
-        "2016-Nano-Server",
-        "2016-Datacenter-with-Containers",
-        "2016-Datacenter",
-        "2019-Datacenter",
-        "2019-Datacenter-Core",
-        "2019-Datacenter-Core-smalldisk",
-        "2019-Datacenter-Core-with-Containers",
-        "2019-Datacenter-Core-with-Containers-smalldisk",
-        "2019-Datacenter-smalldisk",
-        "2019-Datacenter-with-Containers",
-        "2019-Datacenter-with-Containers-smalldisk"
-      ],
-      "metadata": {
-        "description": "The Windows version for the VM. This will pick a fully patched image of this given Windows version."
-      }
-    },
-    "dnsNameForPublicIP": {
-      "type": "string",
-      "metadata": {
-        "description": "DNS name for the public IP"
-      }
-    },
-    "_CurrentDateTimeInTicks": {
-      "type": "string",
-      "defaultValue": "[utcNow('yyyy-MM-dd')]"
-    }
-  },
-  "variables": {
-    "subnetRef": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('virtualNetworkName'), parameters('subnetName'))]",
-    "vmName": "[parameters('virtualMachineName')]",
-    "UniqueStringBasedOnTimeStamp": "[uniqueString(deployment().name, parameters('_CurrentDateTimeInTicks'))]"
-  },
-  "resources": [
-    {
-      "apiVersion": "2020-08-01",
-      "type": "Microsoft.Network/publicIPAddresses",
-      "name": "[parameters('publicIPAddressName')]",
-      "location": "[parameters('vmLocation')]",
-      "properties": {
-        "publicIPAllocationMethod": "Dynamic",
-        "dnsSettings": {
-          "domainNameLabel": "[parameters('dnsNameForPublicIP')]"
-        }
-      }
-    },
-    {
-      "apiVersion": "2020-08-01",
-      "type": "Microsoft.Network/networkInterfaces",
-      "name": "[parameters('nicName')]",
-      "location": "[parameters('vmLocation')]",
-      "dependsOn": [
-        "[parameters('publicIPAddressName')]",
-        "[variables('virtualNetworkName')]"
-      ],
-      "properties": {
-        "ipConfigurations": [
-          {
-            "name": "ipconfig1",
-            "properties": {
-              "privateIPAllocationMethod": "Dynamic",
-              "publicIPAddress": {
-                "id": "[resourceId('Microsoft.Network/publicIPAddresses',parameters('publicIPAddressName'))]"
-              },
-              "subnet": {
-                "id": "[variables('subnetRef')]"
-              }
-            }
-          }
-        ]
-      }
-    },
-    {
-      "apiVersion": "2020-12-01",
-      "type": "Microsoft.Compute/virtualMachines",
-      "name": "[variables('vmName')]",
-      "location": "[parameters('vmLocation')]",
-      "dependsOn": [
-        "[parameters('nicName')]"
-      ],
-      "identity": {
-             "type": "SystemAssigned"
-      } ,
-      "properties": {
-        "hardwareProfile": {
-          "vmSize": "[parameters('vmSize')]"
-        },
-        "osProfile": {
-          "computerName": "[variables('vmName')]",
-          "adminUsername": "[parameters('adminUsername')]",
-          "adminPassword": "[parameters('adminPassword')]"
-        },
-        "storageProfile": {
-          "imageReference": {
-            "publisher": "MicrosoftWindowsServer",
-            "offer": "WindowsServer",
-            "sku": "[parameters('osVersion')]",
-            "version": "latest"
-          },
-          "osDisk": {
-            "createOption": "FromImage"
-          }
-        },
-        "networkProfile": {
-          "networkInterfaces": [
-            {
-              "id": "[resourceId('Microsoft.Network/networkInterfaces',parameters('nicName'))]"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts",
-      "apiVersion": "2021-06-22",
-      "name": "[parameters('automationAccount')]",
-      "location": "[parameters('automationAccountLocation')]",
-      "properties": {
-        "sku": {
-          "name": "Basic"
-        }
-      },
-      "resources": [
-        {
-          "name": "[concat(parameters('workerGroupName'),'/',guid('AzureAutomationJobName', variables('UniqueStringBasedOnTimeStamp')))]",
-          "type": "hybridRunbookWorkerGroups/hybridRunbookWorkers",
-          "apiVersion": "2021-06-22",
-          "dependsOn": [
-            "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccount'))]",
-            "[resourceId('Microsoft.Compute/virtualMachines', variables('vmName'))]"
-          ],
-          "properties": {
-            "vmResourceId": "[resourceId('Microsoft.Compute/virtualMachines', parameters('virtualMachineName'))]"
-          }
-        }
-      ]
-    },
-    {
-      "type": "Microsoft.Compute/virtualMachines/extensions",
-      "name": "[concat(parameters('virtualMachineName'),'/HybridWorkerExtension')]",
-      "apiVersion": "2020-12-01",
-      "location": "[parameters('vmLocation')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccount'))]",
-        "[resourceId('Microsoft.Compute/virtualMachines', parameters('virtualMachineName'))]"
-      ],
-      "properties": {
-        "publisher": "Microsoft.Azure.Automation.HybridWorker",
-        "type": "HybridWorkerForWindows",
-        "typeHandlerVersion": "0.1",
-        "autoUpgradeMinorVersion": true,
-        "settings": {
-          "AutomationAccountURL": "[reference(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccount'))).AutomationHybridServiceUrl]"
-        }
-      }
-    }
-  ],
-  "outputs": {
-    "output1": {
-      "type": "string",
-      "value": "[reference(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccount'))).AutomationHybridServiceUrl]"
-    }
-  }
+if ($SetExtension.StatusCode -eq 'OK') {
+  write-output "VM successfully added to hybrid worker group"
 }
-"@
-
-$FullArmTemplate = @"
-{
-  "`$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-  "contentVersion": "1.0.0.0",
-  "parameters": {
-    "automationAccount": {
-      "type": "string"
-    },
-    "automationAccountLocation": {
-      "type": "string"
-    },
-    "workerGroupName": {
-      "type": "string"
-    },
-    "virtualMachineName": {
-      "type": "string",
-      "defaultValue": "simple-vm",
-      "metadata": {
-        "description": "Name of the virtual machine."
-      }
-    },
-    "adminUsername": {
-      "type": "string",
-      "metadata": {
-        "description": "Username for the Virtual Machine."
-      }
-    },
-    "adminPassword": {
-      "type": "securestring",
-      "minLength": 12,
-      "metadata": {
-        "description": "Password for the Virtual Machine."
-      }
-    },
-    "vmLocation": {
-      "type": "string",
-      "defaultValue": "North Central US",
-      "metadata": {
-        "description": "Location for the VM."
-      }
-    },
-    "vmSize": {
-      "type": "string",
-      "defaultValue": "Standard_DS1_v2",
-      "metadata": {
-        "description": "Size of the virtual machine."
-      }
-    },
-    "osVersion": {
-      "type": "string",
-      "defaultValue": "2019-Datacenter",
-      "allowedValues": [
-        "2008-R2-SP1",
-        "2012-Datacenter",
-        "2012-R2-Datacenter",
-        "2016-Nano-Server",
-        "2016-Datacenter-with-Containers",
-        "2016-Datacenter",
-        "2019-Datacenter",
-        "2019-Datacenter-Core",
-        "2019-Datacenter-Core-smalldisk",
-        "2019-Datacenter-Core-with-Containers",
-        "2019-Datacenter-Core-with-Containers-smalldisk",
-        "2019-Datacenter-smalldisk",
-        "2019-Datacenter-with-Containers",
-        "2019-Datacenter-with-Containers-smalldisk"
-      ],
-      "metadata": {
-        "description": "The Windows version for the VM. This will pick a fully patched image of this given Windows version."
-      }
-    },
-    "dnsNameForPublicIP": {
-      "type": "string",
-      "metadata": {
-        "description": "DNS name for the public IP"
-      }
-    },
-    "_CurrentDateTimeInTicks": {
-      "type": "string",
-      "defaultValue": "[utcNow('yyyy-MM-dd')]"
-    }
-  },
-  "variables": {
-    "nicName": "myVMNict",
-    "addressPrefix": "10.0.0.0/16",
-    "subnetName": "Subnet",
-    "subnetPrefix": "10.0.0.0/24",
-    "subnetRef": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('virtualNetworkName'), variables('subnetName'))]",
-    "vmName": "[parameters('virtualMachineName')]",
-    "virtualNetworkName": "MyVNETt",
-    "publicIPAddressName": "myPublicIPt",
-    "networkSecurityGroupName": "default-NSGt",
-    "UniqueStringBasedOnTimeStamp": "[uniqueString(deployment().name, parameters('_CurrentDateTimeInTicks'))]"
-  },
-  "resources": [
-    {
-      "apiVersion": "2020-08-01",
-      "type": "Microsoft.Network/publicIPAddresses",
-      "name": "[parameters('publicIPAddressName')]",
-      "location": "[parameters('vmLocation')]",
-      "properties": {
-        "publicIPAllocationMethod": "Dynamic",
-        "dnsSettings": {
-          "domainNameLabel": "[parameters('dnsNameForPublicIP')]"
-        }
-      }
-    },
-    {
-      "comments": "Default Network Security Group for template",
-      "type": "Microsoft.Network/networkSecurityGroups",
-      "apiVersion": "2020-08-01",
-      "name": "[parameters('networkSecurityGroupName')]",
-      "location": "[parameters('vmLocation')]",
-      "properties": {
-        "securityRules": [
-          {
-            "name": "default-allow-3389",
-            "properties": {
-              "priority": 1000,
-              "access": "Allow",
-              "direction": "Inbound",
-              "destinationPortRange": "3389",
-              "protocol": "Tcp",
-              "sourceAddressPrefix": "*",
-              "sourcePortRange": "*",
-              "destinationAddressPrefix": "*"
-            }
-          }
-        ]
-      }
-    },
-    {
-      "apiVersion": "2020-08-01",
-      "type": "Microsoft.Network/virtualNetworks",
-      "name": "[variables('virtualNetworkName')]",
-      "location": "[parameters('vmLocation')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Network/networkSecurityGroups', parameters('networkSecurityGroupName'))]"
-      ],
-      "properties": {
-        "addressSpace": {
-          "addressPrefixes": [
-            "[variables('addressPrefix')]"
-          ]
-        },
-        "subnets": [
-          {
-            "name": "[variables('subnetName')]",
-            "properties": {
-              "addressPrefix": "[variables('subnetPrefix')]",
-              "networkSecurityGroup": {
-                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', parameters('networkSecurityGroupName'))]"
-              }
-            }
-          }
-        ]
-      }
-    },
-    {
-      "apiVersion": "2020-08-01",
-      "type": "Microsoft.Network/networkInterfaces",
-      "name": "[parameters('nicName')]",
-      "location": "[parameters('vmLocation')]",
-      "dependsOn": [
-        "[parameters('publicIPAddressName')]",
-        "[variables('virtualNetworkName')]"
-      ],
-      "properties": {
-        "ipConfigurations": [
-          {
-            "name": "ipconfig1",
-            "properties": {
-              "privateIPAllocationMethod": "Dynamic",
-              "publicIPAddress": {
-                "id": "[resourceId('Microsoft.Network/publicIPAddresses',parameters('publicIPAddressName'))]"
-              },
-              "subnet": {
-                "id": "[variables('subnetRef')]"
-              }
-            }
-          }
-        ]
-      }
-    },
-    {
-      "apiVersion": "2020-12-01",
-      "type": "Microsoft.Compute/virtualMachines",
-      "name": "[variables('vmName')]",
-      "location": "[parameters('vmLocation')]",
-      "dependsOn": [
-        "[parameters('nicName')]"
-      ],
-      "identity": {
-             "type": "SystemAssigned"
-      } ,
-      "properties": {
-        "hardwareProfile": {
-          "vmSize": "[parameters('vmSize')]"
-        },
-        "osProfile": {
-          "computerName": "[variables('vmName')]",
-          "adminUsername": "[parameters('adminUsername')]",
-          "adminPassword": "[parameters('adminPassword')]"
-        },
-        "storageProfile": {
-          "imageReference": {
-            "publisher": "MicrosoftWindowsServer",
-            "offer": "WindowsServer",
-            "sku": "[parameters('osVersion')]",
-            "version": "latest"
-          },
-          "osDisk": {
-            "createOption": "FromImage"
-          }
-        },
-        "networkProfile": {
-          "networkInterfaces": [
-            {
-              "id": "[resourceId('Microsoft.Network/networkInterfaces',parameters('nicName'))]"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts",
-      "apiVersion": "2021-06-22",
-      "name": "[parameters('automationAccount')]",
-      "location": "[parameters('automationAccountLocation')]",
-      "properties": {
-        "sku": {
-          "name": "Basic"
-        }
-      },
-      "resources": [
-        {
-          "name": "[concat(parameters('workerGroupName'),'/',guid('AzureAutomationJobName', variables('UniqueStringBasedOnTimeStamp')))]",
-          "type": "hybridRunbookWorkerGroups/hybridRunbookWorkers",
-          "apiVersion": "2021-06-22",
-          "dependsOn": [
-            "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccount'))]",
-            "[resourceId('Microsoft.Compute/virtualMachines', variables('vmName'))]"
-          ],
-          "properties": {
-            "vmResourceId": "[resourceId('Microsoft.Compute/virtualMachines', parameters('virtualMachineName'))]"
-          }
-        }
-      ]
-    },
-    {
-      "type": "Microsoft.Compute/virtualMachines/extensions",
-      "name": "[concat(parameters('virtualMachineName'),'/HybridWorkerExtension')]",
-      "apiVersion": "2020-12-01",
-      "location": "[parameters('vmLocation')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccount'))]",
-        "[resourceId('Microsoft.Compute/virtualMachines', parameters('virtualMachineName'))]"
-      ],
-      "properties": {
-        "publisher": "Microsoft.Azure.Automation.HybridWorker",
-        "type": "HybridWorkerForWindows",
-        "typeHandlerVersion": "0.1",
-        "autoUpgradeMinorVersion": true,
-        "settings": {
-          "AutomationAccountURL": "[reference(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccount'))).AutomationHybridServiceUrl]"
-        }
-      }
-    }
-  ],
-  "outputs": {
-    "output1": {
-      "type": "string",
-      "value": "[reference(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccount'))).AutomationHybridServiceUrl]"
-    }
-  }
-}
-"@
