@@ -4,7 +4,13 @@
 <# Notes:
 
 Use this scripted action to create a new hybrid worker VM. This is necessary for the Azure runbooks
-functionality when using private endpoints on Nerdio's scripted actions storage account
+functionality when using private endpoints on Nerdio's scripted actions storage account. 
+
+The hybrid worker can join either the runbooks automation account or the nerdio manager automation
+account; use the "AutomationAccount" parameter to specify which automation account to join the
+hybrid worker. After creating a hybrid worker for the Azure runbooks scripted actions, you will
+need to go to Settings -> Nerdio Environment and select "enabled" under "Azure runbooks scripted 
+actions" to tell Nerdio to use the new hybrid worker.
 
 #>
 
@@ -23,7 +29,7 @@ functionality when using private endpoints on Nerdio's scripted actions storage 
     "IsRequired": true
   },
   "VMName": {
-    "Description": "Name of new hybrid worker VM. Must be fewer than 15 characters.",
+    "Description": "Name of new hybrid worker VM. Must be fewer than 15 characters, or will be truncated.",
     "IsRequired": true,
     "DefaultValue": "nerdio-hw-vm"
   },
@@ -47,7 +53,7 @@ functionality when using private endpoints on Nerdio's scripted actions storage 
     "DefaultValue": "nerdio-hybridworker-group"
   },
   "AutomationAccount": {
-    "Description": "Which automation account will the hybrid worker be used with. Valid values are "ScriptedActions" or "NerdioManager",
+    "Description": "Which automation account will the hybrid worker be used with. Valid values are ScriptedActions or NerdioManager",
     "IsRequired": true,
     "DefaultValue": "ScriptedActions"
   }
@@ -74,7 +80,7 @@ $NMERegionName = $KeyVault.Location
 #Define the following parameters for the temp vm
 $vmAdminUsername = "LocalAdminUser"
 $vmAdminPassword = ConvertTo-SecureString "LocalAdminP@sswordHere" -AsPlainText -Force
-$vmComputerName = $VMName
+$vmComputerName = $vmname[0..14] -join '' 
  
 #Define the following parameters for the Azure resources.
 $azureVmOsDiskName = "$VMName-osdisk"
@@ -119,92 +125,134 @@ else {
 
 ##### Script Logic #####
 
-#Get the subnet details for the specified virtual network + subnet combination.
-Write-Output "Getting subnet details"
-$Subnet = ($Vnet).Subnets | Where-Object {$_.Name -eq $SubnetName}
- 
-#Create the public IP address.
-#Write-Output "Creating public ip"
-#$azurePublicIp = New-AzPublicIpAddress -Name $azurePublicIpName -ResourceGroupName $azureResourceGroup -Location $azureLocation -AllocationMethod Dynamic
- 
-#Create the NIC and associate the public IpAddress.
-Write-Output "Creating NIC"
-$azureNIC = New-AzNetworkInterface -Name $azureNicName -ResourceGroupName $VMResourceGroup -Location $azureLocation -SubnetId $Subnet.Id 
- 
-#Store the credentials for the local admin account.
-Write-Output "Creating VM credentials"
-$vmCredential = New-Object System.Management.Automation.PSCredential ($vmAdminUsername, $vmAdminPassword)
- 
-#Define the parameters for the new virtual machine.
-Write-Output "Creating VM config"
-$VirtualMachine = New-AzVMConfig -VMName $VMName -VMSize $VMSize -LicenseType $LicenseType -IdentityType SystemAssigned
-$VirtualMachine = Set-AzVMOperatingSystem -VM $VirtualMachine -Windows -ComputerName $vmComputerName -Credential $vmCredential -ProvisionVMAgent -EnableAutoUpdate
-$VirtualMachine = Add-AzVMNetworkInterface -VM $VirtualMachine -Id $azureNIC.Id
-$VirtualMachine = Set-AzVMSourceImage -VM $VirtualMachine -PublisherName $azureVmPublisherName -Offer $azureVmOffer -Skus $azureVmSkus -Version "latest" 
-$VirtualMachine = Set-AzVMBootDiagnostic -VM $VirtualMachine -Disable
-$VirtualMachine = Set-AzVMOSDisk -VM $VirtualMachine -StorageAccountType "StandardSSD_LRS" -Caching ReadWrite -Name $azureVmOsDiskName -CreateOption FromImage
- 
-#Create the virtual machine.
-Write-Output "Creating new VM"
-$VM = New-AzVM -ResourceGroupName $VMResourceGroup -Location $azureLocation -VM $VirtualMachine -Verbose -ErrorAction stop
-$VM = get-azvm -ResourceGroupName $VMResourceGroup -Name $VMName
+try {
 
-$azProfile = [Microsoft.Azure.Commands.Common.Authentication.Abstractions.AzureRmProfileProvider]::Instance.Profile
-$profileClient = New-Object -TypeName Microsoft.Azure.Commands.ResourceManager.Common.RMProfileClient -ArgumentList ($azProfile)
-$token = $profileClient.AcquireAccessToken($context.Subscription.TenantId)
-$authHeader = @{
-   'Content-Type'='application/json'
-   'Authorization'='Bearer ' + $token.AccessToken
-}
 
-write-output "Creating new hybrid worker group in automation account"
+  #Get the subnet details for the specified virtual network + subnet combination.
+  Write-Output "Getting subnet details"
+  $Subnet = ($Vnet).Subnets | Where-Object {$_.Name -eq $SubnetName}
+  
+  #Create the public IP address.
+  #Write-Output "Creating public ip"
+  #$azurePublicIp = New-AzPublicIpAddress -Name $azurePublicIpName -ResourceGroupName $azureResourceGroup -Location $azureLocation -AllocationMethod Dynamic
+  
+  #Create the NIC and associate the public IpAddress.
+  Write-Output "Creating NIC"
+  $azureNIC = New-AzNetworkInterface -Name $azureNicName -ResourceGroupName $VMResourceGroup -Location $azureLocation -SubnetId $Subnet.Id 
+  
+  #Store the credentials for the local admin account.
+  Write-Output "Creating VM credentials"
+  $vmCredential = New-Object System.Management.Automation.PSCredential ($vmAdminUsername, $vmAdminPassword)
+  
+  #Define the parameters for the new virtual machine.
+  Write-Output "Creating VM config"
+  $VirtualMachine = New-AzVMConfig -VMName $VMName -VMSize $VMSize -LicenseType $LicenseType -IdentityType SystemAssigned
+  $VirtualMachine = Set-AzVMOperatingSystem -VM $VirtualMachine -Windows -ComputerName $vmComputerName -Credential $vmCredential -ProvisionVMAgent -EnableAutoUpdate
+  $VirtualMachine = Add-AzVMNetworkInterface -VM $VirtualMachine -Id $azureNIC.Id
+  $VirtualMachine = Set-AzVMSourceImage -VM $VirtualMachine -PublisherName $azureVmPublisherName -Offer $azureVmOffer -Skus $azureVmSkus -Version "latest" 
+  $VirtualMachine = Set-AzVMBootDiagnostic -VM $VirtualMachine -Disable
+  $VirtualMachine = Set-AzVMOSDisk -VM $VirtualMachine -StorageAccountType "StandardSSD_LRS" -Caching ReadWrite -Name $azureVmOsDiskName -CreateOption FromImage
+  
+  #Create the virtual machine.
+  Write-Output "Creating new VM"
+  $VM = New-AzVM -ResourceGroupName $VMResourceGroup -Location $azureLocation -VM $VirtualMachine -Verbose -ErrorAction stop
+  $VM = get-azvm -ResourceGroupName $VMResourceGroup -Name $VMName
 
-$CreateWorkerGroup = Invoke-WebRequest `
-                      -uri "https://$azureLocation.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)/hybridRunbookWorkerGroups/$HybridWorkerGroupName`?api-version=2021-06-22" `
-                      -Headers $authHeader `
-                      -Method PUT `
-                      -ContentType 'application/json' `
-                      -Body '{}' `
-                      -UseBasicParsing
-                
+  $azProfile = [Microsoft.Azure.Commands.Common.Authentication.Abstractions.AzureRmProfileProvider]::Instance.Profile
+  $profileClient = New-Object -TypeName Microsoft.Azure.Commands.ResourceManager.Common.RMProfileClient -ArgumentList ($azProfile)
+  $token = $profileClient.AcquireAccessToken($context.Subscription.TenantId)
+  $authHeader = @{
+    'Content-Type'='application/json'
+    'Authorization'='Bearer ' + $token.AccessToken
+  }
 
-$Body = "{ `"properties`": {`"vmResourceId`": `"$($vm.id)`"} }"
+  write-output "Creating new hybrid worker group in automation account"
 
-$VmGuid = New-Guid
+  $CreateWorkerGroup = Invoke-WebRequest `
+                        -uri "https://$azureLocation.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)/hybridRunbookWorkerGroups/$HybridWorkerGroupName`?api-version=2021-06-22" `
+                        -Headers $authHeader `
+                        -Method PUT `
+                        -ContentType 'application/json' `
+                        -Body '{}' `
+                        -UseBasicParsing
+                  
 
-write-output "Associating VM with automation account"
-$AddVmToAA = Invoke-WebRequest `
-                -uri "https://$azureLocation.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)/hybridRunbookWorkerGroups/$HybridWorkerGroupName/hybridRunbookWorkers/$VmGuid`?api-version=2021-06-22" `
+  $Body = "{ `"properties`": {`"vmResourceId`": `"$($vm.id)`"} }"
+
+  $VmGuid = New-Guid
+
+  write-output "Associating VM with automation account"
+  $AddVmToAA = Invoke-WebRequest `
+                  -uri "https://$azureLocation.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)/hybridRunbookWorkerGroups/$HybridWorkerGroupName/hybridRunbookWorkers/$VmGuid`?api-version=2021-06-22" `
+                  -Headers $authHeader `
+                  -Method PUT `
+                  -ContentType 'application/json' `
+                  -Body $Body `
+                  -UseBasicParsing
+
+
+  write-output "Get automation hybrid service url"
+  $Response = Invoke-WebRequest `
+                -uri "https://westcentralus.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)?api-version=2021-06-22" `
                 -Headers $authHeader `
-                -Method PUT `
-                -ContentType 'application/json' `
-                -Body $Body `
                 -UseBasicParsing
 
+  $AAProperties =  ($response.Content | ConvertFrom-Json).properties
+  $AutomationHybridServiceUrl = $AAProperties.automationHybridServiceUrl
 
-write-output "Get automation hybrid service url"
-$Response = Invoke-WebRequest `
-              -uri "https://westcentralus.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)?api-version=2021-06-22" `
-              -Headers $authHeader `
-              -UseBasicParsing
+  $settings = @{
+    "AutomationAccountURL"  = "$AutomationHybridServiceUrl"
+  }
 
-$AAProperties =  ($response.Content | ConvertFrom-Json).properties
-$AutomationHybridServiceUrl = $AAProperties.automationHybridServiceUrl
+  Write-Output "Adding VM to hybrid worker group"
+  $SetExtension = Set-AzVMExtension -ResourceGroupName $VMResourceGroup `
+                    -Location $azureLocation `
+                    -VMName $VMName `
+                    -Name "HybridWorkerExtension" `
+                    -Publisher "Microsoft.Azure.Automation.HybridWorker" `
+                    -ExtensionType HybridWorkerForWindows `
+                    -TypeHandlerVersion 0.1 `
+                    -Settings $settings
 
-$settings = @{
-  "AutomationAccountURL"  = "$AutomationHybridServiceUrl"
+  if ($SetExtension.StatusCode -eq 'OK') {
+    write-output "VM successfully added to hybrid worker group"
+  }
 }
+catch {
+  write-output "Encountered error $_"
+  write-output "Rolling back changes"
 
-Write-Output "Adding VM to hybrid worker group"
-$SetExtension = Set-AzVMExtension -ResourceGroupName $VMResourceGroup `
-                  -Location $azureLocation `
-                  -VMName $VMName `
-                  -Name "HybridWorkerExtension" `
-                  -Publisher "Microsoft.Azure.Automation.HybridWorker" `
-                  -ExtensionType HybridWorkerForWindows `
-                  -TypeHandlerVersion 0.1 `
-                  -Settings $settings
+  write-output "Removing worker from hybrid worker group"
+  if ($SetExtension) {
+    $RemoveHybridRunbookWorker = Invoke-WebRequest `
+                    -uri "https://$azureLocation.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)/hybridRunbookWorkerGroups/$HybridWorkerGroupName/hybridRunbookWorkers/$VmGuid`?api-version=2021-06-22" `
+                    -Headers $authHeader `
+                    -Method Delete  `
+                    -ContentType 'application/json' `
+                    -UseBasicParsing `
+                    -ErrorAction Continue
+  }
 
-if ($SetExtension.StatusCode -eq 'OK') {
-  write-output "VM successfully added to hybrid worker group"
+  write-output "Removing hybrid worker group"
+  if ($CreateWorkerGroup) {
+    $RemoveWorkerGroup = Invoke-WebRequest `
+                          -uri "https://$azureLocation.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)/hybridRunbookWorkerGroups/$HybridWorkerGroupName`?api-version=2021-06-22" `
+                          -Headers $authHeader `
+                          -Method Delete `
+                          -ContentType 'application/json' `
+                          -UseBasicParsing `
+                          -ErrorAction Continue
+  }
+  if ($VM) {
+    write-output "removing VM $VMName"
+    Remove-AzVM -Name $VMName -Force -ErrorAction Continue
+  }
+  if ($azureNIC) {
+    write-output "removing NIC $azureNicName"
+    Remove-AzNetworkInterface -Name $azureNicName -ResourceGroupName $VMResourceGroup -Force -ErrorAction Continue
+  }
+  $disk = Get-AzDisk -ResourceGroupName $VMResourceGroup -DiskName $azureVmOsDiskName -ErrorAction Continue
+  if ($disk) {
+    Remove-AzDisk -ResourceGroupName $AzureResourceGroupName -DiskName $azureVmOsDiskName -Force
+  }
 }
