@@ -266,19 +266,60 @@ try {
           Remove-Item -Path `$certPath -ErrorAction SilentlyContinue | Out-Null
       }
   }
-
+  function Ensure-RequiredAzModulesInstalled
+  {
+      # ------------------------------------------------------------------------------
+      # Install Az modules if Az.Accounts or Az.KeyVault modules are not installed yet
+      # ------------------------------------------------------------------------------
+  
+      `$modules = Get-Module -ListAvailable
+      if (!(`$modules.Name -Contains "Az.Accounts") -or !(`$modules.Name -Contains "Az.KeyVault")) {
+          `$policy = Get-ExecutionPolicy -Scope CurrentUser
+          try {
+              Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser | Out-Null
+              `$nugetProvider = Get-PackageProvider -ListAvailable | Where-Object { `$_.Name -eq "Nuget" }
+              if (!`$nugetProvider -or (`$nugetProvider.Version | Where-Object { `$_ -ge [Version]::new("2.8.5.201") }).length -eq 0) {
+                  Install-PackageProvider -Name "Nuget" -Scope CurrentUser -Force | Out-Null
+              }
+              Install-Module -Name "Az" -Scope CurrentUser -Repository "PSGallery" -Force | Out-Null
+          }
+          finally
+          {
+              Set-ExecutionPolicy -ExecutionPolicy `$policy -Scope CurrentUser | Out-Null
+          }
+          Import-Module -Name "Az.Accounts" | Out-Null
+          Import-Module -Name "Az.KeyVault" | Out-Null
+      }
+  }
   Ensure-AutomationCertIsImported -AzureAutomationCertificateName $AzureAutomationCertificateName 
+  Ensure-RequiredAzModulesInstalled
 "@
 
-  $Script > .\Ensure-AutomationCertIsImported.ps1 
-  $InstallCertificate = Invoke-AzVMRunCommand -VMName $vmname -ResourceGroupName $VMResourceGroup -CommandId 'RunPowerShellScript' -ScriptPath .\Ensure-AutomationCertIsImported.ps1 
+  write-output "Creating runbook to import automation certificate to hybrid worker vm"
+  $Script > .\Ensure-CertAndModulesAreImported.ps1 
+  $ImportRunbook = Import-AzAutomationRunbook -ResourceGroupName $NMEResourceGroupName -AutomationAccountName $aa.AutomationAccountName -Path .\Ensure-CertAndModulesAreImported.ps1 -Type PowerShell -Name "Import-CertAndModulesToHybridRunbookWorker" -Force
+  $PublishRunbook = Publish-AzAutomationRunbook -ResourceGroupName $NMEResourceGroupName -AutomationAccountName $aa.AutomationAccountName -Name "Import-CertAndModulesToHybridRunbookWorker" 
+  write-output "Importing certificate to hybrid worker vm"
+  $Job = Start-AzAutomationRunbook -Name "Import-CertAndModulesToHybridRunbookWorker" -ResourceGroupName $NMEResourceGroupName -AutomationAccountName $aa.AutomationAccountName -RunOn $HybridWorkerGroupName
 
-  if ($InstallCertificate.Value[1].Message) {
-    Throw $InstallCertificate.Value[1].Message
+  Do {
+    if ($job.status -eq 'Failed') {
+      Write-Output "Job to import certificate and az modules to hybrid worker failed"
+      Throw $job.Exception
+    }
+    if ($job.Status -eq 'Stopped') {
+      write-output "Job to import certificate to hybrid worker was stopped in Azure. Please import the Nerdio manager certificate and az modules to hybrid worker vm manually"
+    }
+    write-output "Waiting for job to complete"
+    sleep 30
+    $job = Get-AzAutomationJob -Id $job.JobId -ResourceGroupName $NMEResourceGroupName -AutomationAccountName $aa.AutomationAccountName
+  }
+  while ($job.status -notmatch 'Completed|Stopped|Failed')
+  if ($job.status -eq 'Completed'){
+    Write-Output "Installed certificate and az modules on hybrid runbook worker vm"
   }
 
-  Write-Output $InstallCertificate.Value[0].Message
-  
+
 }
 catch {
   Write-Error "Encountered error $_"
