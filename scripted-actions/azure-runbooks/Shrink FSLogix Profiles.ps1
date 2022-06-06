@@ -146,7 +146,10 @@ if ([string]::IsNullOrEmpty($StorageAccountUser) -or [string]::IsNullOrEmpty($St
 
 #Get the subnet details for the specified virtual network + subnet combination.
 Write-Output "Getting vnet details"
-$Vnet = Get-AzVirtualNetwork -Name $azureVnetName
+$Vnet = Get-AzVirtualNetwork -Name $azureVnetName 
+if (!$vnet) {
+  Throw "Unable to get virtual network $AzureVnetName. Please check the name."
+}
 
 # use resource group of vnet if not specified in parameters or securevars
 if ([string]::IsNullOrEmpty($AzureResourceGroup)) {
