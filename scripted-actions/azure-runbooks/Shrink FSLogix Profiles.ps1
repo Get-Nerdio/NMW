@@ -29,7 +29,7 @@ The Invoke-FslShrinkDisk script used here was written by Jim Moyle.
 See https://github.com/FSLogix/Invoke-FslShrinkDisk/blob/master/Invoke-FslShrinkDisk.ps1 for more 
 information on the FSLogix-ShrinkDisk.ps1 script and arguments you can pass to it.
 
-To adjust the arguments passed to FSLogix-ShrinkDisk.ps1, use the AddtionalShrinkDiskParameters
+To adjust the arguments passed to FSLogix-ShrinkDisk.ps1, use the AdditionalShrinkDiskParameters
 when running this script.
 
 #>
@@ -52,7 +52,7 @@ when running this script.
     "Description": "Resource group in which to create the temp vm. If not supplied, resource group of vnet will be used.",
     "IsRequired": false
   },
-  "AddtionalShrinkDiskParameters": {
+  "AdditionalShrinkDiskParameters": {
     "Description": "parameters to send to the FSLogix-ShrinkDisk.ps1 script. E.g: -DeleteOlderThanDays 90 -IgnoreLessThanGB 5",
     "IsRequired": false
   }
@@ -99,7 +99,7 @@ if ($TempVmResourceGroup) {
 }
 
 $FSLogixLogFile = "C:\Windows\Temp\FslShrinkDisk.log"
-$InvokeFslShrinkCommand = "FSLogix-ShrinkDisk.ps1 -Path $FSLogixFileShare -Recurse -LogFilePath $FSLogixLogFile $AddtionalShrinkDiskParameters -PassThru"
+$InvokeFslShrinkCommand = "FSLogix-ShrinkDisk.ps1 -Path $FSLogixFileShare -Recurse -LogFilePath $FSLogixLogFile $AdditionalShrinkDiskParameters -PassThru"
 
 Write-Output "Variables set: 
 VNet for temp vm is $azureVnetName
