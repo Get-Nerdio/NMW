@@ -17,7 +17,7 @@ actions" to tell Nerdio to use the new hybrid worker.
 <# Variables:
 {
   "VnetName": {
-    "Description": "VNet for the hybrind worker vm",
+    "Description": "VNet for the hybrid worker vm",
     "IsRequired": true
   },
   "VnetResourceGroup": {
@@ -25,7 +25,7 @@ actions" to tell Nerdio to use the new hybrid worker.
     "IsRequired": true
   },
   "SubnetName": {
-    "Description": "Subnet for the hybrind worker vm",
+    "Description": "Subnet for the hybrid worker vm",
     "IsRequired": true
   },
   "VMName": {
@@ -64,14 +64,9 @@ $ErrorActionPreference = 'Stop'
 
 $Prefix = ($KeyVaultName -split '-')[0]
 $NMEIdString = ($KeyVaultName -split '-')[3]
-$NMEAppName = "$Prefix-app-$NMEIdString"
-$AppServicePlanName = "$Prefix-app-plan-$NMEIdString"
 $KeyVault = Get-AzKeyVault -VaultName $KeyVaultName
 $Context = Get-AzContext
-$NMESubscriptionName = $context.Subscription.Name
-$NMESubscriptionId = $context.Subscription.Id
 $NMEResourceGroupName = $KeyVault.ResourceGroupName
-$NMERegionName = $KeyVault.Location
 
 
 
@@ -79,7 +74,7 @@ $NMERegionName = $KeyVault.Location
 
 #Define the following parameters for the temp vm
 $vmAdminUsername = "LocalAdminUser"
-$vmAdminPassword = ConvertTo-SecureString "LocalAdminP@sswordHere" -AsPlainText -Force
+$vmAdminPassword = ConvertTo-SecureString (new-guid).guid -AsPlainText -Force
 $vmComputerName = $vmname[0..14] -join '' 
  
 #Define the following parameters for the Azure resources.
@@ -110,8 +105,6 @@ else {
     $LicenseType = 'Windows_Client'
 }
 
-$LAW = Get-AzOperationalInsightsWorkspace -Name "$Prefix-app-law-$NMEIdString" -ResourceGroupName $NMEResourceGroupName
-
 
 if ($AutomationAccount -eq 'ScriptedActions') {
   $AA = Get-AzAutomationAccount -ResourceGroupName $NMEResourceGroupName | Where-Object AutomationAccountName -Match 'runbooks'
@@ -131,10 +124,6 @@ try {
   #Get the subnet details for the specified virtual network + subnet combination.
   Write-Output "Getting subnet details"
   $Subnet = ($Vnet).Subnets | Where-Object {$_.Name -eq $SubnetName}
-  
-  #Create the public IP address.
-  #Write-Output "Creating public ip"
-  #$azurePublicIp = New-AzPublicIpAddress -Name $azurePublicIpName -ResourceGroupName $azureResourceGroup -Location $azureLocation -AllocationMethod Dynamic
   
   #Create the NIC and associate the public IpAddress.
   Write-Output "Creating NIC"
@@ -193,7 +182,7 @@ try {
 
   write-output "Get automation hybrid service url"
   $Response = Invoke-WebRequest `
-                -uri "https://westcentralus.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)?api-version=2021-06-22" `
+                -uri "https://$azureLocation.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)?api-version=2021-06-22" `
                 -Headers $authHeader `
                 -UseBasicParsing
 
@@ -311,7 +300,7 @@ try {
       write-output "Job to import certificate to hybrid worker was stopped in Azure. Please import the Nerdio manager certificate and az modules to hybrid worker vm manually"
     }
     write-output "Waiting for job to complete"
-    sleep 30
+    Start-Sleep 30
     $job = Get-AzAutomationJob -Id $job.JobId -ResourceGroupName $NMEResourceGroupName -AutomationAccountName $aa.AutomationAccountName
   }
   while ($job.status -notmatch 'Completed|Stopped|Failed')
