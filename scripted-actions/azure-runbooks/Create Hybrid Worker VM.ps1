@@ -304,6 +304,7 @@ try {
     $job = Get-AzAutomationJob -Id $job.JobId -ResourceGroupName $NMEResourceGroupName -AutomationAccountName $aa.AutomationAccountName
   }
   while ($job.status -notmatch 'Completed|Stopped|Failed')
+  
   if ($job.status -eq 'Completed'){
     Write-Output "Installed certificate and az modules on hybrid runbook worker vm"
   }
@@ -315,8 +316,8 @@ catch {
   Write-Error "Encountered error $_" 
   write-output "Encountered error. Rolling back changes"
 
-  write-output "Removing worker from hybrid worker group"
   if ($SetExtension) {
+    write-output "Removing worker from hybrid worker group"
     $RemoveHybridRunbookWorker = Invoke-WebRequest `
                     -uri "https://$azureLocation.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)/hybridRunbookWorkerGroups/$HybridWorkerGroupName/hybridRunbookWorkers/$VmGuid`?api-version=2021-06-22" `
                     -Headers $authHeader `
@@ -325,9 +326,9 @@ catch {
                     -UseBasicParsing `
                     -ErrorAction Continue
   }
-
-  write-output "Removing hybrid worker group"
+  
   if ($CreateWorkerGroup) {
+    write-output "Removing hybrid worker group"
     $RemoveWorkerGroup = Invoke-WebRequest `
                           -uri "https://$azureLocation.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$NMEResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)/hybridRunbookWorkerGroups/$HybridWorkerGroupName`?api-version=2021-06-22" `
                           -Headers $authHeader `
@@ -336,16 +337,20 @@ catch {
                           -UseBasicParsing `
                           -ErrorAction Continue
   }
+
   if ($VM) {
     write-output "removing VM $VMName"
     Remove-AzVM -Name $VMName -Force -ErrorAction Continue
   }
+
   if ($azureNIC) {
     write-output "removing NIC $azureNicName"
     Remove-AzNetworkInterface -Name $azureNicName -ResourceGroupName $VMResourceGroup -Force -ErrorAction Continue
   }
+
   $disk = Get-AzDisk -ResourceGroupName $VMResourceGroup -DiskName $azureVmOsDiskName -ErrorAction Continue
   if ($disk) {
+    write-output "Removing disk"
     Remove-AzDisk -ResourceGroupName $AzureResourceGroupName -DiskName $azureVmOsDiskName -Force
   }
 }
