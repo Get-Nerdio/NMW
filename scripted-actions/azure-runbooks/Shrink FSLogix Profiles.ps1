@@ -72,6 +72,7 @@ $AzureVMName = "fslshrink-tempvm"
 $azureVmSize = "Standard_D8s_v3"
 $azureVnetName = $SecureVars.FslTempVmVnet
 $azureVnetSubnetName = $SecureVars.FslTempVmSubnet
+$AzureResourceGroup = $SecureVars.FslResourceGroup
 
 #Define the storage account for the fslogix share
 $StorageAccountUser = $SecureVars.FslStorageUser # Storage account key user, usually same as storage account name
