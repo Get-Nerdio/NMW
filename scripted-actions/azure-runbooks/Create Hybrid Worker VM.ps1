@@ -146,6 +146,7 @@ try {
   Write-Output "Creating new VM"
   $VM = New-AzVM -ResourceGroupName $VMResourceGroup -Location $azureLocation -VM $VirtualMachine -Verbose -ErrorAction stop
   $VM = get-azvm -ResourceGroupName $VMResourceGroup -Name $VMName
+  $disk = Get-AzDisk -ResourceGroupName $VMResourceGroup -DiskName $azureVmOsDiskName -ErrorAction Continue
 
   $azProfile = [Microsoft.Azure.Commands.Common.Authentication.Abstractions.AzureRmProfileProvider]::Instance.Profile
   $profileClient = New-Object -TypeName Microsoft.Azure.Commands.ResourceManager.Common.RMProfileClient -ArgumentList ($azProfile)
@@ -313,7 +314,6 @@ try {
 }
 catch {
   $ErrorActionPreference = 'Continue'
-  Write-Error "Encountered error $_" 
   write-output "Encountered error. Rolling back changes"
 
   if ($SetExtension) {
@@ -348,9 +348,9 @@ catch {
     Remove-AzNetworkInterface -Name $azureNicName -ResourceGroupName $VMResourceGroup -Force -ErrorAction Continue
   }
 
-  $disk = Get-AzDisk -ResourceGroupName $VMResourceGroup -DiskName $azureVmOsDiskName -ErrorAction Continue
   if ($disk) {
     write-output "Removing disk"
     Remove-AzDisk -ResourceGroupName $AzureResourceGroupName -DiskName $azureVmOsDiskName -Force
   }
+
 }
