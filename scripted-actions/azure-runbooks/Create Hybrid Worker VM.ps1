@@ -311,8 +311,9 @@ try {
 
 }
 catch {
-  Write-Error "Encountered error $_"
-  write-output "Rolling back changes"
+  $ErrorActionPreference = 'Continue'
+  Write-Error "Encountered error $_" 
+  write-output "Encountered error. Rolling back changes"
 
   write-output "Removing worker from hybrid worker group"
   if ($SetExtension) {
