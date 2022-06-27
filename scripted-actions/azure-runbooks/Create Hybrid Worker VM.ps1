@@ -352,5 +352,5 @@ catch {
     write-output "Removing disk"
     Remove-AzDisk -ResourceGroupName $AzureResourceGroupName -DiskName $azureVmOsDiskName -Force
   }
-  write-error $_ -ErrorAction Stop
+  Throw $_ 
 }
