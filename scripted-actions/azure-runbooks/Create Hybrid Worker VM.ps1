@@ -314,7 +314,8 @@ try {
 }
 catch {
   $ErrorActionPreference = 'Continue'
-  write-output "Encountered error. Rolling back changes"
+  write-output "Encountered error. $_"
+  write-output "Rolling back changes"
 
   if ($SetExtension) {
     write-output "Removing worker from hybrid worker group"
@@ -340,7 +341,7 @@ catch {
 
   if ($VM) {
     write-output "removing VM $VMName"
-    Remove-AzVM -Name $VMName -Force -ErrorAction Continue
+    Remove-AzVM -Name $VMName -ResourceGroupName $VMResourceGroup  -Force -ErrorAction Continue
   }
 
   if ($azureNIC) {
@@ -350,7 +351,7 @@ catch {
 
   if ($disk) {
     write-output "Removing disk"
-    Remove-AzDisk -ResourceGroupName $AzureResourceGroupName -DiskName $azureVmOsDiskName -Force
+    Remove-AzDisk -ResourceGroupName $AzureResourceGroupName -DiskName $azureVmOsDiskName -Force -ErrorAction Continue
   }
   Throw $_ 
 }
