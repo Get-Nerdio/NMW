@@ -340,7 +340,7 @@ catch {
 
   if ($VM) {
     write-output "removing VM $VMName"
-    Remove-AzVM -Name $VMName -Force -ErrorAction Continue
+    Remove-AzVM -Name $VMName -ResourceGroupName $VMResourceGroup  -Force -ErrorAction Continue
   }
 
   if ($azureNIC) {
