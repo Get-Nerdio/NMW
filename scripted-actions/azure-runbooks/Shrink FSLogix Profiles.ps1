@@ -48,6 +48,12 @@ when running this script.
     "Description": "UNC path e.g. \\\\storageaccount.file.core.windows.net\\premiumfslogix01",
     "IsRequired": false
   },
+  
+  "TempVmSize": {
+    "Description": "Size of the temporary VM from which the shrink script will be run.",
+    "IsRequired": false,
+    "DefaultValue": "Standard_D16s_v4"
+  },
   "TempVmResourceGroup": {
     "Description": "Resource group in which to create the temp vm. If not supplied, resource group of vnet will be used.",
     "IsRequired": false
@@ -69,7 +75,7 @@ $ErrorActionPreference = 'Stop'
 
 $AzureRegionName = $SecureVars.FslRegion
 $AzureVMName = "fslshrink-tempvm"
-$azureVmSize = "Standard_D8s_v3"
+$azureVmSize = $TempVmSize
 $azureVnetName = $SecureVars.FslTempVmVnet
 $azureVnetSubnetName = $SecureVars.FslTempVmSubnet
 $AzureResourceGroup = $SecureVars.FslResourceGroup
@@ -113,7 +119,8 @@ Resource Group for temp vm is $azureResourceGroup"
 
 #Define the following parameters for the temp vm
 $vmAdminUsername = "LocalAdminUser"
-$vmAdminPassword = ConvertTo-SecureString "LocalAdminP@sswordHere" -AsPlainText -Force
+$Guid = (new-guid).Guid
+$vmAdminPassword = ConvertTo-SecureString "$Guid" -AsPlainText -Force
 $vmComputerName = "fslshrink-tmp"
  
 #Define the parameters for the Azure resources.
@@ -207,10 +214,18 @@ Try {
   $scriptblock > .\scriptblock.ps1
 
   Write-Output "Running shrink script on temp vm"
+  $Time = get-date
+  $job = Invoke-AzVmRunCommand -ResourceGroupName $azureResourceGroup -VMName $azureVmName -ScriptPath .\scriptblock.ps1 -CommandId 'RunPowershellScript' -AsJob
+  While ((get-job $job.id).state -eq 'Running') {
+    if ((get-date) -gt $time.AddMinutes(86)){
+      Throw "Unable to finish processing profiles before 90 minute timeout elapsed"
+    }
+    else {
+      Sleep 60
+    }
+  }
 
-  $results = Invoke-AzVmRunCommand -ResourceGroupName $azureResourceGroup -VMName $azureVmName -ScriptPath .\scriptblock.ps1 -CommandId 'RunPowershellScript'
-
-  $results | Out-String | Write-Output
+  Receive-Job -id $job.id | Out-String | Write-Output
 }
 Catch {
   Write-Output "Error during execution of script on temp VM"
