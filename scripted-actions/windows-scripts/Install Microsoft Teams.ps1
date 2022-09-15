@@ -79,7 +79,7 @@ $MSDlSite2 = Invoke-WebRequest "https://docs.microsoft.com/en-us/azure/virtual-d
 # parse through the MS Docs page to get the most up-to-date download link
 ForEach ($Href in $MSDlSite2.Links.Href)
 {
-    if ($Href -match "https://query.prod.cms.rt.microsoft.com/cms/api/am/binary" ){
+    if ($Href -match "https: //aka.ms/msrdcwebrtesvc/msi" ){
         $DLink2 = $href
     }
 }
