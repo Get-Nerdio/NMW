@@ -48,7 +48,6 @@ when running this script.
     "Description": "UNC path e.g. \\\\storageaccount.file.core.windows.net\\premiumfslogix01",
     "IsRequired": false
   },
-  
   "TempVmSize": {
     "Description": "Size of the temporary VM from which the shrink script will be run.",
     "IsRequired": false,
