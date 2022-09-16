@@ -9,8 +9,8 @@ Zoom AVD/WVD Media Plugin.
 To install specific versions, update the URL variables below with links to the .msi installers.
 #>
 
-$ZoomClientUrl= "https://zoom.us/download/vdi/5.10.2/ZoomInstallerVDI.msi"
-$ZoomAvdPluginUrl = "https://zoom.us/download/vdi/5.10.2/ZoomWVDMediaPlugin.msi"
+$ZoomClientUrl= "https://zoom.us/download/vdi/5.11.11.21790/ZoomInstallerVDI.msi"
+$ZoomAvdPluginUrl = "https://zoom.us/download/vdi/5.11.9.21750/ZoomWVDMediaPlugin.msi"
 
 # Start powershell logging
 $SaveVerbosePreference = $VerbosePreference
