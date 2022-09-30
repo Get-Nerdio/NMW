@@ -73,9 +73,7 @@ Write-Host "INFO: Installing MS Teams"
 Start-Process C:\Windows\System32\msiexec.exe `
 -ArgumentList  '/i C:\Windows\Temp\msteams_sa\install\Teams_windows_x64.msi /l*v C:\Windows\temp\NMWLogs\ScriptedActions\msteams\teams_install_log.txt ALLUSER=1 ALLUSERS=1 /qn /norestart' -Wait
 
-# get MS Docs page that has WebRTC Download link
-$MSDlSite2 = Invoke-WebRequest "https://docs.microsoft.com/en-us/azure/virtual-desktop/teams-on-wvd" -UseBasicParsing
-
+# use MS shortcut to WebRTC install
 $dlink2 = "https://aka.ms/msrdcwebrtcsvc/msi"
 
 Invoke-WebRequest -Uri $DLink2 -OutFile "C:\Windows\Temp\msteams_sa\install\MsRdcWebRTCSvc_x64.msi" -UseBasicParsing
