@@ -45,7 +45,7 @@ microsoftwindowsdesktop/windows-10/21h1-ent-g2/latest
     "DefaultValue": "True"
   },
   "ReportImageVersionsOnly": {
-    "Description": "Set to True to display a list of the current image associated with each host pool",
+    "Description": "Set to True to display a list of the current image associated with each host pool. Will not make any changes to current configuration",
     "IsRequired": false,
     "DefaultValue": "False"
   }
@@ -108,6 +108,7 @@ function Set-NerdioHostPoolAutoScale {
     )
     Set-NerdioAuthHeaders
     $json = $AutoscaleSettings | ConvertTo-Json -Depth 20
+    $json | Write-Verbose
     $HostPool = Invoke-RestMethod "$script:NerdioUri/api/v1/arm/hostpool/$SubscriptionId/$ResourceGroupName/$HostPoolName/auto-scale" -Method put -Headers $script:AuthHeaders -Body $json -ContentType 'application/json'
 
 }
@@ -232,31 +233,59 @@ if ([System.Convert]::ToBoolean($ReportImageVersionsOnly)) {
         $SubscriptionId = ($hp.id -split '/')[2]
         $ResourceGroupName = ($hp.id -split '/')[4]
         Write-Verbose "Getting auto-scale settings for host pool $($hp.name)"
-        $HpAs = Get-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -ErrorAction Continue
-        $ReimageJob = Get-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -ErrorAction Continue
+        $HpAs = Get-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -ErrorAction SilentlyContinue
+        $ReimageJob = Get-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -ErrorAction SilentlyContinue
         $images += New-Object -Property @{HpName = $hp.name; Image = $hpas.vmTemplate.image; ScheduledReimage = $ReimageJob.jobParams.image} -TypeName psobject
     }
     $images | Select-Object HpName,Image,ScheduledReimage
 }
 else {
-        foreach ($hp in $HostPools) {
+    foreach ($hp in $HostPools) {
         $SubscriptionId = ($hp.id -split '/')[2]
         $ResourceGroupName = ($hp.id -split '/')[4]
-        Write-Verbose "Getting auto-scale settings for host pool $($hp.name)"
-        $HpAs = Get-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -ErrorAction Continue
+        Write-Output "Getting auto-scale settings for host pool $($hp.name)"
+        try {
+            $HpAs = Get-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName 
+        }
+        catch {
+            Write-Error  "Unable to retrieve host pool settings for $($hp.name). Recieved error $($_)" -ErrorAction Continue
+            Write-Output "Encountered error. Proceeding to next host pool"
+            continue
+        }
     
         if ($HpAs.vmTemplate.image -eq $CurrentImage){
             Write-Output "Host pool $($hp.name) auto-scale is using current image. Changing to new image."
             $HpAs.vmTemplate.image = $NewImage
-            Set-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AutoscaleSettings $HpAs
+            try {
+                Set-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AutoscaleSettings $HpAs 
+            }
+            catch {
+                Write-Output "Error updaing host pool settings for $($hp.name). Error is $($_)"
+                Write-Error "Error updaing host pool settings for $($hp.name). Error is $($_)" -ErrorAction Continue
+            }
+        }
+        else {
+            Write-Output "Host pool is not using current image"
         }
         if ([System.Convert]::ToBoolean($UpdateScheduledReimage)){
-            $ReimageJob = Get-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -ErrorAction Continue
+            try {
+                $ReimageJob = Get-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName 
+            }
+            catch {
+                Write-Verbose "No scheduled reimage job for hp $($hp.name)."
+                continue
+            }
             if ($ReimageJob.jobParams.image -eq $CurrentImage) {
                 Write-Output "Host pool $($hp.name) scheduled reimage is using current image. Changing to new image."
                 $ReimageJob.jobParams.image = $NewImage
                 $ScheduledReimageParams = $ReimageJob | Convertto-NerdioScheduledReimageParams
-                Set-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -ScheduledReimageParams $ScheduledReimageParams
+                try { 
+                    Set-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -ScheduledReimageParams $ScheduledReimageParams
+                }
+                catch {
+                    Write-Output     "Unable to update scheduled reimage job for host pool $($hp.name). $_"
+                    Write-Error "Unable to update scheduled reimage job for host pool $($hp.name). $_" -ErrorAction Continue
+                }
             }
         }
     }
