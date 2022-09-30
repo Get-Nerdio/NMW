@@ -76,13 +76,8 @@ Start-Process C:\Windows\System32\msiexec.exe `
 # get MS Docs page that has WebRTC Download link
 $MSDlSite2 = Invoke-WebRequest "https://docs.microsoft.com/en-us/azure/virtual-desktop/teams-on-wvd" -UseBasicParsing
 
-# parse through the MS Docs page to get the most up-to-date download link
-ForEach ($Href in $MSDlSite2.Links.Href)
-{
-    if ($Href -match "https: //aka.ms/msrdcwebrtesvc/msi" ){
-        $DLink2 = $href
-    }
-}
+$dlink2 = "https://aka.ms/msrdcwebrtcsvc/msi"
+
 Invoke-WebRequest -Uri $DLink2 -OutFile "C:\Windows\Temp\msteams_sa\install\MsRdcWebRTCSvc_x64.msi" -UseBasicParsing
 
 # install Teams WebRTC Websocket Service
