@@ -230,42 +230,6 @@ function Convertto-NerdioScheduledReimageParams{
     $Parameters = @{reimage = $Reimage; schedule = $Schedule}
     $Parameters 
 
-    <#
-{
-  "reimage": {
-    "reimageParams": {
-      "image": "MicrosoftWindowsDesktop/Windows-10/20h1-evd/latest",
-      "vmSize": "Standard_D2s_v3",
-      "storageType": "StandardSSD_LRS",
-      "diskSize": 128,
-      "hasEphemeralOSDisk": false,
-      "setToDrainModeWhileProcessing": false,
-      "ephemeralOSDiskPlacement": null
-    },
-    "concurrency": {
-      "tasks": 1,
-      "maxFailedTasks": 1
-    },
-    "messaging": {
-      "message": "Sorry for the interruption. We are doing some maintenance and need you to log out. We will be terminating your session in 10 minutes if you haven't logged out by then.",
-      "delayMinutes": 10,
-      "logOffAggressiveness": null,
-      "deactivateBeforeOperation": null,
-      "timeoutInDays": null
-    }
-  },
-  "schedule": {
-    "startDate": "2022-09-27T00:00:00Z",
-    "startHour": 8,
-    "startMinutes": 30,
-    "timeZoneId": "Central Standard Time",
-    "scheduleRecurrenceType": "Weekly",
-    "dayOfWeekNumber": null,
-    "dayOfWeek": 1,
-    "offsetInDays": null
-  }
-}
-#>
 }
 
 function ParseErrorForResponseBody($ErrorObj) {
@@ -286,14 +250,11 @@ function ParseErrorForResponseBody($ErrorObj) {
     }
 }
 
-
-
 Set-NerdioAuthHeaders -Force
 
 $AzResourceGroups = Get-AzResourceGroup
 $NerdioResourceGroups = Get-NerdioLinkedResourceGroups | Where-Object name -in $AzResourceGroups.ResourceGroupName
 $HostPools = $NerdioResourceGroups.name | ForEach-Object {Get-AzWvdHostPool -ResourceGroupName $_}
-
 
 if ([System.Convert]::ToBoolean($ReportImageVersionsOnly)) {
     $images =@()
