@@ -45,7 +45,7 @@ microsoftwindowsdesktop/windows-10/21h1-ent-g2/latest
     "DefaultValue": "True"
   },
   "ReportImageVersionsOnly": {
-    "Description": "Set to True to display a list of the current image associated with each host pool",
+    "Description": "Set to True to display a list of the current image associated with each host pool. Will not make any changes to current configuration",
     "IsRequired": false,
     "DefaultValue": "False"
   }
@@ -60,12 +60,8 @@ $ErrorActionPreference = 'Stop'
 $script:ClientId = $SecureVars.NerdioApiClientId
 $script:Scope = $SecureVars.NerdioApiScope
 $script:ClientSecret = $SecureVars.NerdioApiKey
-
-##### Get Nerdio Environment Information #####
-
-$AppServiceName = $KeyVaultName -replace '-kv',''
-[string]$script:TenantId = (Get-AzKeyVault -VaultName $KeyVaultName).TenantId
-$script:NerdioUri = "https://$AppServiceName.azurewebsites.net"
+$script:TenantId = $SecureVars.NerdioAPITenantId
+$script:NerdioUri = $SecureVars.NerdioAPIUrl
 
 #####
 
@@ -73,16 +69,36 @@ $script:NerdioUri = "https://$AppServiceName.azurewebsites.net"
 function Set-NerdioAuthHeaders {
     [CmdletBinding()]
     param([switch]$Force)
-    if ($Script:AuthHeaders -eq $null -or ($Script:TokenCreationTime -lt (get-date).AddSeconds(-3599)) -or $Force){
+    if ($null -eq $Script:AuthHeaders -or ($Script:TokenCreationTime -lt (get-date).AddSeconds(-3599)) -or $Force){
         Write-Verbose "Renewing token"
         $body = "grant_type=client_credentials&client_id=$ClientId&scope=$Scope&client_secret=$ClientSecret"
-        $response = Invoke-RestMethod "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token" -Method 'POST' -Body $body
+        try {
+            $response = Invoke-RestMethod "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token" -Method 'POST' -Body $body
+        }
+        catch {
+            $message = ParseErrorForResponseBody($_)
+            write-error $message
+        }
         $Script:TokenCreationTime = get-date
         $script:AuthHeaders = New-Object "System.Collections.Generic.Dictionary[[String],[String]]"
         $script:AuthHeaders.Add("Authorization", "Bearer $($response.access_token)")
     }
 
 
+}
+
+function Get-NerdioLinkedResourceGroups {
+    [CmdletBinding()]
+    Param()
+    Set-NerdioAuthHeaders
+    try {
+        $RGs = Invoke-RestMethod "$script:NerdioUri/api/v1/resourcegroup" -Method Get -Headers $script:AuthHeaders -UseBasicParsing
+        $RGs
+    }
+    catch {
+        $message = ParseErrorForResponseBody($_)
+        write-error $message
+    }
 }
 
 function Get-NerdioHostPoolAutoScale {
@@ -93,9 +109,14 @@ function Get-NerdioHostPoolAutoScale {
         [string]$ResourceGroupName
     )
     Set-NerdioAuthHeaders
-    $HostPool = Invoke-RestMethod "$script:NerdioUri/api/v1/arm/hostpool/$SubscriptionId/$ResourceGroupName/$HostPoolName/auto-scale" -Method Get -Headers $script:AuthHeaders
-
-    $HostPool
+    try {
+        $HostPool = Invoke-RestMethod "$script:NerdioUri/api/v1/arm/hostpool/$SubscriptionId/$ResourceGroupName/$HostPoolName/auto-scale" -Method Get -Headers $script:AuthHeaders -UseBasicParsing
+        $HostPool
+    }
+    catch {
+        $message = ParseErrorForResponseBody($_)
+        write-error $message
+    }
 }
 
 function Set-NerdioHostPoolAutoScale {
@@ -108,8 +129,21 @@ function Set-NerdioHostPoolAutoScale {
     )
     Set-NerdioAuthHeaders
     $json = $AutoscaleSettings | ConvertTo-Json -Depth 20
-    $HostPool = Invoke-RestMethod "$script:NerdioUri/api/v1/arm/hostpool/$SubscriptionId/$ResourceGroupName/$HostPoolName/auto-scale" -Method put -Headers $script:AuthHeaders -Body $json -ContentType 'application/json'
-
+    $json | Write-Verbose
+    if ($AutoscaleSettings.autoscaleTriggers.triggertype -eq 'PersonalAutoShrink') {
+        $uri = "$script:NerdioUri/api/v1/arm/hostpool/$SubscriptionId/$ResourceGroupName/$HostPoolName/auto-scale?multiTriggers=true"
+    }
+    else {
+        $uri = "$script:NerdioUri/api/v1/arm/hostpool/$SubscriptionId/$ResourceGroupName/$HostPoolName/auto-scale"
+    }
+    try {
+        $HostPool = Invoke-RestMethod "$uri" -Method put -Headers $script:AuthHeaders -Body $json -ContentType 'application/json' -UseBasicParsing 
+        $HostPool
+    }
+    catch {
+        $message = ParseErrorForResponseBody($_)
+        write-error $message
+    }
 }
 
 function Get-NerdioHostPoolScheduledReimage {
@@ -121,8 +155,14 @@ function Get-NerdioHostPoolScheduledReimage {
     )
     Set-NerdioAuthHeaders
 
-    $ReimageJob = Invoke-RestMethod "$script:NerdioUri/api/v1/arm/hostpool/$SubscriptionId/$ResourceGroupName/$HostPoolName/schedule/reimage/job-params" -Method get -Headers $script:AuthHeaders -Body $json -ContentType 'application/json'
-    $ReimageJob
+    try {
+        $ReimageJob = Invoke-RestMethod "$script:NerdioUri/api/v1/arm/hostpool/$SubscriptionId/$ResourceGroupName/$HostPoolName/schedule/reimage/job-params" -Method get -Headers $script:AuthHeaders -ContentType 'application/json'
+        $ReimageJob
+    }
+    catch {
+        $message = ParseErrorForResponseBody($_)
+        write-error $message
+    }
 }
 
 function Set-NerdioHostPoolScheduledReimage {
@@ -137,8 +177,14 @@ function Set-NerdioHostPoolScheduledReimage {
     $json = $ScheduledReimageParams | ConvertTo-Json -Depth 20
     Write-Verbose "json:"
     Write-Verbose $json 
-    $SetReimageJob = Invoke-RestMethod "$script:NerdioUri/api/v1/arm/hostpool/$SubscriptionId/$ResourceGroupName/$HostPoolName/schedule/reimage" -Method Post -Headers $script:AuthHeaders -Body $json -ContentType 'application/json'
-    $SetReimageJob
+    try {
+        $SetReimageJob = Invoke-RestMethod "$script:NerdioUri/api/v1/arm/hostpool/$SubscriptionId/$ResourceGroupName/$HostPoolName/schedule/reimage" -Method Post -Headers $script:AuthHeaders -Body $json -ContentType 'application/json'
+        $SetReimageJob
+    }
+    catch {
+        $message = ParseErrorForResponseBody($_)
+        write-error $message
+    }
 }
 
 function Convertto-NerdioScheduledReimageParams{
@@ -222,41 +268,134 @@ function Convertto-NerdioScheduledReimageParams{
 #>
 }
 
+function ParseErrorForResponseBody($ErrorObj) {
+    if ($PSVersionTable.PSVersion.Major -lt 6) {
+        if ($ErrorObj.Exception.Response) {  
+            $Reader = New-Object System.IO.StreamReader($ErrorObj.Exception.Response.GetResponseStream())
+            $Reader.BaseStream.Position = 0
+            $Reader.DiscardBufferedData()
+            $ResponseBody = $Reader.ReadToEnd()
+            if ($ResponseBody.StartsWith('{')) {
+                $ResponseBody = $ResponseBody | ConvertFrom-Json
+            }
+            return $ResponseBody.errormessage
+        }
+    }
+    else {
+        return $ErrorObj.ErrorDetails.Message
+    }
+}
+
+
+
 Set-NerdioAuthHeaders -Force
 
-$HostPools = Get-AzWvdHostPool -SubscriptionId $AzureSubscriptionID
+$AzResourceGroups = Get-AzResourceGroup
+$NerdioResourceGroups = Get-NerdioLinkedResourceGroups | Where-Object name -in $AzResourceGroups.ResourceGroupName
+$HostPools = $NerdioResourceGroups.name | ForEach-Object {Get-AzWvdHostPool -ResourceGroupName $_}
+
 
 if ([System.Convert]::ToBoolean($ReportImageVersionsOnly)) {
     $images =@()
     foreach ($hp in $HostPools) {
         $SubscriptionId = ($hp.id -split '/')[2]
         $ResourceGroupName = ($hp.id -split '/')[4]
+        
         Write-Verbose "Getting auto-scale settings for host pool $($hp.name)"
-        $HpAs = Get-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -ErrorAction Continue
-        $ReimageJob = Get-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -ErrorAction Continue
-        $images += New-Object -Property @{HpName = $hp.name; Image = $hpas.vmTemplate.image; ScheduledReimage = $ReimageJob.jobParams.image} -TypeName psobject
+        try {
+            $HpAs = Get-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName 
+        }
+        catch {
+            if ($_.exception.message -match 'not found'){
+                Write-Verbose $_.exception.message 
+                continue
+            }
+            else {
+                Write-Error  "Unable to retrieve host pool settings for $($hp.name). Recieved error $($_.exception.message)" -ErrorAction Continue
+                Write-Output "Unable to retrieve host pool settings for $($hp.name). Recieved error $($_.exception.message)"
+                continue
+            }
+        }
+        try {
+            $ReimageJob = Get-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName 
+        }
+        catch {
+            if ($_.exception.message -match 'not found'){
+                Write-Verbose $_.exception.message
+                continue
+            }
+            else {
+                Write-Error  "Unable to retrieve scheduled reimage settings for $($hp.name). Recieved error $($_.exception.message)" -ErrorAction Continue
+                Write-Output "Encountered error. Proceeding to next host pool"
+                continue
+            }
+        }
+        finally {
+            $images += New-Object -Property @{HpName = $hp.name; Image = $hpas.vmTemplate.image; ScheduledReimage = $ReimageJob.jobParams.image} -TypeName psobject
+        }
     }
     $images | Select-Object HpName,Image,ScheduledReimage
 }
 else {
-        foreach ($hp in $HostPools) {
+    foreach ($hp in $HostPools) {
         $SubscriptionId = ($hp.id -split '/')[2]
         $ResourceGroupName = ($hp.id -split '/')[4]
         Write-Verbose "Getting auto-scale settings for host pool $($hp.name)"
-        $HpAs = Get-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -ErrorAction Continue
+        try {
+            $HpAs = Get-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName 
+        }
+        catch {
+            if ($_.exception.message -match 'not found'){
+                Write-Verbose "Host pool $($hp.name) not found in NME. Continuing."
+                continue
+            }
+            else {
+                Write-Error  "Unable to retrieve host pool settings for $($hp.name). Recieved error $($_.exception.message)" -ErrorAction Continue
+                Write-Output "Unable to retrieve host pool settings for $($hp.name). Recieved error $($_.exception.message)"
+                continue
+            }
+        }
     
         if ($HpAs.vmTemplate.image -eq $CurrentImage){
             Write-Output "Host pool $($hp.name) auto-scale is using current image. Changing to new image."
             $HpAs.vmTemplate.image = $NewImage
-            Set-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AutoscaleSettings $HpAs
+            try {
+                $UpdateAs = Set-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AutoscaleSettings $HpAs 
+            }
+            catch {
+                Write-Output "Error updaing host pool settings for $($hp.name). Error is $($_.exception.message)"
+                Write-Error "Error updaing host pool settings for $($hp.name). Error is $($_.exception.message)" -ErrorAction Continue
+            }
+        }
+        else {
+            Write-Verbose "Host pool $($hp.name) is not using current image"
         }
         if ([System.Convert]::ToBoolean($UpdateScheduledReimage)){
-            $ReimageJob = Get-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -ErrorAction Continue
+            try {
+                $ReimageJob = Get-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName 
+            }
+            catch {
+                if ($_.exception.message -match 'not found'){
+                    Write-Verbose "No scheduled reimage job for hp $($hp.name)."
+                    continue
+                }
+                else {
+                    Write-Error  "Unable to retrieve reimage job settings for $($hp.name). Recieved error $($_.exception.message)" -ErrorAction Continue
+                    Write-Output "Unable to retrieve reimage job settings for $($hp.name). Recieved error $($_.exception.message)"
+                    continue
+                }
+            }
             if ($ReimageJob.jobParams.image -eq $CurrentImage) {
                 Write-Output "Host pool $($hp.name) scheduled reimage is using current image. Changing to new image."
                 $ReimageJob.jobParams.image = $NewImage
                 $ScheduledReimageParams = $ReimageJob | Convertto-NerdioScheduledReimageParams
-                Set-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -ScheduledReimageParams $ScheduledReimageParams
+                try { 
+                    Set-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -ScheduledReimageParams $ScheduledReimageParams
+                }
+                catch {
+                    Write-Output "Unable to update scheduled reimage job for host pool $($hp.name). $($_.exception.message)"
+                    Write-Error "Unable to update scheduled reimage job for host pool $($hp.name). $($_.exception.message)" -ErrorAction Continue
+                }
             }
         }
     }
