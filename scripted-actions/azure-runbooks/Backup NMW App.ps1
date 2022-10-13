@@ -6,7 +6,7 @@ The App service plan used by the NMW App MUST be standard or premium in order to
 this script effectively.
 
 This script backs up NMW app components to a specified storage account (or creates one if needed). 
-See https://nmw.zendesk.com/hc/en-us/articles/360055728674-Backing-up-and-restoring-Nerdio-Manager-for-WVD-configuration
+See https://nmw.zendesk.com/hc/en-us/articles/4731671906071-Back-Up-and-Restore-Nerdio-Manager-Configuration
 for more details on methods used by this script.
 
 When running the scripted action, run it using the subscription that holds the Nerdio NMW app service.
