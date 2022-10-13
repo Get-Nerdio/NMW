@@ -251,9 +251,11 @@ function ParseErrorForResponseBody($ErrorObj) {
 }
 
 Set-NerdioAuthHeaders -Force
-
+write-output "Getting resource groups"
 $AzResourceGroups = Get-AzResourceGroup
+Write-Output "Getting Nerdio RGs"
 $NerdioResourceGroups = Get-NerdioLinkedResourceGroups | Where-Object name -in $AzResourceGroups.ResourceGroupName
+Write-Output "Getting Host Pools"
 $HostPools = $NerdioResourceGroups.name | ForEach-Object {Get-AzWvdHostPool -ResourceGroupName $_}
 
 if ([System.Convert]::ToBoolean($ReportImageVersionsOnly)) {
