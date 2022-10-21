@@ -16,16 +16,18 @@ nerdioAPIUrl
 The CurrentImage and NewImage parameters require the full resource id of the Azure image or VM.
 
 If using an image based on a VM (such as a Nerdio Desktop Image VM), the format will looks like: 
-/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourcegroups/your-resource-group/providers/microsoft.compute/virtualmachines/your-vm
+/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourcegroups/your-resource-group/providers/microsoft.compute/virtualmachines/yourVm
 
 If using an image from Azure compute images, the format will look like this:
-/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourcegroups/your-resource-group/providers/microsoft.compute/images/your-image
+/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourcegroups/your-resource-group/providers/microsoft.compute/images/yourImage
 
 If using an image from an image gallery, the format will look like this:
-/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourcegroups/your-resource-group/providers/microsoft.compute/galleries/your-image-gallery/images/your-image
+/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourcegroups/your-resource-group/providers/microsoft.compute/galleries/your-image-gallery/images/yourImage
 
 If using a marketplace image, the format will look like this (with no leading slash)
 microsoftwindowsdesktop/windows-10/21h1-ent-g2/latest
+
+This script may not work on subscriptions that were linked via a Client App registration
 
 #>
 
@@ -44,8 +46,8 @@ microsoftwindowsdesktop/windows-10/21h1-ent-g2/latest
     "IsRequired": false,
     "DefaultValue": "True"
   },
-  "ReportImageVersionsOnly": {
-    "Description": "Set to True to display a list of the current image associated with each host pool. Will not make any changes to current configuration",
+  "ReportOnly": {
+    "Description": "Set to True to display a list of host pools that will be updated. Will not make any changes to current configuration",
     "IsRequired": false,
     "DefaultValue": "False"
   }
@@ -62,6 +64,7 @@ $script:Scope = $SecureVars.NerdioApiScope
 $script:ClientSecret = $SecureVars.NerdioApiKey
 $script:TenantId = $SecureVars.NerdioAPITenantId
 $script:NerdioUri = $SecureVars.NerdioAPIUrl
+$script:ReportOnly = [System.Convert]::ToBoolean($ReportOnly)
 
 #####
 
@@ -252,58 +255,28 @@ function ParseErrorForResponseBody($ErrorObj) {
 
 Set-NerdioAuthHeaders -Force
 
-$AzResourceGroups = Get-AzResourceGroup
-$NerdioResourceGroups = Get-NerdioLinkedResourceGroups | Where-Object name -in $AzResourceGroups.ResourceGroupName
-$HostPools = $NerdioResourceGroups.name | ForEach-Object {Get-AzWvdHostPool -ResourceGroupName $_}
+Write-Output "Getting Nerdio RGs"
+$NerdioResourceGroups = Get-NerdioLinkedResourceGroups 
+Write-Output "Getting subscriptions"
+$subs = Get-AzSubscription
 
-if ([System.Convert]::ToBoolean($ReportImageVersionsOnly)) {
-    $images =@()
-    foreach ($hp in $HostPools) {
-        $SubscriptionId = ($hp.id -split '/')[2]
-        $ResourceGroupName = ($hp.id -split '/')[4]
-        
-        Write-Verbose "Getting auto-scale settings for host pool $($hp.name)"
-        try {
-            $HpAs = Get-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName 
-        }
-        catch {
-            if ($_.exception.message -match 'not found'){
-                Write-Verbose $_.exception.message 
-                continue
-            }
-            else {
-                Write-Error  "Unable to retrieve host pool settings for $($hp.name). Recieved error $($_.exception.message)" -ErrorAction Continue
-                Write-Output "Unable to retrieve host pool settings for $($hp.name). Recieved error $($_.exception.message)"
-                continue
-            }
-        }
-        try {
-            $ReimageJob = Get-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName 
-        }
-        catch {
-            if ($_.exception.message -match 'not found'){
-                Write-Verbose $_.exception.message
-                continue
-            }
-            else {
-                Write-Error  "Unable to retrieve scheduled reimage settings for $($hp.name). Recieved error $($_.exception.message)" -ErrorAction Continue
-                Write-Output "Encountered error. Proceeding to next host pool"
-                continue
-            }
-        }
-        finally {
-            $images += New-Object -Property @{HpName = $hp.name; Image = $hpas.vmTemplate.image; ScheduledReimage = $ReimageJob.jobParams.image} -TypeName psobject
-        }
-    }
-    $images | Select-Object HpName,Image,ScheduledReimage
-}
-else {
+if (!$ReportOnly) {Write-output "The following host pools are being updated:"}
+else {Write-Output "The following host pools would be updated by this script. No changes will be made at this time."}
+
+foreach ($sub in $subs) {
+    Select-AzSubscription -SubscriptionObject $sub | Out-Null
+    Write-Verbose "Getting azure resource groups"
+    $AzResourceGroups = Get-AzResourceGroup 
+    $ResourceGroups = $NerdioResourceGroups | Where-Object name -in $AzResourceGroups.ResourceGroupName
+    Write-Output "Subscription: $($sub.Name)"
+    $HostPools = $ResourceGroups | select name -ExpandProperty name | ForEach-Object {Get-AzWvdHostPool -ResourceGroupName $_}
+
     foreach ($hp in $HostPools) {
         $SubscriptionId = ($hp.id -split '/')[2]
         $ResourceGroupName = ($hp.id -split '/')[4]
         Write-Verbose "Getting auto-scale settings for host pool $($hp.name)"
         try {
-            $HpAs = Get-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName 
+            $HpAs = Get-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $sub.id -ResourceGroupName $ResourceGroupName 
         }
         catch {
             if ($_.exception.message -match 'not found'){
@@ -312,20 +285,22 @@ else {
             }
             else {
                 Write-Error  "Unable to retrieve host pool settings for $($hp.name). Recieved error $($_.exception.message)" -ErrorAction Continue
-                Write-Output "Unable to retrieve host pool settings for $($hp.name). Recieved error $($_.exception.message)"
                 continue
             }
         }
     
         if ($HpAs.vmTemplate.image -eq $CurrentImage){
-            Write-Output "Host pool $($hp.name) auto-scale is using current image. Changing to new image."
+            Write-Output "$($hp.name) - AutoScale using current image."
             $HpAs.vmTemplate.image = $NewImage
-            try {
-                $UpdateAs = Set-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AutoscaleSettings $HpAs 
-            }
-            catch {
-                Write-Output "Error updaing host pool settings for $($hp.name). Error is $($_.exception.message)"
-                Write-Error "Error updaing host pool settings for $($hp.name). Error is $($_.exception.message)" -ErrorAction Continue
+            if (!$ReportOnly) {
+                try {
+                    Write-Output "$($hp.name) - updating image."
+                    $UpdateAS = Set-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $sub.id -ResourceGroupName $ResourceGroupName -AutoscaleSettings $HpAs 
+                }
+                catch {
+                    Write-Output "Error updaing host pool settings for $($hp.name). Error is $($_.exception.message)"
+                    Write-Error "Error updaing host pool settings for $($hp.name). Error is $($_.exception.message)" -ErrorAction Continue
+                }
             }
         }
         else {
@@ -333,7 +308,7 @@ else {
         }
         if ([System.Convert]::ToBoolean($UpdateScheduledReimage)){
             try {
-                $ReimageJob = Get-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName 
+                $ReimageJob = Get-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $sub.id -ResourceGroupName $ResourceGroupName 
             }
             catch {
                 if ($_.exception.message -match 'not found'){
@@ -342,25 +317,23 @@ else {
                 }
                 else {
                     Write-Error  "Unable to retrieve reimage job settings for $($hp.name). Recieved error $($_.exception.message)" -ErrorAction Continue
-                    Write-Output "Unable to retrieve reimage job settings for $($hp.name). Recieved error $($_.exception.message)"
                     continue
                 }
             }
             if ($ReimageJob.jobParams.image -eq $CurrentImage) {
-                Write-Output "Host pool $($hp.name) scheduled reimage is using current image. Changing to new image."
-                $ReimageJob.jobParams.image = $NewImage
-                $ScheduledReimageParams = $ReimageJob | Convertto-NerdioScheduledReimageParams
-                try { 
-                    Set-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -ScheduledReimageParams $ScheduledReimageParams
-                }
-                catch {
-                    Write-Output "Unable to update scheduled reimage job for host pool $($hp.name). $($_.exception.message)"
-                    Write-Error "Unable to update scheduled reimage job for host pool $($hp.name). $($_.exception.message)" -ErrorAction Continue
+                Write-Output "$($hp.name) - scheduled reimage using current image."
+                if (!$ReportOnly) {
+                    Write-Output "$($hp.name) - updating scheduled reimage."
+                    $ReimageJob.jobParams.image = $NewImage
+                    $ScheduledReimageParams = $ReimageJob | Convertto-NerdioScheduledReimageParams
+                    try { 
+                        Set-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $sub.id -ResourceGroupName $ResourceGroupName -ScheduledReimageParams $ScheduledReimageParams
+                    }
+                    catch {
+                        Write-Error "Unable to update scheduled reimage job for host pool $($hp.name). $($_.exception.message)" -ErrorAction Continue
+                    }
                 }
             }
         }
     }
 }
-
-
-
