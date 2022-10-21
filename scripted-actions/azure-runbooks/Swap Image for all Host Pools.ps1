@@ -16,16 +16,18 @@ nerdioAPIUrl
 The CurrentImage and NewImage parameters require the full resource id of the Azure image or VM.
 
 If using an image based on a VM (such as a Nerdio Desktop Image VM), the format will looks like: 
-/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourcegroups/your-resource-group/providers/microsoft.compute/virtualmachines/your-vm
+/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourcegroups/your-resource-group/providers/microsoft.compute/virtualmachines/yourVm
 
 If using an image from Azure compute images, the format will look like this:
-/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourcegroups/your-resource-group/providers/microsoft.compute/images/your-image
+/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourcegroups/your-resource-group/providers/microsoft.compute/images/yourImage
 
 If using an image from an image gallery, the format will look like this:
-/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourcegroups/your-resource-group/providers/microsoft.compute/galleries/your-image-gallery/images/your-image
+/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourcegroups/your-resource-group/providers/microsoft.compute/galleries/your-image-gallery/images/yourImage
 
 If using a marketplace image, the format will look like this (with no leading slash)
 microsoftwindowsdesktop/windows-10/21h1-ent-g2/latest
+
+This script may not work on subscriptions that were linked via a Client App registration
 
 #>
 
@@ -252,10 +254,9 @@ function ParseErrorForResponseBody($ErrorObj) {
 }
 
 Set-NerdioAuthHeaders -Force
-write-output "Getting resource groups"
-$AzResourceGroups = Get-AzResourceGroup
+
 Write-Output "Getting Nerdio RGs"
-$NerdioResourceGroups = Get-NerdioLinkedResourceGroups | Where-Object name -in $AzResourceGroups.ResourceGroupName
+$NerdioResourceGroups = Get-NerdioLinkedResourceGroups 
 Write-Output "Getting subscriptions"
 $subs = Get-AzSubscription
 
@@ -264,15 +265,18 @@ else {Write-Output "The following host pools would be updated by this script. No
 
 foreach ($sub in $subs) {
     Select-AzSubscription -SubscriptionObject $sub | Out-Null
-    Write-Verbose "Getting host pools for subscription $($sub.Name)"
-    $HostPools = $NerdioResourceGroups | ? SubscriptionId -eq $sub.id | select name -ExpandProperty name | ForEach-Object {Get-AzWvdHostPool -ResourceGroupName $_}
+    Write-Verbose "Getting azure resource groups"
+    $AzResourceGroups = Get-AzResourceGroup 
+    $ResourceGroups = $NerdioResourceGroups | Where-Object name -in $AzResourceGroups.ResourceGroupName
+    Write-Output "Subscription: $($sub.Name)"
+    $HostPools = $ResourceGroups | select name -ExpandProperty name | ForEach-Object {Get-AzWvdHostPool -ResourceGroupName $_}
 
     foreach ($hp in $HostPools) {
         $SubscriptionId = ($hp.id -split '/')[2]
         $ResourceGroupName = ($hp.id -split '/')[4]
         Write-Verbose "Getting auto-scale settings for host pool $($hp.name)"
         try {
-            $HpAs = Get-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName 
+            $HpAs = Get-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $sub.id -ResourceGroupName $ResourceGroupName 
         }
         catch {
             if ($_.exception.message -match 'not found'){
@@ -291,7 +295,7 @@ foreach ($sub in $subs) {
             if (!$ReportOnly) {
                 try {
                     Write-Output "$($hp.name) - updating image."
-                    $UpdateAS = Set-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AutoscaleSettings $HpAs 
+                    $UpdateAS = Set-NerdioHostPoolAutoScale -HostPoolName $hp.name -SubscriptionId $sub.id -ResourceGroupName $ResourceGroupName -AutoscaleSettings $HpAs 
                 }
                 catch {
                     Write-Output "Error updaing host pool settings for $($hp.name). Error is $($_.exception.message)"
@@ -304,7 +308,7 @@ foreach ($sub in $subs) {
         }
         if ([System.Convert]::ToBoolean($UpdateScheduledReimage)){
             try {
-                $ReimageJob = Get-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName 
+                $ReimageJob = Get-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $sub.id -ResourceGroupName $ResourceGroupName 
             }
             catch {
                 if ($_.exception.message -match 'not found'){
@@ -323,7 +327,7 @@ foreach ($sub in $subs) {
                     $ReimageJob.jobParams.image = $NewImage
                     $ScheduledReimageParams = $ReimageJob | Convertto-NerdioScheduledReimageParams
                     try { 
-                        Set-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -ScheduledReimageParams $ScheduledReimageParams
+                        Set-NerdioHostPoolScheduledReimage -HostPoolName $hp.name -SubscriptionId $sub.id -ResourceGroupName $ResourceGroupName -ScheduledReimageParams $ScheduledReimageParams
                     }
                     catch {
                         Write-Error "Unable to update scheduled reimage job for host pool $($hp.name). $($_.exception.message)" -ErrorAction Continue
