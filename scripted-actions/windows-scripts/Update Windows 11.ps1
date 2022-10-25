@@ -1,4 +1,4 @@
-#description: Installs latest Windows 10 updates
+#description: Installs latest Windows updates
 #execution mode: IndividualWithRestart
 #tags: Nerdio
 <#
