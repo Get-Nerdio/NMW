@@ -169,7 +169,7 @@ Write-Output "Region is $($vnet.Location)"
 Try {
   #Create the public IP address.
   Write-Output "Creating public ip"
-  $azurePublicIp = New-AzPublicIpAddress -Name $azurePublicIpName -ResourceGroupName $azureResourceGroup -Location $AzureRegionName -AllocationMethod Dynamic -Force 
+  $azurePublicIp = New-AzPublicIpAddress -Name $azurePublicIpName -ResourceGroupName $azureResourceGroup -Location $AzureRegionName -AllocationMethod Static -Sku Standard -Force 
  
   #Create the NIC and associate the public IpAddress.
   Write-Output "Creating NIC"
@@ -229,18 +229,26 @@ Try {
   }
   catch {
     Write-Output "Error during execution of script on temp VM"
-    Write-Error -Exception $_ 
+    Throw $_ 
   }
 
-  Receive-Job -id $job.id | Out-String | Write-Output
+  $job = Receive-Job -id $job.id 
+  if ($job.value.Message -like '*error*') {  
+    Write-Output "Failed. An error occurred: `n $($job.value.Message)" 
+    throw $($job.value.Message)        
+  }
+  else {
+    $job | out-string | Write-Output
+  } 
 }
 Catch {
   Write-Output "Error during execution of script on temp VM"
-  Write-Error -Exception $_ 
+  Throw $_ 
 }
 
 Finally {
   "Removing temporary VM" | Write-Output
+  Start-Sleep 180
   Remove-AzVM -Name $azureVmName -ResourceGroupName $AzureResourceGroup -Force -ErrorAction Continue
   Remove-AzDisk -ResourceGroupName $AzureResourceGroup -DiskName $azureVmOsDiskName -Force -ErrorAction Continue
   Remove-AzNetworkInterface -Name $azureNicName -ResourceGroupName $AzureResourceGroup -Force -ErrorAction Continue
