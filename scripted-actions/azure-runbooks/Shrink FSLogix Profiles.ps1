@@ -48,7 +48,6 @@ when running this script.
     "Description": "UNC path e.g. \\\\storageaccount.file.core.windows.net\\premiumfslogix01",
     "IsRequired": false
   },
-  
   "TempVmSize": {
     "Description": "Size of the temporary VM from which the shrink script will be run.",
     "IsRequired": false,
@@ -170,11 +169,11 @@ Write-Output "Region is $($vnet.Location)"
 Try {
   #Create the public IP address.
   Write-Output "Creating public ip"
-  $azurePublicIp = New-AzPublicIpAddress -Name $azurePublicIpName -ResourceGroupName $azureResourceGroup -Location $AzureRegionName -AllocationMethod Dynamic
+  $azurePublicIp = New-AzPublicIpAddress -Name $azurePublicIpName -ResourceGroupName $azureResourceGroup -Location $AzureRegionName -AllocationMethod Static -Sku Standard -Force 
  
   #Create the NIC and associate the public IpAddress.
   Write-Output "Creating NIC"
-  $azureNIC = New-AzNetworkInterface -Name $azureNicName -ResourceGroupName $azureResourceGroup -Location $AzureRegionName -SubnetId $azureVnetSubnet.Id -PublicIpAddressId $azurePublicIp.Id
+  $azureNIC = New-AzNetworkInterface -Name $azureNicName -ResourceGroupName $azureResourceGroup -Location $AzureRegionName -SubnetId $azureVnetSubnet.Id -PublicIpAddressId $azurePublicIp.Id -Force
   
   #Store the credentials for the local admin account.
   Write-Output "Creating VM credentials"
@@ -191,7 +190,7 @@ Try {
   
   #Create the virtual machine.
   Write-Output "Creating new VM"
-  $VM = New-AzVM -ResourceGroupName $azureResourceGroup -Location $AzureRegionName -VM $VirtualMachine -Verbose -ErrorAction stop
+  $VM = New-AzVM -ResourceGroupName $azureResourceGroup -Location $AzureRegionName -VM $VirtualMachine -Verbose -ErrorAction stop 
 
 
   $azurePublicIp = Get-AzPublicIpAddress -Name $azurePublicIpName -ResourceGroupName $AzureResourceGroup
@@ -213,27 +212,43 @@ Try {
 
   $scriptblock > .\scriptblock.ps1
 
-  Write-Output "Running shrink script on temp vm"
-  $Time = get-date
-  $job = Invoke-AzVmRunCommand -ResourceGroupName $azureResourceGroup -VMName $azureVmName -ScriptPath .\scriptblock.ps1 -CommandId 'RunPowershellScript' -AsJob
-  While ((get-job $job.id).state -eq 'Running') {
-    if ((get-date) -gt $time.AddMinutes(86)){
-      Throw "Unable to finish processing profiles before 90 minute timeout elapsed"
-    }
-    else {
-      Sleep 60
+  try {
+    Write-Output "Running shrink script on temp vm"
+    $Time = get-date
+    $job = Invoke-AzVmRunCommand -ResourceGroupName $azureResourceGroup -VMName $azureVmName -ScriptPath .\scriptblock.ps1 -CommandId 'RunPowershellScript' -AsJob
+    While ((get-job $job.id).state -eq 'Running') {
+      if ((get-date) -gt $time.AddMinutes(86)){
+        get-job $job.id | Stop-Job -Force
+        Write-Output "Unable to finish processing profiles before 90 minute timeout elapsed"
+        Throw "Unable to finish processing profiles before 90 minute timeout elapsed"
+      }
+      else {
+        Sleep 60
+      }
     }
   }
+  catch {
+    Write-Output "Error during execution of script on temp VM"
+    Throw $_ 
+  }
 
-  Receive-Job -id $job.id | Out-String | Write-Output
+  $job = Receive-Job -id $job.id 
+  if ($job.value.Message -like '*error*') {  
+    Write-Output "Failed. An error occurred: `n $($job.value.Message)" 
+    throw $($job.value.Message)        
+  }
+  else {
+    $job | out-string | Write-Output
+  } 
 }
 Catch {
   Write-Output "Error during execution of script on temp VM"
-  Write-Error $_ 
+  Throw $_ 
 }
 
 Finally {
   "Removing temporary VM" | Write-Output
+  Start-Sleep 180
   Remove-AzVM -Name $azureVmName -ResourceGroupName $AzureResourceGroup -Force -ErrorAction Continue
   Remove-AzDisk -ResourceGroupName $AzureResourceGroup -DiskName $azureVmOsDiskName -Force -ErrorAction Continue
   Remove-AzNetworkInterface -Name $azureNicName -ResourceGroupName $AzureResourceGroup -Force -ErrorAction Continue
