@@ -107,7 +107,7 @@ else {
 
 
 if ($AutomationAccount -eq 'ScriptedActions') {
-  $AA = Get-AzAutomationAccount -ResourceGroupName $NMEResourceGroupName | Where-Object AutomationAccountName -Match 'runbooks'
+  $AA = Get-AzAutomationAccount -ResourceGroupName $NMEResourceGroupName | Where-Object AutomationAccountName -Match '(runbooks)|(scripted-actions)'
 }
 elseif ($AutomationAccount -eq 'NerdioManager') {
   $AA = Get-AzAutomationAccount -ResourceGroupName $NMEResourceGroupName -Name "$Prefix-app-automation-$NMEIdString"
@@ -351,7 +351,7 @@ catch {
 
   if ($disk) {
     write-output "Removing disk"
-    Remove-AzDisk -ResourceGroupName $AzureResourceGroupName -DiskName $azureVmOsDiskName -Force -ErrorAction Continue
+    Remove-AzDisk -ResourceGroupName $VMResourceGroup -DiskName $azureVmOsDiskName -Force -ErrorAction Continue
   }
   Throw $_ 
 }
