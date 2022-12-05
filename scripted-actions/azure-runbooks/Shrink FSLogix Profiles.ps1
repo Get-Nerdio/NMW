@@ -6,9 +6,14 @@ Notes:
 This script creates a temporary VM and then runs FSLogix-ShrinkDisk.ps1 to reduce the size of the 
 FSLogix VHD(X) files. After completing, the temporary VM is deleted.
 
+This script should be run directly from the Scripted Actions->Azure Runbooks screen in Nerdio manager,
+not assigned to a host pool or host. 
+
 You must provide some variables to this script to determine where the temporary VM is created, and
 how it will access the fileshare. You can provide these variables as parameters when running the
 script, or as Secure Variables created in Nerdio Manager under Settings->Nerdio Integrations. 
+If Secure Variables are specified, they will override the parameters passed at runtime. This is 
+to ensure backward compatibility with previous versions of the script.
 
 This script requires credentials to acccess the fileshare. These can be passed as AD credentials
 when running the script (check the "Pass AD credentials" box when running the script), or as 
@@ -74,7 +79,7 @@ $ErrorActionPreference = 'Stop'
 
 $AzureRegionName = $SecureVars.FslRegion
 $AzureVMName = "fslshrink-tempvm"
-$azureVmSize = $TempVmSize
+$azureVmSize = 'Standard_D16s_v4'
 $azureVnetName = $SecureVars.FslTempVmVnet
 $azureVnetSubnetName = $SecureVars.FslTempVmSubnet
 $AzureResourceGroup = $SecureVars.FslResourceGroup
@@ -103,6 +108,9 @@ if ($ADPassword) {
 if ($TempVmResourceGroup) {
   $azureResourceGroup = $TempVmResourceGroup
 }
+if ($TempVmSize) {
+  $azureVmSize = $TempVmSize
+}
 
 $FSLogixLogFile = "C:\Windows\Temp\FslShrinkDisk.log"
 $InvokeFslShrinkCommand = "FSLogix-ShrinkDisk.ps1 -Path $FSLogixFileShare -Recurse -LogFilePath $FSLogixLogFile $AdditionalShrinkDiskParameters -PassThru"
@@ -112,7 +120,8 @@ VNet for temp vm is $azureVnetName
 Subnet is $azureVnetSubnetName
 Path to fslogix share is $FSLogixFileShare
 User account to access share is $StorageAccountUser
-Resource Group for temp vm is $azureResourceGroup"
+Resource Group for temp vm is $azureResourceGroup
+Temp VM size is $azureVmSize"
 
 ##### Optional Variables #####
 
@@ -233,7 +242,10 @@ Try {
   }
 
   $job = Receive-Job -id $job.id 
-  if ($job.value.Message -like '*error*') {  
+  if ($job.value.Message -like '*No files to process*') {  
+    Write-Output "SUCCESS: No files to process" 
+  }
+  elseif ($job.value.Message -like '*error*') {  
     Write-Output "Failed. An error occurred: `n $($job.value.Message)" 
     throw $($job.value.Message)        
   }
