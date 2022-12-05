@@ -6,9 +6,14 @@ Notes:
 This script creates a temporary VM and then runs FSLogix-ShrinkDisk.ps1 to reduce the size of the 
 FSLogix VHD(X) files. After completing, the temporary VM is deleted.
 
+This script should be run directly from the Scripted Actions->Azure Runbooks screen in Nerdio manager,
+not assigned to a host pool or host. 
+
 You must provide some variables to this script to determine where the temporary VM is created, and
 how it will access the fileshare. You can provide these variables as parameters when running the
 script, or as Secure Variables created in Nerdio Manager under Settings->Nerdio Integrations. 
+If Secure Variables are specified, they will override the parameters passed at runtime. This is 
+to ensure backward compatibility with previous versions of the script.
 
 This script requires credentials to acccess the fileshare. These can be passed as AD credentials
 when running the script (check the "Pass AD credentials" box when running the script), or as 
@@ -48,6 +53,11 @@ when running this script.
     "Description": "UNC path e.g. \\\\storageaccount.file.core.windows.net\\premiumfslogix01",
     "IsRequired": false
   },
+  "TempVmSize": {
+    "Description": "Size of the temporary VM from which the shrink script will be run.",
+    "IsRequired": false,
+    "DefaultValue": "Standard_D16s_v4"
+  },
   "TempVmResourceGroup": {
     "Description": "Resource group in which to create the temp vm. If not supplied, resource group of vnet will be used.",
     "IsRequired": false
@@ -69,7 +79,7 @@ $ErrorActionPreference = 'Stop'
 
 $AzureRegionName = $SecureVars.FslRegion
 $AzureVMName = "fslshrink-tempvm"
-$azureVmSize = "Standard_D8s_v3"
+$azureVmSize = 'Standard_D16s_v4'
 $azureVnetName = $SecureVars.FslTempVmVnet
 $azureVnetSubnetName = $SecureVars.FslTempVmSubnet
 $AzureResourceGroup = $SecureVars.FslResourceGroup
@@ -98,6 +108,9 @@ if ($ADPassword) {
 if ($TempVmResourceGroup) {
   $azureResourceGroup = $TempVmResourceGroup
 }
+if ($TempVmSize) {
+  $azureVmSize = $TempVmSize
+}
 
 $FSLogixLogFile = "C:\Windows\Temp\FslShrinkDisk.log"
 $InvokeFslShrinkCommand = "FSLogix-ShrinkDisk.ps1 -Path $FSLogixFileShare -Recurse -LogFilePath $FSLogixLogFile $AdditionalShrinkDiskParameters -PassThru"
@@ -107,13 +120,15 @@ VNet for temp vm is $azureVnetName
 Subnet is $azureVnetSubnetName
 Path to fslogix share is $FSLogixFileShare
 User account to access share is $StorageAccountUser
-Resource Group for temp vm is $azureResourceGroup"
+Resource Group for temp vm is $azureResourceGroup
+Temp VM size is $azureVmSize"
 
 ##### Optional Variables #####
 
 #Define the following parameters for the temp vm
 $vmAdminUsername = "LocalAdminUser"
-$vmAdminPassword = ConvertTo-SecureString "LocalAdminP@sswordHere" -AsPlainText -Force
+$Guid = (new-guid).Guid
+$vmAdminPassword = ConvertTo-SecureString "$Guid" -AsPlainText -Force
 $vmComputerName = "fslshrink-tmp"
  
 #Define the parameters for the Azure resources.
@@ -163,11 +178,11 @@ Write-Output "Region is $($vnet.Location)"
 Try {
   #Create the public IP address.
   Write-Output "Creating public ip"
-  $azurePublicIp = New-AzPublicIpAddress -Name $azurePublicIpName -ResourceGroupName $azureResourceGroup -Location $AzureRegionName -AllocationMethod Dynamic
+  $azurePublicIp = New-AzPublicIpAddress -Name $azurePublicIpName -ResourceGroupName $azureResourceGroup -Location $AzureRegionName -AllocationMethod Static -Sku Standard -Force 
  
   #Create the NIC and associate the public IpAddress.
   Write-Output "Creating NIC"
-  $azureNIC = New-AzNetworkInterface -Name $azureNicName -ResourceGroupName $azureResourceGroup -Location $AzureRegionName -SubnetId $azureVnetSubnet.Id -PublicIpAddressId $azurePublicIp.Id
+  $azureNIC = New-AzNetworkInterface -Name $azureNicName -ResourceGroupName $azureResourceGroup -Location $AzureRegionName -SubnetId $azureVnetSubnet.Id -PublicIpAddressId $azurePublicIp.Id -Force
   
   #Store the credentials for the local admin account.
   Write-Output "Creating VM credentials"
@@ -184,7 +199,7 @@ Try {
   
   #Create the virtual machine.
   Write-Output "Creating new VM"
-  $VM = New-AzVM -ResourceGroupName $azureResourceGroup -Location $AzureRegionName -VM $VirtualMachine -Verbose -ErrorAction stop
+  $VM = New-AzVM -ResourceGroupName $azureResourceGroup -Location $AzureRegionName -VM $VirtualMachine -Verbose -ErrorAction stop 
 
 
   $azurePublicIp = Get-AzPublicIpAddress -Name $azurePublicIpName -ResourceGroupName $AzureResourceGroup
@@ -206,19 +221,46 @@ Try {
 
   $scriptblock > .\scriptblock.ps1
 
-  Write-Output "Running shrink script on temp vm"
+  try {
+    Write-Output "Running shrink script on temp vm"
+    $Time = get-date
+    $job = Invoke-AzVmRunCommand -ResourceGroupName $azureResourceGroup -VMName $azureVmName -ScriptPath .\scriptblock.ps1 -CommandId 'RunPowershellScript' -AsJob
+    While ((get-job $job.id).state -eq 'Running') {
+      if ((get-date) -gt $time.AddMinutes(86)){
+        get-job $job.id | Stop-Job -Force
+        Write-Output "Unable to finish processing profiles before 90 minute timeout elapsed"
+        Throw "Unable to finish processing profiles before 90 minute timeout elapsed"
+      }
+      else {
+        Sleep 60
+      }
+    }
+  }
+  catch {
+    Write-Output "Error during execution of script on temp VM"
+    Throw $_ 
+  }
 
-  $results = Invoke-AzVmRunCommand -ResourceGroupName $azureResourceGroup -VMName $azureVmName -ScriptPath .\scriptblock.ps1 -CommandId 'RunPowershellScript'
-
-  $results | Out-String | Write-Output
+  $job = Receive-Job -id $job.id 
+  if ($job.value.Message -like '*No files to process*') {  
+    Write-Output "SUCCESS: No files to process" 
+  }
+  elseif ($job.value.Message -like '*error*') {  
+    Write-Output "Failed. An error occurred: `n $($job.value.Message)" 
+    throw $($job.value.Message)        
+  }
+  else {
+    $job | out-string | Write-Output
+  } 
 }
 Catch {
   Write-Output "Error during execution of script on temp VM"
-  Write-Error $_ 
+  Throw $_ 
 }
 
 Finally {
   "Removing temporary VM" | Write-Output
+  Start-Sleep 180
   Remove-AzVM -Name $azureVmName -ResourceGroupName $AzureResourceGroup -Force -ErrorAction Continue
   Remove-AzDisk -ResourceGroupName $AzureResourceGroup -DiskName $azureVmOsDiskName -Force -ErrorAction Continue
   Remove-AzNetworkInterface -Name $azureNicName -ResourceGroupName $AzureResourceGroup -Force -ErrorAction Continue
