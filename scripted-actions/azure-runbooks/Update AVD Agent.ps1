@@ -44,6 +44,9 @@ Catch {
 Try {
     `$AgentBootLoaderRequest = Invoke-WebRequest $BootLoaderUrl -UseBasicParsing
     `$AgentBootLoaderFilename = (`$AgentBootLoaderRequest.headers['content-disposition'] -split 'filename=')[1]
+    if (`$AgentBootLoaderFilename -match '\(' ) {
+        `$AgentBootLoaderFilename = "Microsoft.RDInfra.RDAgentBootLoader.Installer-x64.msi"
+    } 
     Invoke-WebRequest -uri $BootLoaderUrl -UseBasicParsing -outfile "C:\Program Files\Microsoft RDInfra\`$AgentBootLoaderFilename"
 }
 Catch {
