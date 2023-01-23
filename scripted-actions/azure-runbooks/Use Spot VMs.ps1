@@ -10,6 +10,7 @@ See https://nmw.zendesk.com/hc/en-us/articles/360059485274-Scripted-Actions-Over
 See https://docs.microsoft.com/en-us/azure/virtual-machines/spot-vms for more information on Spot VMs and pricing
 
 NOTE: if there is insufficient capacity for the requested Spot VM size, this script will provision the VM with standard pricing.
+NOTE: Trusted Launch must be DISABLED for Spot instances to work.
 
 #>
 
