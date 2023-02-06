@@ -23,8 +23,14 @@ $rgname = $AzureResourceGroupName
 $vmname = $AzureVMName
 
 #Log in to your subscription
-Select-AzSubscription -Subscription $subscriptionID
 Set-AzContext -Subscription $subscriptionID
+
+# Check if VM is already in correct AZ
+$GetVMinfo = Get-AzVM -ResourceGroupName $rgname -Name $vmName
+if ($GetVMinfo.zones -eq $Zone) {
+    Write-Output "VM is already in zone $zone"
+    Exit
+}
 
 #Stop deallocate the VM
 $VMStatus = Get-AzVM -ResourceGroupName $rgname -Name $vmname -Status
@@ -35,22 +41,21 @@ if ($VMStatus.powerstate -ne 'deallocated') {
 
 }
 
-#Export the JSON file; 
-Get-AzVM -ResourceGroupName $rgname -Name $vmname |ConvertTo-Json -depth 100|Out-file -FilePath $env:temp\$vmname.json
-$GetVMinfo = Get-AzVM -ResourceGroupName $rgname -Name $vmName
-if ($GetVMinfo.zones -eq $Zone) {
-    throw "VM is already in zone $zone"
+$SkuInfo = Get-AzComputeResourceSku -Location $GetVMinfo.Location | ? name -eq $GetVMinfo.HardwareProfile.vmsize
+if ($null -eq $SkuInfo.locationinfo.zones) {
+    Throw "Azure Region $($GetVMinfo.Location) does not support availability zones."
 }
-$SkuInfo = Get-AzComputeResourceSku -Location $GetVMinfo.location | ? name -eq $GetVMinfo.HardwareProfile.vmsize
-if ($SkuInfo.locationinfo.zones -notcontains $Zone) {
+elseif ($SkuInfo.locationinfo.zones -notcontains $Zone) {
     Throw "VM size $($GetVMinfo.hardwareprofile.VmSize) is not available in zone $zone."
 }
 
+#Export the JSON file; 
 Write-Output -Message "Exporting VM configuration to the follwoing location $env:temp \$vmname.json" 
+Get-AzVM -ResourceGroupName $rgname -Name $vmname |ConvertTo-Json -depth 100|Out-file -FilePath $env:temp\$vmname.json
 
 #import from json
 $json = "$env:temp\$vmname.json"
-$import = gc $json -Raw|ConvertFrom-Json
+$import = Get-Content $json -Raw|ConvertFrom-Json
 	#create variables for redeployment 
 $rgname = $import.ResourceGroupName
 $loc = $import.Location
@@ -155,6 +160,7 @@ $osdisk | remove-azdisk -Force | Out-Null
 Write-Output "Creating the new VM"
 New-AzVM -ResourceGroupName $rgname -Location $loc -VM $vm -Tag $GetVMinfo.tags -Verbose | Out-Null
 
+# If VM was deallocated to begin with, deallocate again before finishing
 if ($VMStatus.powerstate -eq 'deallocated') {
     Write-Output "stopping VM $AzureVMName"
     Write-Output -Message "Attempting to Stop VM $vmname" 
