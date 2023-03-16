@@ -42,7 +42,7 @@ when running this script.
 <# Variables:
 {
   "VNetName": {
-    "Description": "VNet in which to create the temp VM. Must be able to access the fslogix fileshare.",
+    "Description": "VNet in which to create the temp VM. Can be same as AVD host vnet. Must be able to access the fslogix fileshare.",
     "IsRequired": false
   },
   "SubnetName": {
@@ -63,7 +63,7 @@ when running this script.
     "IsRequired": false
   },
   "AdditionalShrinkDiskParameters": {
-    "Description": "parameters to send to the FSLogix-ShrinkDisk.ps1 script. E.g: -DeleteOlderThanDays 90 -IgnoreLessThanGB 5",
+    "Description": "Example: -DeleteOlderThanDays 90 -IgnoreLessThanGB 5",
     "IsRequired": false
   }
 }
