@@ -4,7 +4,7 @@
 <#
 Notes:
 This script will add specified paths to the Defender's exclusion list.
-Please replace the '\\server\share' value with actual value before running the script.
+To use this script, clone it and replace the '\\server\share' value with actual value before running the script.
 #>
 
 # Define the fslogix path. Replace these with actual value.
