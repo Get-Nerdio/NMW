@@ -1,0 +1,949 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "location": {
+        "type": "string",
+        "defaultValue": "[resourceGroup().location]",
+        "metadata": {
+          "description": "Location for all resources"
+        }
+      },
+      "appName": {
+        "type": "string",
+        "defaultValue": "nmw-app",
+        "metadata": {
+          "description": "Base name of the resource such as web app name and app service plan"
+        },
+        "minLength": 2
+      },
+      "azureTagPrefix": {
+        "type": "string",
+        "defaultValue": "NMW",
+        "metadata": {
+          "description": "Prefix for Azure Tags"
+        }
+      },
+      "appServicePlanSkuName": {
+        "type": "string",
+        "defaultValue": "B3",
+        "metadata": {
+          "description": "The SKU of App Service Plan"
+        }
+      },
+      "sqlCollation": {
+        "type": "string",
+        "defaultValue": "SQL_Latin1_General_CP1_CI_AS",
+        "metadata": {
+          "description": "The database collation"
+        }
+      },
+      "databaseMaxSize": {
+        "type": "int",
+        "defaultValue": 268435456000
+      },
+      "databaseTier": {
+        "type": "string",
+        "defaultValue": "Standard"
+      },
+      "databaseSkuName": {
+        "type": "string",
+        "defaultValue": "S1"
+      },
+      "_artifactsLocation": {
+        "type": "string",
+        "metadata": {
+          "description": "The base URI where artifacts required by this template are located. When the template is deployed using the accompanying scripts, a private location in the subscription will be used and this value will be automatically generated."
+        },
+        "defaultValue": "[deployment().properties.templateLink.uri]"
+      },
+      "_artifactsLocationSasToken": {
+        "type": "securestring",
+        "metadata": {
+          "description": "The sasToken required to access _artifactsLocation.  When the template is deployed using the accompanying scripts, a sasToken will be automatically generated."
+        },
+        "defaultValue": ""
+      },
+      "_securityGuid": {
+        "type": "securestring",
+        "defaultValue": "[newGuid()]"
+      }
+    },
+    "variables": {
+      "webAppPortalName": "[concat(parameters('appName'), '-', uniqueString(subscription().id, resourceGroup().id))]",
+      "appServicePlanName": "[concat(parameters('appName'), '-plan-', uniqueString(subscription().id, resourceGroup().id))]",
+      "sqlServerName": "[concat(parameters('appName'), '-sql-', uniqueString(subscription().id, resourceGroup().id))]",
+      "databaseName": "[concat(parameters('appName'), '-db')]",
+      "keyVaultName": "[concat(parameters('appName'), '-kv-', uniqueString(subscription().id, resourceGroup().id))]",
+      "appInsightsName": "[concat(parameters('appName'), '-insights-', uniqueString(subscription().id, resourceGroup().id))]",
+      "automationAccountName": "[concat(parameters('appName'), '-automation-', uniqueString(subscription().id, resourceGroup().id))]",
+      "lawName": "[concat(parameters('appName'), '-law-', uniqueString(subscription().id, resourceGroup().id))]",
+      "logsLawName": "[concat(parameters('appName'), '-law-insights-', uniqueString(subscription().id, resourceGroup().id))]",
+      "sqlServerLogin": "[concat('L', uniqueString(resourceGroup().id, parameters('_securityGuid'), 'f0a91824-fc25-4cc9-937e-f92791fdab21'))]",
+      "sqlServerPassword": "[concat('P', uniqueString(resourceGroup().id, parameters('_securityGuid'), 'e0235df7-82e2-469d-9678-1750453dff32'), 'x', '!')]",
+      "sqlServerSuffix": "[environment().suffixes.sqlServerHostname]",
+      "microsoftLoginUri": "[environment().authentication.loginEndpoint]",
+      "scriptedActionAccountName": "[concat(parameters('appName'), '-scripted-actions-', uniqueString(subscription().id, resourceGroup().id))]",
+      "automation": {
+        "runbooks": [
+          {
+            "name": "nmwUpdateRunAs",
+            "url": "[uri(parameters('_artifactsLocation'), concat('scripts/nmw-update-run-as.ps1', parameters('_artifactsLocationSasToken')))]",
+            "version": "1.0.0.0",
+            "type": "PowerShell",
+            "description": "Update using automation Run As account"
+          }
+        ],
+        "modules": {
+          "profile": {
+            "name": "AzureRM.Profile",
+            "url": "https://www.powershellgallery.com/api/v2/package/AzureRM.profile/5.8.3"
+          },
+          "other": [
+            {
+              "name": "AzureAD",
+              "url": "https://www.powershellgallery.com/api/v2/package/AzureAD/2.0.2.76"
+            },
+            {
+              "name": "AzureRM.Resources",
+              "url": "https://www.powershellgallery.com/api/v2/package/AzureRM.Resources/6.7.3"
+            },
+            {
+              "name": "AzureRM.KeyVault",
+              "url": "https://www.powershellgallery.com/api/v2/package/AzureRM.KeyVault/5.2.1"
+            },
+            {
+              "name": "AzureRM.Automation",
+              "url": "https://www.powershellgallery.com/api/v2/package/AzureRM.Automation/6.1.1"
+            },
+            {
+              "name": "AzureRM.Compute",
+              "url": "https://www.powershellgallery.com/api/v2/package/AzureRM.Compute/5.9.1"
+            },
+            {
+              "name": "AzureRM.Websites",
+              "url": "https://www.powershellgallery.com/api/v2/package/AzureRM.Websites/5.2.0"
+            }
+          ]
+        }
+      }
+    },
+    "resources": [
+      {
+        "apiVersion": "2020-08-01",
+        "type": "Microsoft.OperationalInsights/workspaces",
+        "name": "[variables('logsLawName')]",
+        "location": "[parameters('location')]"      
+      },
+      {
+        "apiVersion": "2020-02-02",
+        "name": "[variables('appInsightsName')]",
+        "type": "Microsoft.Insights/components",
+        "dependsOn": [
+          "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logsLawName'))]"
+        ],
+        "location": "[parameters('location')]",
+        "kind": "web",
+        "tags": {
+          "displayName": "AppInsightsComponent"
+        },
+        "properties": {
+          "Application_Type": "web",
+          "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logsLawName'))]"
+        }
+      },
+      {
+        "name": "[variables('sqlserverName')]",
+        "type": "Microsoft.Sql/servers",
+        "location": "[parameters('location')]",
+        "tags": {
+          "displayName": "SqlServer"
+        },
+        "apiVersion": "2020-08-01-preview",
+        "properties": {
+          "administratorLogin": "[variables('sqlServerLogin')]",
+          "administratorLoginPassword": "[variables('sqlServerPassword')]",
+          "version": "12.0",
+          "minimalTlsVersion": "1.2"
+        },
+        "resources": [
+          {
+            "name": "[variables('databaseName')]",
+            "type": "databases",
+            "location": "[parameters('location')]",
+            "tags": {
+              "displayName": "Database"
+            },
+            "apiVersion": "2020-08-01-preview",
+            "dependsOn": [
+              "[variables('sqlserverName')]"
+            ],
+            "properties": {
+              "collation": "[parameters('sqlCollation')]",
+              "maxSizeBytes": "[parameters('databaseMaxSize')]"
+            },
+            "sku": {
+                "name": "[parameters('databaseSkuName')]",
+                "tier": "[parameters('databaseTier')]"
+              }
+          },
+          {
+            "type": "firewallrules",
+            "apiVersion": "2020-08-01-preview",
+            "dependsOn": [
+              "[variables('sqlserverName')]"
+            ],
+            "location": "[parameters('location')]",
+            "name": "AllowAllWindowsAzureIps",
+            "properties": {
+              "endIpAddress": "0.0.0.0",
+              "startIpAddress": "0.0.0.0"
+            }
+          }
+        ]
+      },
+      {
+        "apiVersion": "2021-01-15",
+        "dependsOn": [
+          "[resourceId('Microsoft.Sql/servers', variables('sqlserverName'))]"
+        ],
+        "type": "Microsoft.Web/serverfarms",
+        "kind": "app",
+        "name": "[variables('appServicePlanName')]",
+        "location": "[parameters('location')]",
+        "properties": {
+        },
+        "sku": {
+          "name": "[parameters('appServicePlanSkuName')]"
+        }
+      },
+      {
+        "apiVersion": "2021-01-15",
+        "type": "Microsoft.Web/sites",
+        "kind": "app",
+        "name": "[variables('webAppPortalName')]",
+        "location": "[parameters('location')]",
+        "identity": {
+          "type": "SystemAssigned"
+        },
+        "properties": {
+          "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+          "httpsOnly": true,
+          "siteConfig": {
+            "AlwaysOn": true,
+            "http20Enabled": true,
+            "use32BitWorkerProcess": false,
+            "ftpsState": "Disabled",
+            "minTlsVersion": "1.2",
+            "netFrameworkVersion": "v6.0",
+            "appSettings": [
+              {
+                "name": "AzureAd:Instance",
+                "value": "[variables('microsoftLoginUri')]"
+              },
+              {
+                "name": "Deployment:AzureType",
+                "value": "[environment().name]"
+              },
+              {
+                "name": "Deployment:Region",
+                "value": "[parameters('location')]"
+              },
+              {
+                "name": "Deployment:KeyVaultName",
+                "value": "[variables('keyVaultName')]"
+              },
+              {
+                "name": "Deployment:SubscriptionId",
+                "value": "[subscription().subscriptionId]"
+              },
+              {
+                "name": "Deployment:SubscriptionDisplayName",
+                "value": "[subscription().displayName]"
+              },
+              {
+                "name": "Deployment:TenantId",
+                "value": "[subscription().tenantId]"
+              },
+              {
+                "name": "Deployment:ResourceGroupName",
+                "value": "[resourceGroup().name]"
+              },
+              {
+                "name": "Deployment:WebAppName",
+                "value": "[variables('webAppPortalName')]"
+              },
+              {
+                "name": "Deployment:AutomationAccountName",
+                "value": "[variables('automationAccountName')]"
+              },
+              {
+                "name": "Deployment:AutomationEnabled",
+                "value": "True"
+              },
+              {
+                "name": "Deployment:AzureTagPrefix",
+                "value": "[parameters('azureTagPrefix')]"
+              },
+              {
+                "name": "Deployment:UpdaterRunbookRunAs",
+                "value": "nmwUpdateRunAs"
+              },
+              {
+                "name": "Deployment:LogAnalyticsWorkspace",
+                "value": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+              },
+              {
+                "name": "Deployment:ScriptedActionAccount",
+                "value": "[resourceId('Microsoft.Automation/automationAccounts', variables('scriptedActionAccountName'))]"
+              },
+              {
+                "name": "ApplicationInsights:InstrumentationKey",
+                "value": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName'))).InstrumentationKey]"
+              },
+              {
+                "name": "ApplicationInsights:ConnectionString",
+                "value": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName'))).ConnectionString]"
+              }
+            ]
+          }
+        },
+        "dependsOn": [
+          "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+          "[resourceId('microsoft.insights/components/', variables('appInsightsName'))]"
+        ],
+        "resources": [
+          {
+            "name": "MSDeploy",
+            "type": "extensions",
+            "location": "[parameters('location')]",
+            "apiVersion": "2021-01-15",
+            "dependsOn": [
+              "[resourceId('Microsoft.Web/sites', variables('webAppPortalName'))]"
+            ],
+            "properties": {
+              "packageUri": "[uri(parameters('_artifactsLocation'), concat('web-app/app.zip', parameters('_artifactsLocationSasToken')))]"
+            }
+          }
+        ]
+      },
+      {
+        "type": "Microsoft.KeyVault/vaults",
+        "name": "[variables('keyVaultName')]",
+        "apiVersion": "2021-10-01",
+        "location": "[parameters('location')]",
+        "properties": {
+          "sku": {
+            "family": "A",
+            "name": "Standard"
+          },
+          "tenantId": "[reference(resourceId('Microsoft.Web/sites/', variables('webAppPortalName')), '2021-01-15', 'Full').identity.tenantId]",
+          "accessPolicies": [
+            {
+              "tenantId": "[reference(resourceId('Microsoft.Web/sites/', variables('webAppPortalName')), '2021-01-15', 'Full').identity.tenantId]",
+              "objectId": "[reference(resourceId('Microsoft.Web/sites/', variables('webAppPortalName')), '2021-01-15', 'Full').identity.principalId]",
+              "permissions": {
+                "secrets": [
+                  "get",
+                  "list",
+                  "set",
+                  "delete"
+                ]
+              }
+            }
+          ],
+          "enabledForDeployment": false,
+          "enableSoftDelete": true,
+          "softDeleteRetentionInDays": 90
+        },
+        "resources": [
+          {
+            "type": "Microsoft.KeyVault/vaults/secrets",
+            "name": "[concat(variables('keyVaultName'), '/ConnectionStrings--DefaultConnection')]",
+            "apiVersion": "2021-10-01",
+            "dependsOn": [
+              "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+            ],
+            "properties": {
+              "value": "[concat('Server=tcp:', variables('sqlServerName'), variables('sqlServerSuffix'), ',1433;Initial Catalog=', variables('databaseName'), ';Persist Security Info=False;User ID=', variables('sqlServerLogin'), ';Password=', variables('sqlServerPassword'), ';MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;')]",
+                "attributes": {
+                  "enabled": true
+                }
+            }
+          }
+        ],
+        "dependsOn": [
+          "[resourceId('Microsoft.Web/sites', variables('webAppPortalName'))]"
+        ]
+      },
+      {
+        "type": "Microsoft.Automation/automationAccounts",
+        "apiVersion": "2021-04-01",
+        "name": "[variables('scriptedActionAccountName')]",
+        "location": "[parameters('location')]",
+        "properties": {
+          "sku": {
+            "name": "Basic"
+          }
+        }
+      },
+      {
+        "type": "Microsoft.Automation/automationAccounts",
+        "apiVersion": "2021-04-01",
+        "name": "[variables('automationAccountName')]",
+        "location": "[parameters('location')]",
+        "properties": {
+          "sku": {
+            "name": "Basic"
+          }
+        },
+        "resources": [
+          {
+            "name": "subscriptionId",
+            "type": "variables",
+            "apiVersion": "2021-04-01",
+            "dependsOn": [
+              "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+            ],
+            "properties": {
+              "isEncrypted": false,
+              "description": "Azure Subscription Id",
+              "value": "[concat('\"', subscription().SubscriptionId, '\"')]"
+            }
+          },
+          {
+            "name": "webAppName",
+            "type": "variables",
+            "apiVersion": "2021-04-01",
+            "dependsOn": [
+              "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+            ],
+            "properties": {
+              "isEncrypted": false,
+              "description": "Web App Name",
+              "value": "[concat('\"', variables('webAppPortalName'), '\"')]"
+            }
+          },
+          {
+            "name": "resourceGroupName",
+            "type": "variables",
+            "apiVersion": "2021-04-01",
+            "dependsOn": [
+              "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+            ],
+            "properties": {
+              "isEncrypted": false,
+              "description": "Resource group",
+              "value": "[concat('\"', resourceGroup().name, '\"')]"
+            }
+          }
+        ]
+      },
+      {
+        "apiVersion": "2020-01-13-preview",
+        "type": "Microsoft.Automation/automationAccounts/runbooks",
+        "name": "[concat(variables('automationAccountName'), '/', variables('automation').runbooks[copyIndex()].name)]",
+        "location": "[parameters('location')]",
+        "dependsOn": [
+          "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+        ],
+        "copy": {
+          "name": "runbooksLoop",
+          "count": "[length(variables('automation').runbooks)]"
+        },
+        "properties": {
+          "description": "[variables('automation').runbooks[copyIndex()].description]",
+          "runbookType": "[variables('automation').runbooks[copyIndex()].type]",
+          "logProgress": false,
+          "logVerbose": true,
+          "publishContentLink": {
+            "uri": "[variables('automation').runbooks[copyIndex()].url]",
+            "version": "[variables('automation').runbooks[copyIndex()].version]"
+          }
+        }
+      },
+      {
+        "apiVersion": "2020-01-13-preview",
+        "type": "Microsoft.Automation/automationAccounts/modules",
+        "name": "[concat(variables('automationAccountName'), '/', variables('automation').modules.profile.name)]",
+        "location": "[parameters('location')]",
+        "dependsOn": [
+          "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+        ],
+        "properties": {
+          "contentLink": {
+            "uri": "[variables('automation').modules.profile.url]"
+          }
+        }
+      },
+      {
+        "apiVersion": "2020-01-13-preview",
+        "type": "Microsoft.Automation/automationAccounts/modules",
+        "name": "[concat(variables('automationAccountName'), '/', variables('automation').modules.other[copyIndex()].name)]",
+        "location": "[parameters('location')]",
+        "dependsOn": [
+          "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]",
+          "[resourceId('Microsoft.Automation/automationAccounts/modules', variables('automationAccountName'), variables('automation').modules.profile.name)]"
+        ],
+        "copy": {
+          "name": "modulesLoop",
+          "count": "[length(variables('automation').modules.other)]",
+          "mode": "Serial"
+        },
+        "properties": {
+          "contentLink": {
+            "uri": "[variables('automation').modules.other[copyIndex()].url]"
+          }
+        }
+      },
+      {
+        "apiVersion": "2020-08-01",
+        "type": "Microsoft.OperationalInsights/workspaces",
+        "name": "[variables('lawName')]",
+        "location": "[parameters('location')]",
+        "tags": {
+          "NMW_OBJECT_TYPE": "LOG_ANALYTICS_WORKSPACE"
+        },
+        "resources": [
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "SystemEvents",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsEvent",
+            "properties": {
+              "eventLogName": "System",
+              "eventTypes": [
+                {
+                  "eventType": "Error"
+                },
+                {
+                  "eventType": "Warning"
+                }
+              ]
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "ApplicationEvents",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsEvent",
+            "properties": {
+              "eventLogName": "Application",
+              "eventTypes": [
+                {
+                  "eventType": "Error"
+                },
+                {
+                  "eventType": "Warning"
+                }
+              ]
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "TerminalServicesLocalSessionManagerOperational",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsEvent",
+            "properties": {
+              "eventLogName": "Microsoft-Windows-TerminalServices-LocalSessionManager/Operational",
+              "eventTypes": [
+                {
+                  "eventType": "Error"
+                },
+                {
+                  "eventType": "Warning"
+                },
+                {
+                  "eventType": "Information"
+                }
+              ]
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "TerminalServicesRemoteConnectionManagerAdmin",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsEvent",
+            "properties": {
+              "eventLogName": "Microsoft-Windows-TerminalServices-RemoteConnectionManager/Admin",
+              "eventTypes": [
+                {
+                  "eventType": "Error"
+                },
+                {
+                  "eventType": "Warning"
+                },
+                {
+                  "eventType": "Information"
+                }
+              ]
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "MicrosoftFSLogixAppsOperational",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsEvent",
+            "properties": {
+              "eventLogName": "Microsoft-FSLogix-Apps/Operational",
+              "eventTypes": [
+                {
+                  "eventType": "Error"
+                },
+                {
+                  "eventType": "Warning"
+                },
+                {
+                  "eventType": "Information"
+                }
+              ]
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "MicrosoftFSLogixAppsAdmin",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsEvent",
+            "properties": {
+              "eventLogName": "Microsoft-FSLogix-Apps/Admin",
+              "eventTypes": [
+                {
+                  "eventType": "Error"
+                },
+                {
+                  "eventType": "Warning"
+                },
+                {
+                  "eventType": "Information"
+                }
+              ]
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter1",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "LogicalDisk",
+              "instanceName": "C:",
+              "intervalSeconds": 60,
+              "counterName": "% Free Space"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter2",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "LogicalDisk",
+              "instanceName": "C:",
+              "intervalSeconds": 30,
+              "counterName": "Avg. Disk Queue Length"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter3",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "LogicalDisk",
+              "instanceName": "C:",
+              "intervalSeconds": 60,
+              "counterName": "Avg. Disk sec/Transfer"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter4",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "LogicalDisk",
+              "instanceName": "C:",
+              "intervalSeconds": 30,
+              "counterName": "Current Disk Queue Length"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter5",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "Memory",
+              "instanceName": "*",
+              "intervalSeconds": 30,
+              "counterName": "Available Mbytes"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter6",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "Memory",
+              "instanceName": "*",
+              "intervalSeconds": 30,
+              "counterName": "Page Faults/sec"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter7",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "Memory",
+              "instanceName": "*",
+              "intervalSeconds": 30,
+              "counterName": "Pages/sec"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter8",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "Memory",
+              "instanceName": "*",
+              "intervalSeconds": 30,
+              "counterName": "% Committed Bytes In Use"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter9",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "PhysicalDisk",
+              "instanceName": "*",
+              "intervalSeconds": 30,
+              "counterName": "Avg. Disk Queue Length"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter10",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "PhysicalDisk",
+              "instanceName": "*",
+              "intervalSeconds": 30,
+              "counterName": "Avg. Disk sec/Read"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter11",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "PhysicalDisk",
+              "instanceName": "*",
+              "intervalSeconds": 30,
+              "counterName": "Avg. Disk sec/Transfer"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter12",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "PhysicalDisk",
+              "instanceName": "*",
+              "intervalSeconds": 30,
+              "counterName": "Avg. Disk sec/Write"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter18",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "Processor Information",
+              "instanceName": "_Total",
+              "intervalSeconds": 30,
+              "counterName": "% Processor Time"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter19",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "Terminal Services",
+              "instanceName": "*",
+              "intervalSeconds": 60,
+              "counterName": "Active Sessions"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter20",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "Terminal Services",
+              "instanceName": "*",
+              "intervalSeconds": 60,
+              "counterName": "Inactive Sessions"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter21",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "Terminal Services",
+              "instanceName": "*",
+              "intervalSeconds": 60,
+              "counterName": "Total Sessions"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter22",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "User Input Delay per Process",
+              "instanceName": "*",
+              "intervalSeconds": 30,
+              "counterName": "Max Input Delay"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter23",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "User Input Delay per Session",
+              "instanceName": "*",
+              "intervalSeconds": 30,
+              "counterName": "Max Input Delay"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter24",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "RemoteFX Network",
+              "instanceName": "*",
+              "intervalSeconds": 30,
+              "counterName": "Current TCP RTT"
+            }
+          },
+          {
+            "apiVersion": "2020-08-01",
+            "type": "datasources",
+            "name": "perfcounter25",
+            "dependsOn": [
+              "[resourceId('Microsoft.OperationalInsights/workspaces', variables('lawName'))]"
+            ],
+            "kind": "WindowsPerformanceCounter",
+            "properties": {
+              "objectName": "RemoteFX Network",
+              "instanceName": "*",
+              "intervalSeconds": 30,
+              "counterName": "Current UDP Bandwidth"
+            }
+          }
+        ]
+      }
+    ],
+    "outputs": {
+      "appUrl": {
+        "type": "string",
+        "value": "[uri(concat('https://', variables('webAppPortalName'), '.azurewebsites.net'), '')]" 
+      }
+    }
+  }
