@@ -75,10 +75,15 @@ $ErrorActionPreference = 'Stop'
 $SaKey = $SecureVars."$StorageAccountKeySecureVarName" 
 $FileNameDate = Get-Date -Format "yyyy-MM-dd-HH-mm-ss"
 
-Import-Module NerdioManagerPowerShell 
-Connect-Nme -ClientId $SecureVars.NerdioApiClientId -ClientSecret $SecureVars.NerdioApiKey -ApiScope $SecureVars.NerdioApiScope -TenantId $SecureVars.NerdioApiTenantId -NmeUri $SecureVars.NerdioApiUrl
-
 # Body of the script goes here
+Import-Module NerdioManagerPowerShell 
+try {
+    Connect-Nme -ClientId $SecureVars.NerdioApiClientId -ClientSecret $SecureVars.NerdioApiKey -ApiScope $SecureVars.NerdioApiScope -TenantId $SecureVars.NerdioApiTenantId -NmeUri $SecureVars.NerdioApiUrl
+}
+Catch {
+    throw "Unable to connect to Nerdio Manager REST API. Please ensure the NerdioManagerPowershell module is installed in Nerdio Manager's runbook automation account, and that the secure variables are setup per the Notes section of this script."
+}
+
 
 # if ExportAllHostPools is true, use Get-AzWvdHostPool to get all host pools we have access to
 if ([System.Convert]::ToBoolean($ExportAllHostPools)) {
