@@ -114,7 +114,7 @@ else {
         Write-Output "Using Nerdio app service principal to connect to $StorageAccountName"
     }
     catch {
-        throw "Storage Account Key not specified; unable to connect to $StorageAccountName with Nerdio app service account. Either configure a storage account key or grant the Nerdio app service account the `"Storage Blob Data Contributor`" role the storage account."
+        throw "Storage Account Key not specified; unable to connect to $StorageAccountName with Nerdio app service principal. Either configure a storage account key or grant the Nerdio app service account the `"Storage Blob Data Contributor`" role the storage account."
     }
 }
 
