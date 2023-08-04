@@ -72,7 +72,14 @@
 
 $ErrorActionPreference = 'Stop'
 
-$SaKey = $SecureVars."$StorageAccountKeySecureVarName" 
+if ($StorageAccountKeySecureVarName) {
+  $SaKey = $SecureVars."$StorageAccountKeySecureVarName"
+  # if $sakey is null or empty, throw an error
+  if ([string]::IsNullOrEmpty($SaKey)) {
+    throw "Secure Variable $StorageAccountKeySecureVarName is not defined, or is not being sent to this scripted action"
+  }
+}
+ 
 $FileNameDate = Get-Date -Format "yyyy-MM-dd-HH-mm-ss"
 
 # Body of the script goes here
