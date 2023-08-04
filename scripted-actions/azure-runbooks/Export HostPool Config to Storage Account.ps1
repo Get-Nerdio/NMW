@@ -73,7 +73,7 @@
 $ErrorActionPreference = 'Stop'
 
 $SaKey = $SecureVars."$StorageAccountKeySecureVarName"
-
+write-output "Secure var name is $StorageAccountKeySecureVarName. Key is $SaKey"
  
 $FileNameDate = Get-Date -Format "yyyy-MM-dd-HH-mm-ss"
 
