@@ -72,9 +72,6 @@
 
 $ErrorActionPreference = 'Stop'
 
-$SaKey = $SecureVars."$StorageAccountKeySecureVarName"
-write-output "Secure var name is $StorageAccountKeySecureVarName. Key is $SaKey"
- 
 $FileNameDate = Get-Date -Format "yyyy-MM-dd-HH-mm-ss"
 
 # Body of the script goes here
@@ -107,8 +104,8 @@ else {
 
 Write-Output "Exporting $($HostPools.count) host pools"
 
-if ($SaKey){
-    $SAContext = New-AzStorageContext -StorageAccountName $StorageAccountName -StorageAccountKey $SaKey -Protocol Https -ErrorAction Stop
+if ($StorageAccountKeySecureVarName){
+    $SAContext = New-AzStorageContext -StorageAccountName $StorageAccountName -StorageAccountKey $StorageAccountKeySecureVarName -Protocol Https -ErrorAction Stop
     write-output "Using storage account key to connect to $StorageAccountName"
 }
 else {
