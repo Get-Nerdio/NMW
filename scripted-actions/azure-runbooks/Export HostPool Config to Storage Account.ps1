@@ -8,16 +8,16 @@
     SETUP INSTRUCTIONS:
 
     The NerdioManagerPowershell module must be installed in Nerdio Manager's runbooks automation account 
-    for this script to work. The module can installed from the PowerShell Gallery.
+    for this script to work. The module can be installed from the PowerShell Gallery.
 
-    If WorkspaceName is specified, all host pools in the workspace will be exported. 
+    If HostPoolResourceGroup is specified, all host pools in the resource group will be exported. 
     
     If HostPoolName is specified, only that host pool will be exported. 
     
     If ExportAllHostPools is true, all host pools the Nerdio app service principal has access to will 
     be exported.
 
-    The following secure variables must be configured in Nerdio Manager: 
+    The following secure variables must be configured in Nerdio Manager and assigned to this script: 
     - NerdioApiClientId: Client ID of the Nerdio REST API
     - NerdioApiKey: Client secret of the Nerdio REST API
     - NerdioApiTenantId: Tenant ID of the Nerdio REST API
@@ -38,7 +38,7 @@
 <# Variables:
 {
   "HostPoolName": {
-    "Description": "Name of the Host Pool. If specified, only this host pool will be exported.",
+    "Description": "Name of the Host Pool. If specified, only this host pool will be exported. Do not specify HostPoolResourceGroup if using this parameter.",
     "IsRequired": false
   },
   "HostPoolResourceGroup": {
