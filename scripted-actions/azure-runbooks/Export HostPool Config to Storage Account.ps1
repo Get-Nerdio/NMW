@@ -14,7 +14,7 @@
     
     If HostPoolName is specified, only that host pool will be exported. 
     
-    If ExportAllHostPools is true, all host pools the Nerdio app service account has access to will 
+    If ExportAllHostPools is true, all host pools the Nerdio app service principal has access to will 
     be exported.
 
     The following secure variables must be configured in Nerdio Manager: 
@@ -28,9 +28,9 @@
     1. Storage Account Key: When running this script, you can specify the 
        StorageAccountKeySecureVarName. This should correspond to the name of a secure variable 
        that contains the storage account key.
-    2. Managed Identity: If StorageAccountKeySecureVarName is not specified, the script will 
-       attempt to connect to the storage account using the Nerdio app service account. 
-       The Nerdio app service account must have the "Storage Blob Data Contributor" role 
+    2. Service Principal: If StorageAccountKeySecureVarName is not specified, the script will 
+       attempt to connect to the storage account using the Nerdio app service principal. 
+       The Nerdio app service principal must have the "Storage Blob Data Contributor" role 
        on the storage account. 
     
 #>
@@ -111,7 +111,7 @@ if ($StorageAccountKeySecureVarName){
 else {
     try {
         $SAContext = New-AzStorageContext -StorageAccountName $StorageAccountName -UseConnectedAccount -Protocol Https -ErrorAction Stop
-        Write-Output "Using Nerdio app service account to connect to $StorageAccountName"
+        Write-Output "Using Nerdio app service principal to connect to $StorageAccountName"
     }
     catch {
         throw "Storage Account Key not specified; unable to connect to $StorageAccountName with Nerdio app service account. Either configure a storage account key or grant the Nerdio app service account the `"Storage Blob Data Contributor`" role the storage account."
