@@ -46,7 +46,7 @@
     "IsRequired": false
   },
   "ExportAllHostPools": {
-    "Description": "Boolean. If specified, all host pools the Nerdio app service account has access to will be exported. Overrides WorkspaceName and HostPoolName.",
+    "Description": "Boolean. If specified, all host pools the Nerdio app service account has access to will be exported. Overrides HostPoolResourceGroup and HostPoolName.",
     "IsRequired": false,
     "DefaultValue": false
   },
@@ -95,7 +95,7 @@ elseif ($HostPoolResourceGroup) {
 elseif ($HostPoolName) {
     $HostPools = Get-AzWvdHostPool | where {$_.Name -eq $HostPoolName}
     if ($HostPools.count -gt 1) {
-      Write-Warning "Multiple host pools with name $HostPoolName found. Exporting all."
+      Write-Output "Multiple host pools with name $HostPoolName found. Exporting all."
     }
 }
 else {
