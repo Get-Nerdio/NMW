@@ -11,9 +11,6 @@
 
 $regValues = @{
     "fEnableWatermarking"        = 1
-    "fEnableTimeZoneRedirection" = 1
-    "KeepAliveEnable"            = 1
-    "KeepAliveInterval"          = 1
     "WatermarkingHeightFactor"   = 0xb4
     "WatermarkingOpacity"        = 0x7d0
     "WatermarkingQrScale"        = 4
