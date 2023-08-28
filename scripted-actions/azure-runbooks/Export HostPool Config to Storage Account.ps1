@@ -74,6 +74,7 @@
 $ErrorActionPreference = 'Stop'
 
 $FileNameDate = Get-Date -Format "yyyy-MM-dd-HH-mm-ss"
+$ConcurrentJobs = 5
 
 # Body of the script goes here
 Import-Module NerdioManagerPowerShell 
@@ -113,63 +114,69 @@ else {
 
 Write-Output "Exporting $($HostPools.count) host pools"
 
-$Jobs = @()
-foreach ($hostpool in $HostPools) {
-    $HpResourceGroup = $hostpool.id -split '/' | select -Index 4
-    $FileName = $hostpool.Name + "-$FileNameDate" + '.json'
-    
-    $ScriptBlock = "
-    try {
-      `$erroractionpreference = 'stop'
-        `$Job = @{
-          Name = '$($hostpool.Name)'
-          FileName = '$FileName'
-          ResourceGroup = '$HpResourceGroup'
-          Success = `$null
-          Error = `$null
-          Started = '$(Get-Date -Format "yyyy-MM-dd HH:mm:ss")'
-          Completed = `$null
-        }
-        import-module NerdioManagerPowerShell
-        import-module Az.Storage
-        `$connect = Connect-Nme -ClientId $NerdioApiClientId -ClientSecret $NerdioApiKey -ApiScope $NerdioApiScope -TenantId $NerdioApiTenantId -NmeUri $NerdioApiUrl 
-        $(
-          if ($StorageAccountKey) {
-            "`$Context = New-AzStorageContext -StorageAccountName $StorageAccountName -StorageAccountKey $StorageAccountKey -Protocol Https -ErrorAction Stop"
+$CompletedJobs = @()
+# create $concurrentjobs number of jobs and wait for them to finish before creating more
+for ($i = 0; $i -lt $HostPools.count; $i + $ConcurrentJobs) {
+  write-output "Creating $($ConcurrentJobs) jobs"
+  $Jobs = @()
+  foreach ($hostpool in $HostPools[$i..($i + $ConcurrentJobs - 1)]) {
+      $HpResourceGroup = $hostpool.id -split '/' | select -Index 4
+      $FileName = $hostpool.Name + "-$FileNameDate" + '.json'
+      
+      $ScriptBlock = "
+      try {
+        `$erroractionpreference = 'stop'
+          `$Job = @{
+            Name = '$($hostpool.Name)'
+            FileName = '$FileName'
+            ResourceGroup = '$HpResourceGroup'
+            Success = `$null
+            Error = `$null
+            Started = '$(Get-Date -Format "yyyy-MM-dd HH:mm:ss")'
+            Completed = `$null
           }
-          else {
-            "`$kvConnection = Get-AutomationConnection -Name $KeyVaultAzureConnectionName"
-            "Connect-AzAccount -ServicePrincipal -Tenant $($kvConnection.TenantID) -ApplicationId $($kvConnection.ApplicationID) -CertificateThumbprint $($kvConnection.CertificateThumbprint) -Environment $KeyVaultAzureEnvironment -Subscription $AzureSubscriptionId | Out-Null"
-            "`$Context = New-AzStorageContext -StorageAccountName $StorageAccountName -UseConnectedAccount -Protocol Https -ErrorAction Stop"
+          import-module NerdioManagerPowerShell
+          import-module Az.Storage
+          `$connect = Connect-Nme -ClientId $NerdioApiClientId -ClientSecret $NerdioApiKey -ApiScope $NerdioApiScope -TenantId $NerdioApiTenantId -NmeUri $NerdioApiUrl 
+          $(
+            if ($StorageAccountKey) {
+              "`$Context = New-AzStorageContext -StorageAccountName $StorageAccountName -StorageAccountKey $StorageAccountKey -Protocol Https -ErrorAction Stop"
+            }
+            else {
+              "`$kvConnection = Get-AutomationConnection -Name $KeyVaultAzureConnectionName"
+              "Connect-AzAccount -ServicePrincipal -Tenant $($kvConnection.TenantID) -ApplicationId $($kvConnection.ApplicationID) -CertificateThumbprint $($kvConnection.CertificateThumbprint) -Environment $KeyVaultAzureEnvironment -Subscription $AzureSubscriptionId | Out-Null"
+              "`$Context = New-AzStorageContext -StorageAccountName $StorageAccountName -UseConnectedAccount -Protocol Https -ErrorAction Stop"
+            }
+          )
+          Export-NmeHostPoolConfig -HostPoolName $($hostpool.name) -SubscriptionId $AzureSubscriptionId -ResourceGroup $hpresourcegroup $(if(([System.Convert]::ToBoolean($GatherHostInfo))){'-IncludeHosts'}) | Out-File -FilePath '$Env:TEMP\$FileName'
+          try {
+            Set-AzStorageBlobContent -Container $StorageAccountContainer -File '$Env:TEMP\$FileName' -Blob $FileName -context `$Context -Force | Out-Null
+            `$job.Success = `$true
+            `$job.Completed = `$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+            `$job
           }
-        )
-        Export-NmeHostPoolConfig -HostPoolName $($hostpool.name) -SubscriptionId $AzureSubscriptionId -ResourceGroup $hpresourcegroup $(if(([System.Convert]::ToBoolean($GatherHostInfo))){'-IncludeHosts'}) | Out-File -FilePath '$Env:TEMP\$FileName'
-        try {
-          Set-AzStorageBlobContent -Container $StorageAccountContainer -File '$Env:TEMP\$FileName' -Blob $FileName -context `$Context -Force | Out-Null
-          `$job.Success = `$true
-          `$job.Completed = `$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-          `$job
+          catch {
+            `$job.Completed = `$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+            `$job.Success = `$false
+            `$job.Error = `$_.Exception.Message
+            `$job
+          }
         }
         catch {
           `$job.Completed = `$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
           `$job.Success = `$false
           `$job.Error = `$_.Exception.Message
           `$job
-        }
-      }
-      catch {
-        `$job.Completed = `$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-        `$job.Success = `$false
-        `$job.Error = `$_.Exception.Message
-        `$job
-      }"
-    $Job = Start-Job -ScriptBlock ([Scriptblock]::Create($ScriptBlock))
-    $Jobs += $Job
+        }"
+      $Job = Start-Job -ScriptBlock ([Scriptblock]::Create($ScriptBlock)) 
+      $Jobs += $Job
+  }
+
+  while (($Jobs | Get-Job).State -contains 'Running') {
+      Write-Output "Waiting for $(($Jobs | Get-Job | where state -eq 'Running').count) jobs to complete"
+      Start-Sleep -Seconds 10
+  }
+  $CompletedJobs += $Jobs | Receive-Job
 }
 
-while (($Jobs | Get-Job).State -contains 'Running') {
-    Write-Output "Waiting for $(($Jobs | Get-Job | where state -eq 'Running').count) jobs to complete"
-    Start-Sleep -Seconds 10
-}
-
-$Jobs | Receive-Job | Select Name, ResourceGroup, Success, Error, FileName, Started, Completed
+$CompletedJobs| Select Name, ResourceGroup, Success, Error, FileName, Started, Completed
