@@ -7,8 +7,9 @@
  
     SETUP INSTRUCTIONS:
 
-    The NerdioManagerPowershell module must be installed in Nerdio Manager's runbooks automation account 
-    for this script to work. The module can be installed from the PowerShell Gallery.
+    The NerdioManagerPowershell module v 0.4.3 or greater must be installed in Nerdio Manager's 
+    runbooks automation account for this script to work. The module can be installed from the 
+    PowerShell Gallery.
 
     If HostPoolResourceGroup is specified, all host pools in the resource group will be exported. 
     
@@ -76,6 +77,14 @@ $FileNameDate = Get-Date -Format "yyyy-MM-dd-HH-mm-ss"
 
 # Body of the script goes here
 Import-Module NerdioManagerPowerShell 
+
+$NerdioApiClientId = $SecureVars.NerdioApiClientId
+$NerdioApiKey = $SecureVars.NerdioApiKey
+$NerdioApiTenantId = $SecureVars.NerdioApiTenantId
+$NerdioApiScope = $SecureVars.NerdioApiScope
+$NerdioApiUrl = $SecureVars.NerdioApiUrl
+$StorageAccountKey = $SecureVars."$StorageAcccountKeySecureVarName"
+
 try {
     Connect-Nme -ClientId $SecureVars.NerdioApiClientId -ClientSecret $SecureVars.NerdioApiKey -ApiScope $SecureVars.NerdioApiScope -TenantId $SecureVars.NerdioApiTenantId -NmeUri $SecureVars.NerdioApiUrl
 }
@@ -118,15 +127,63 @@ else {
     }
 }
 
+$Jobs = @()
 foreach ($hostpool in $HostPools) {
     $HpResourceGroup = $hostpool.id -split '/' | select -Index 4
     $FileName = $hostpool.Name + "-$FileNameDate" + '.json'
-    if ([System.Convert]::ToBoolean($GatherHostInfo)) {
-        Export-NmeHostPoolConfig -HostPoolName $hostpool.Name -SubscriptionId $AzureSubscriptionID -ResourceGroup $HpResourceGroup -IncludeHosts | Out-File -FilePath "$Env:TEMP\$FileName"
-    }
-    else {
-        Export-NmeHostPoolConfig -HostPoolName $hostpool.Name -SubscriptionId $AzureSubscriptionID -ResourceGroup $HpResourceGroup | Out-File -FilePath "$Env:TEMP\$FileName"
-    }
-    Write-Output "Exported $FileName. Uploading to $StorageAccountName"
-    Set-AzStorageBlobContent -Container $StorageAccountContainer -File "$Env:TEMP\$FileName" -Blob $FileName -Context $SAContext
+    
+    $ScriptBlock = "
+    try {
+      `$erroractionpreference = 'stop'
+        `$Job = @{
+          Name = '$($hostpool.Name)'
+          FileName = '$FileName'
+          ResourceGroup = '$HpResourceGroup'
+          Success = `$null
+          Error = `$null
+          Started = '$(Get-Date -Format "yyyy-MM-dd HH:mm:ss")'
+          Completed = `$null
+        }
+        import-module NerdioManagerPowerShell
+        import-module Az.Storage
+        `$connect = Connect-Nme -ClientId $NerdioApiClientId -ClientSecret $NerdioApiKey -ApiScope $NerdioApiScope -TenantId $NerdioApiTenantId -NmeUri $NerdioApiUrl 
+        $(
+          if ($StorageAccountKey) {
+            "`$Context = New-AzStorageContext -StorageAccountName $StorageAccountName -StorageAccountKey $StorageAccountKey -Protocol Https -ErrorAction Stop"
+          }
+          else {
+            "`$kvConnection = Get-AutomationConnection -Name $KeyVaultAzureConnectionName"
+            "Connect-AzAccount -ServicePrincipal -Tenant $($kvConnection.TenantID) -ApplicationId $($kvConnection.ApplicationID) -CertificateThumbprint $($kvConnection.CertificateThumbprint) -Environment $KeyVaultAzureEnvironment -Subscription $AzureSubscriptionId | Out-Null"
+            "`$Context = New-AzStorageContext -StorageAccountName $StorageAccountName -UseConnectedAccount -Protocol Https -ErrorAction Stop"
+          }
+        )
+        Export-NmeHostPoolConfig -HostPoolName $($hostpool.name) -SubscriptionId $AzureSubscriptionId -ResourceGroup $hpresourcegroup $(if(([System.Convert]::ToBoolean($GatherHostInfo))){'-IncludeHosts'}) | Out-File -FilePath '$Env:TEMP\$FileName'
+        try {
+          Set-AzStorageBlobContent -Container $StorageAccountContainer -File '$Env:TEMP\$FileName' -Blob $FileName -context `$Context -Force | Out-Null
+          `$job.Success = `$true
+          `$job.Completed = `$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+          `$job
+        }
+        catch {
+          `$job.Completed = `$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+          `$job.Success = `$false
+          `$job.Error = `$_.Exception.Message
+          `$job
+        }
+      }
+      catch {
+        `$job.Completed = `$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        `$job.Success = `$false
+        `$job.Error = `$_.Exception.Message
+        `$job
+      }"
+    $Job = Start-Job -ScriptBlock ([Scriptblock]::Create($ScriptBlock))
+    $Jobs += $Job
 }
+
+while ($Jobs.State -contains 'Running') {
+    Write-Output "Waiting for $(($Jobs | where state -eq 'Running').count) jobs to complete"
+    Start-Sleep -Seconds 10
+}
+
+$Jobs | Receive-Job | Select Name, ResourceGroup, Success, Error, FileName, Started, Completed
