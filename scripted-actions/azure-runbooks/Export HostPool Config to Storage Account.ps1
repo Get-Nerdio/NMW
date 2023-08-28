@@ -168,7 +168,7 @@ foreach ($hostpool in $HostPools) {
 }
 
 while (($Jobs | Get-Job).State -contains 'Running') {
-    Write-Output "Waiting for $(($Jobs | where state -eq 'Running').count) jobs to complete"
+    Write-Output "Waiting for $(($Jobs | Get-Job | where state -eq 'Running').count) jobs to complete"
     Start-Sleep -Seconds 10
 }
 
