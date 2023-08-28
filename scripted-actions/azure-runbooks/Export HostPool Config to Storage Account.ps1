@@ -69,7 +69,7 @@
     "IsRequired": false
   },
   "Concurrency": {
-    "Description": "number of export jobs to run concurrently. Defaults to 5.",
+    "Description": "Number of export jobs to run concurrently. Defaults to 5. Azure may suspend/terminate the runbook if too many jobs are running at once.",
     "IsRequired": false,
     "DefaultValue": 5
   }
@@ -122,12 +122,11 @@ Write-Output "Exporting $($HostPools.count) host pools"
 $CompletedJobs = @()
 # create $concurrentjobs number of jobs and wait for them to finish before creating more
 for ($i = 0; $i -lt $HostPools.count; $i += $ConcurrentJobs) {
-  Write-Verbose "Creating $($ConcurrentJobs) jobs; index is $i"
+  Write-Output "Creating $($ConcurrentJobs) jobs, starting at position $i out of $($HostPools.count)"
   $Jobs = @()
   foreach ($hostpool in $HostPools[$i..($i + $ConcurrentJobs - 1)]) {
       $HpResourceGroup = $hostpool.id -split '/' | select -Index 4
       $FileName = $hostpool.Name + "-$FileNameDate" + '.json'
-      Write-Verbose "Exporting host pool $($hostpool.Name) to $FileName"
       $ScriptBlock = "
       try {
         `$erroractionpreference = 'stop'
@@ -175,11 +174,10 @@ for ($i = 0; $i -lt $HostPools.count; $i += $ConcurrentJobs) {
         }"
       $Job = Start-Job -ScriptBlock ([Scriptblock]::Create($ScriptBlock)) -Name $hostpool.Name
       $Jobs += $Job
-      Write-Verbose $job 
   }
 
   while (($Jobs | Get-Job).State -contains 'Running') {
-      Write-Verbose "Waiting for $(($Jobs | Get-Job | where state -eq 'Running').count) jobs to complete"
+      Write-Output "Waiting for $(($Jobs | Get-Job | where state -eq 'Running').count) jobs to complete"
       Start-Sleep -Seconds 10
   }
   $CompletedJobs += $Jobs | Receive-Job | Select Name, ResourceGroup, Success, Error, FileName, Started, Completed
