@@ -87,7 +87,7 @@ $NerdioApiUrl = $SecureVars.NerdioApiUrl
 $StorageAccountKey = $SecureVars."$StorageAcccountKeySecureVarName"
 
 try {
-    Connect-Nme -ClientId $SecureVars.NerdioApiClientId -ClientSecret $SecureVars.NerdioApiKey -ApiScope $SecureVars.NerdioApiScope -TenantId $SecureVars.NerdioApiTenantId -NmeUri $SecureVars.NerdioApiUrl
+    Connect-Nme -ClientId $SecureVars.NerdioApiClientId -ClientSecret $SecureVars.NerdioApiKey -ApiScope $SecureVars.NerdioApiScope -TenantId $SecureVars.NerdioApiTenantId -NmeUri $SecureVars.NerdioApiUrl | Out-Null
 }
 Catch {
     throw "Unable to connect to Nerdio Manager REST API. Please ensure the NerdioManagerPowershell module is installed in Nerdio Manager's runbook automation account, and that the secure variables are setup per the Notes section of this script."
@@ -116,7 +116,7 @@ Write-Output "Exporting $($HostPools.count) host pools"
 
 $CompletedJobs = @()
 # create $concurrentjobs number of jobs and wait for them to finish before creating more
-for ($i = 0; $i -lt $HostPools.count; $i + $ConcurrentJobs) {
+for ($i = 0; $i -lt $HostPools.count; $i += $ConcurrentJobs) {
   write-output "Creating $($ConcurrentJobs) jobs"
   $Jobs = @()
   foreach ($hostpool in $HostPools[$i..($i + $ConcurrentJobs - 1)]) {
@@ -170,6 +170,7 @@ for ($i = 0; $i -lt $HostPools.count; $i + $ConcurrentJobs) {
         }"
       $Job = Start-Job -ScriptBlock ([Scriptblock]::Create($ScriptBlock)) 
       $Jobs += $Job
+      $job
   }
 
   while (($Jobs | Get-Job).State -contains 'Running') {
