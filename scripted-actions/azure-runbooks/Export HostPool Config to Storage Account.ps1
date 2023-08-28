@@ -67,6 +67,11 @@
   "StorageAccountKeySecureVarName": {
     "Description": "Name of the NME Secure Variable that contains the Storage Account Key",
     "IsRequired": false
+  },
+  "Concurrency": {
+    "Description": "number of export jobs to run concurrently. Defaults to 5.",
+    "IsRequired": false,
+    "DefaultValue": 5
   }
 }
 #>
@@ -74,7 +79,7 @@
 $ErrorActionPreference = 'Stop'
 
 $FileNameDate = Get-Date -Format "yyyy-MM-dd-HH-mm-ss"
-$ConcurrentJobs = 5
+$ConcurrentJobs = $Concurrency
 
 # Body of the script goes here
 Import-Module NerdioManagerPowerShell 
@@ -117,12 +122,12 @@ Write-Output "Exporting $($HostPools.count) host pools"
 $CompletedJobs = @()
 # create $concurrentjobs number of jobs and wait for them to finish before creating more
 for ($i = 0; $i -lt $HostPools.count; $i += $ConcurrentJobs) {
-  write-output "Creating $($ConcurrentJobs) jobs"
+  Write-Verbose "Creating $($ConcurrentJobs) jobs; index is $i"
   $Jobs = @()
   foreach ($hostpool in $HostPools[$i..($i + $ConcurrentJobs - 1)]) {
       $HpResourceGroup = $hostpool.id -split '/' | select -Index 4
       $FileName = $hostpool.Name + "-$FileNameDate" + '.json'
-      
+      Write-Verbose "Exporting host pool $($hostpool.Name) to $FileName"
       $ScriptBlock = "
       try {
         `$erroractionpreference = 'stop'
@@ -168,16 +173,16 @@ for ($i = 0; $i -lt $HostPools.count; $i += $ConcurrentJobs) {
           `$job.Error = `$_.Exception.Message
           `$job
         }"
-      $Job = Start-Job -ScriptBlock ([Scriptblock]::Create($ScriptBlock)) 
+      $Job = Start-Job -ScriptBlock ([Scriptblock]::Create($ScriptBlock)) -Name $hostpool.Name
       $Jobs += $Job
-      $job
+      Write-Verbose $job 
   }
 
   while (($Jobs | Get-Job).State -contains 'Running') {
-      Write-Output "Waiting for $(($Jobs | Get-Job | where state -eq 'Running').count) jobs to complete"
+      Write-Verbose "Waiting for $(($Jobs | Get-Job | where state -eq 'Running').count) jobs to complete"
       Start-Sleep -Seconds 10
   }
-  $CompletedJobs += $Jobs | Receive-Job
+  $CompletedJobs += $Jobs | Receive-Job | Select Name, ResourceGroup, Success, Error, FileName, Started, Completed
 }
 
 $CompletedJobs| Select Name, ResourceGroup, Success, Error, FileName, Started, Completed
