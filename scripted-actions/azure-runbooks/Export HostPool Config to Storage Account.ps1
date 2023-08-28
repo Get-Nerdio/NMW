@@ -113,20 +113,6 @@ else {
 
 Write-Output "Exporting $($HostPools.count) host pools"
 
-if ($StorageAccountKeySecureVarName){
-    $SAContext = New-AzStorageContext -StorageAccountName $StorageAccountName -StorageAccountKey $StorageAccountKeySecureVarName -Protocol Https -ErrorAction Stop
-    write-output "Using storage account key to connect to $StorageAccountName"
-}
-else {
-    try {
-        $SAContext = New-AzStorageContext -StorageAccountName $StorageAccountName -UseConnectedAccount -Protocol Https -ErrorAction Stop
-        Write-Output "Using Nerdio app service principal to connect to $StorageAccountName"
-    }
-    catch {
-        throw "Storage Account Key not specified; unable to connect to $StorageAccountName with Nerdio app service principal. Either configure a storage account key or grant the Nerdio app service account the `"Storage Blob Data Contributor`" role the storage account."
-    }
-}
-
 $Jobs = @()
 foreach ($hostpool in $HostPools) {
     $HpResourceGroup = $hostpool.id -split '/' | select -Index 4
