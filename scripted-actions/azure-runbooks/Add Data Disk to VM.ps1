@@ -1,11 +1,13 @@
-#description: Creates an Azure disk, attaches it to the VM, and initializes it as the D: drive
+#description: Creates an Azure disk, attaches it to the VM, and initializes it as the D: drive, or next available drive letter
 #tags: Nerdio
 
+<# Notes:
+    This script will create a new disk, attach it to the VM, and initialize it as the D: drive, or next available drive letter.
+
+    To adjust the size and sku of the disk, clone this script and change the variables $DiskSizeGB and $DiskSku.
+#>
 
 $ErrorActionPreference = 'Stop'
-
-# Ensure correct subscription context is selected
-Set-AzContext -SubscriptionId $AzureSubscriptionID
 
 # Hardcoded disk parameters
 $DiskSizeGB = 128
