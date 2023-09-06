@@ -91,8 +91,12 @@ $NerdioApiScope = $SecureVars.NerdioApiScope
 $NerdioApiUrl = $SecureVars.NerdioApiUrl
 $StorageAccountKey = $SecureVars."$StorageAcccountKeySecureVarName"
 
+# create a directory for clixml output
+$JobOutputDir = "$Env:TEMP\JobOutput"
+New-Item -ItemType Directory -Path $JobOutputDir -Force | Out-Null
+
 try {
-    Connect-Nme -ClientId $SecureVars.NerdioApiClientId -ClientSecret $SecureVars.NerdioApiKey -ApiScope $SecureVars.NerdioApiScope -TenantId $SecureVars.NerdioApiTenantId -NmeUri $SecureVars.NerdioApiUrl | Out-Null
+    Connect-Nme -ClientId $NerdioApiClientId -ClientSecret $NerdioApiKey -ApiScope $NerdioApiScope -TenantId $NerdioApiTenantId -NmeUri $NerdioApiUrl | Out-Null
 }
 Catch {
     throw "Unable to connect to Nerdio Manager REST API. Please ensure the NerdioManagerPowershell module is installed in Nerdio Manager's runbook automation account, and that the secure variables are setup per the Notes section of this script."
@@ -119,7 +123,6 @@ else {
 
 Write-Output "Exporting $($HostPools.count) host pools"
 
-$CompletedJobs = @()
 # create $concurrentjobs number of jobs and wait for them to finish before creating more
 for ($i = 0; $i -lt $HostPools.count; $i += $ConcurrentJobs) {
   Write-Output "Creating $($ConcurrentJobs) jobs, starting at position $i out of $($HostPools.count)"
@@ -157,20 +160,20 @@ for ($i = 0; $i -lt $HostPools.count; $i += $ConcurrentJobs) {
             Set-AzStorageBlobContent -Container $StorageAccountContainer -File '$Env:TEMP\$FileName' -Blob $FileName -context `$Context -Force | Out-Null
             `$job.Success = `$true
             `$job.Completed = `$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-            `$job
+            `$job | export-clixml -path $joboutputdir\$($hostpool.name).xml
           }
           catch {
             `$job.Completed = `$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
             `$job.Success = `$false
             `$job.Error = `$_.Exception.Message
-            `$job
+            `$job | export-clixml -path $joboutputdir\$($hostpool.name).xml
           }
         }
         catch {
           `$job.Completed = `$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
           `$job.Success = `$false
           `$job.Error = `$_.Exception.Message
-          `$job
+          `$job | export-clixml -path $joboutputdir\$($hostpool.name).xml
         }"
       $Job = Start-Job -ScriptBlock ([Scriptblock]::Create($ScriptBlock)) -Name $hostpool.Name
       $Jobs += $Job
@@ -180,7 +183,7 @@ for ($i = 0; $i -lt $HostPools.count; $i += $ConcurrentJobs) {
       Write-Output "Waiting for $(($Jobs | Get-Job | where state -eq 'Running').count) jobs to complete"
       Start-Sleep -Seconds 10
   }
-  $CompletedJobs += $Jobs | Receive-Job | Select Name, ResourceGroup, Success, Error, FileName, Started, Completed
 }
 
-$CompletedJobs| Select Name, ResourceGroup, Success, Error, FileName, Started, Completed
+$jobInfo = Get-ChildItem -Path $JobOutputDir | Import-Clixml
+$jobInfo | select Name, ResourceGroup, Success, Error, FileName, Started, Completed 
