@@ -112,7 +112,7 @@ elseif ($HostPoolResourceGroup) {
   $HostPools = Get-AzWvdHostPool -ResourceGroupName $HostPoolResourceGroup
 }
 elseif ($HostPoolName) {
-    $HostPools = Get-AzWvdHostPool | where {$_.Name -eq $HostPoolName}
+    [array]$HostPools = Get-AzWvdHostPool | where {$_.Name -eq $HostPoolName}
     if ($HostPools.count -gt 1) {
       Write-Output "Multiple host pools with name $HostPoolName found. Exporting all."
     }
