@@ -125,7 +125,7 @@ Write-Output "Exporting $($HostPools.count) host pools"
 
 # create $concurrentjobs number of jobs and wait for them to finish before creating more
 for ($i = 0; $i -lt $HostPools.count; $i += $ConcurrentJobs) {
-  Write-Output "Creating $($ConcurrentJobs) jobs, starting at position $i out of $($HostPools.count)"
+  Write-Output "Creating maximum $($ConcurrentJobs) jobs, starting at position $i out of $($HostPools.count)"
   $Jobs = @()
   foreach ($hostpool in $HostPools[$i..($i + $ConcurrentJobs - 1)]) {
       $HpResourceGroup = $hostpool.id -split '/' | select -Index 4
