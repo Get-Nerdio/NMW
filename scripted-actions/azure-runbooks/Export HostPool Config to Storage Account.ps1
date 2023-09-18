@@ -96,7 +96,7 @@ $JobOutputDir = "$Env:TEMP\JobOutput"
 New-Item -ItemType Directory -Path $JobOutputDir -Force | Out-Null
 
 try {
-    Connect-Nme -ClientId $NerdioApiClientId -ClientSecret $NerdioApiKey -ApiScope $NerdioApiScope -TenantId $NerdioApiTenantId -NmeUri $NerdioApiUrl | Out-Null
+    Connect-Nme -ClientId $NerdioApiClientId -ClientSecret $NerdioApiKey -ApiScope $NerdioApiScope -TenantId $NerdioApiTenantId -NmeUri $NerdioApiUrl -ErrorAction Stop | Out-Null
 }
 Catch {
     throw "Unable to connect to Nerdio Manager REST API. Please ensure the NerdioManagerPowershell module is installed in Nerdio Manager's runbook automation account, and that the secure variables are setup per the Notes section of this script."
