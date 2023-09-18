@@ -96,7 +96,7 @@ $JobOutputDir = "$Env:TEMP\JobOutput"
 New-Item -ItemType Directory -Path $JobOutputDir -Force | Out-Null
 
 try {
-    Connect-Nme -ClientId $NerdioApiClientId -ClientSecret $NerdioApiKey -ApiScope $NerdioApiScope -TenantId $NerdioApiTenantId -NmeUri $NerdioApiUrl -ErrorAction Stop | Out-Null
+    Connect-Nme -ClientId $NerdioApiClientId -ClientSecret $NerdioApiKey -ApiScope $NerdioApiScope -TenantId $NerdioApiTenantId -NmeUri $NerdioApiUrl | Out-Null
 }
 Catch {
     throw "Unable to connect to Nerdio Manager REST API. Please ensure the NerdioManagerPowershell module is installed in Nerdio Manager's runbook automation account, and that the secure variables are setup per the Notes section of this script."
@@ -147,12 +147,12 @@ for ($i = 0; $i -lt $HostPools.count; $i += $ConcurrentJobs) {
           `$connect = Connect-Nme -ClientId $NerdioApiClientId -ClientSecret $NerdioApiKey -ApiScope $NerdioApiScope -TenantId $NerdioApiTenantId -NmeUri $NerdioApiUrl 
           $(
             if ($StorageAccountKey) {
-              "`$Context = New-AzStorageContext -StorageAccountName $StorageAccountName -StorageAccountKey $StorageAccountKey -Protocol Https -ErrorAction Stop"
+              "`$Context = New-AzStorageContext -StorageAccountName $StorageAccountName -StorageAccountKey $StorageAccountKey -Protocol Https -ErrorAction Stop `r`n`t  "
             }
             else {
-              "`$kvConnection = Get-AutomationConnection -Name $KeyVaultAzureConnectionName"
-              "Connect-AzAccount -ServicePrincipal -Tenant $($kvConnection.TenantID) -ApplicationId $($kvConnection.ApplicationID) -CertificateThumbprint $($kvConnection.CertificateThumbprint) -Environment $KeyVaultAzureEnvironment -Subscription $AzureSubscriptionId | Out-Null"
-              "`$Context = New-AzStorageContext -StorageAccountName $StorageAccountName -UseConnectedAccount -Protocol Https -ErrorAction Stop"
+              "`$kvConnection = Get-AutomationConnection -Name $KeyVaultAzureConnectionName `r`n`t  "
+              "Connect-AzAccount -ServicePrincipal -Tenant $($kvConnection.TenantID) -ApplicationId $($kvConnection.ApplicationID) -CertificateThumbprint $($kvConnection.CertificateThumbprint) -Environment $KeyVaultAzureEnvironment -Subscription $AzureSubscriptionId | Out-Null `r`n`t  "
+              "`$Context = New-AzStorageContext -StorageAccountName $StorageAccountName -UseConnectedAccount -Protocol Https -ErrorAction Stop `r`n`t  "
             }
           )
           Export-NmeHostPoolConfig -HostPoolName $($hostpool.name) -SubscriptionId $AzureSubscriptionId -ResourceGroup $hpresourcegroup $(if(([System.Convert]::ToBoolean($GatherHostInfo))){'-IncludeHosts'}) | Out-File -FilePath '$Env:TEMP\$FileName'
