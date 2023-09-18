@@ -150,8 +150,8 @@ for ($i = 0; $i -lt $HostPools.count; $i += $ConcurrentJobs) {
               "`$Context = New-AzStorageContext -StorageAccountName $StorageAccountName -StorageAccountKey $StorageAccountKey -Protocol Https -ErrorAction Stop `r`n`t  "
             }
             else {
-              "`$kvConnection = Get-AutomationConnection -Name $KeyVaultAzureConnectionName `r`n`t  "
-              "Connect-AzAccount -ServicePrincipal -Tenant $($kvConnection.TenantID) -ApplicationId $($kvConnection.ApplicationID) -CertificateThumbprint $($kvConnection.CertificateThumbprint) -Environment $KeyVaultAzureEnvironment -Subscription $AzureSubscriptionId | Out-Null `r`n`t  "
+              "`$kvConnection = Get-AutomationConnection -Name $KeyVaultAzureConnectionName -ErrorAction Stop `r`n`t  "
+              "Connect-AzAccount -ServicePrincipal -Tenant $($kvConnection.TenantID) -ApplicationId $($kvConnection.ApplicationID) -CertificateThumbprint $($kvConnection.CertificateThumbprint) -Environment $KeyVaultAzureEnvironment -Subscription $AzureSubscriptionId -ErrorAction Stop | Out-Null `r`n`t  "
               "`$Context = New-AzStorageContext -StorageAccountName $StorageAccountName -UseConnectedAccount -Protocol Https -ErrorAction Stop `r`n`t  "
             }
           )
