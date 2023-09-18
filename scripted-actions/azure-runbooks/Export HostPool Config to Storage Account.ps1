@@ -175,6 +175,8 @@ for ($i = 0; $i -lt $HostPools.count; $i += $ConcurrentJobs) {
           `$job.Error = `$_.Exception.Message
           `$job | export-clixml -path $joboutputdir\$($hostpool.name).xml
         }"
+        write-output "Script block" 
+        $ScriptBlock
       $Job = Start-Job -ScriptBlock ([Scriptblock]::Create($ScriptBlock)) -Name $hostpool.Name
       $Jobs += $Job
   }
