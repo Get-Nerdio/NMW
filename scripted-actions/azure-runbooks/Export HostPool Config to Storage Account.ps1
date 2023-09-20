@@ -3,7 +3,9 @@
 
 <# Notes:
     This scripted action will export the host pool configuration(s) to a json file and upload it to 
-    a storage account. 
+    a storage account. Note that in a large environment with hundreds of host pools, the ExportAllHostPools
+    option may cause the script to timeout. In this case, it is recommended to export host pools in batches
+    based on resource group.
  
     SETUP INSTRUCTIONS:
 
