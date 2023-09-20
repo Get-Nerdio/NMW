@@ -48,7 +48,7 @@
     "IsRequired": false
   },
   "ExportAllHostPools": {
-    "Description": "Boolean. If specified, all host pools the Nerdio app service account has access to will be exported. Overrides HostPoolResourceGroup and HostPoolName.",
+    "Description": "Boolean. If specified, all host pools the Nerdio app service account has access to will be exported. Overrides HostPoolResourceGroup and HostPoolName. In large environments, may cause the script to timeout.",
     "IsRequired": false,
     "DefaultValue": false
   },
