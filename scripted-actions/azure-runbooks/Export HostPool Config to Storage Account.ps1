@@ -79,7 +79,7 @@ $FileNameDate = Get-Date -Format "yyyy-MM-dd-HH-mm-ss"
 # Body of the script goes here
 Import-Module NerdioManagerPowerShell 
 try {
-    Connect-Nme -ClientId $SecureVars.NerdioApiClientId -ClientSecret $SecureVars.NerdioApiKey -ApiScope $SecureVars.NerdioApiScope -TenantId $SecureVars.NerdioApiTenantId -NmeUri $SecureVars.NerdioApiUrl
+    Connect-Nme -ClientId $SecureVars.NerdioApiClientId -ClientSecret $SecureVars.NerdioApiKey -ApiScope $SecureVars.NerdioApiScope -TenantId $SecureVars.NerdioApiTenantId -NmeUri $SecureVars.NerdioApiUrl -ErrorAction Stop
 }
 Catch {
     throw "Unable to connect to Nerdio Manager REST API. Please ensure the NerdioManagerPowershell module is installed in Nerdio Manager's runbook automation account, and that the secure variables are setup per the Notes section of this script."
