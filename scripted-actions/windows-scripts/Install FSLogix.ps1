@@ -25,6 +25,7 @@ Write-host "Current time (UTC-0): $LogTime"
 
 mkdir "C:\Windows\Temp\fslogix\install" -Force
 
+Get-ChildItem C:\Windows\Temp\fslogix\install\ | Remove-Item -Recurse -Force
 
 Invoke-WebRequest -Uri $FslogixUrl -OutFile "C:\Windows\Temp\fslogix\install\FSLogixAppsSetup.zip" -UseBasicParsing
 
@@ -36,11 +37,12 @@ Expand-Archive `
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 cd "C:\Windows\Temp\fslogix\install\"
 
+$Dir = Get-ChildItem C:\Windows\Temp\fslogix\install\ | Where-Object PSIsContainer -eq $true
 
 
 # Install FSLogix. 
 Write-Host "INFO: Installing FSLogix. . ."
-Start-Process "C:\Windows\Temp\fslogix\install\x64\Release\FSLogixAppsSetup.exe" `
+Start-Process "$($Dir.FullName)\x64\Release\FSLogixAppsSetup.exe" `
     -ArgumentList "/install /quiet" `
     -Wait `
     -Passthru `
