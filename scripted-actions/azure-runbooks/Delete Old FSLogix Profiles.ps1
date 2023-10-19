@@ -21,7 +21,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$StorageContext = New-AzStorageContext -StorageAccountName "$StorageAccountName" -UseConnectedAccount
+$StorageContext = New-AzStorageContext -UseConnectedAccount -StorageAccountName $StorageAccountName
 
 $Dirs = $StorageContext | Get-AzStorageFile -ShareName "$ShareName" | Where-Object {$_.GetType().Name -eq "AzureStorageFileDirectory"}
 
