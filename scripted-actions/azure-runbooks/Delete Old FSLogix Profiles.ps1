@@ -23,11 +23,14 @@ $ErrorActionPreference = 'Stop'
 
 $StorageContext = New-AzStorageContext -UseConnectedAccount -StorageAccountName $StorageAccountName
 
+Write-Output "Storage Account Connected"
+
 $Dirs = $StorageContext | Get-AzStorageFile -ShareName "$ShareName" | Where-Object {$_.GetType().Name -eq "AzureStorageFileDirectory"}
 
 # Get files from each directory, check if older than $DaysOld, delete it if it is
 foreach ($dir in $Dirs) {
     $Files = Get-AzStorageFile -ShareName "$ShareName" -Path $dir.Name -Context $StorageContext | Get-AzStorageFile
+    Write-Outout "Got $($Files.count) files in $($dir.Name)..."
     foreach ($file in $Files) {
         # check if file is not .vhd, if so, skip and move to next iteration
         if ($file.Name -notmatch '\.vhd') {
