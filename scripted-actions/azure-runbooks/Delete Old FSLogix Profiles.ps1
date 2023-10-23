@@ -15,17 +15,21 @@
   "DaysOld": {
     "Description": "Age of files to check for deletion.",
     "IsRequired": true
+  },
+  "StorageKeySecureVarName": {
+    "Description": "Name of the secure variable containing theh storage account key. Make sure this secure variable is passed to this script.",
+    "IsRequired": false,
+    "DefaultValue": "FslStorageKey"
   }
 }
 #>
 
 $ErrorActionPreference = 'Stop'
 
-$StorageContext = New-AzStorageContext -UseConnectedAccount -StorageAccountName $StorageAccountName
-
+$StorageContext = New-AzStorageContext -StorageAccountName $StorageAccountName -StorageAccountKey $($SecureVars."$StorageKeySecureVarName")
 Write-Output "Storage Account Connected"
 
-$Dirs = $StorageContext | Get-AzStorageFile -ShareName "$ShareName" | Where-Object {$_.GetType().Name -eq "AzureStorageFileDirectory"}
+$Dirs = $StorageContext | Get-AzStorageFile -ShareName "$ShareName"  | Where-Object {$_.GetType().Name -eq "AzureStorageFileDirectory"}
 
 # Get files from each directory, check if older than $DaysOld, delete it if it is
 foreach ($dir in $Dirs) {
