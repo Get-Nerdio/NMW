@@ -34,7 +34,6 @@ $Dirs = $StorageContext | Get-AzStorageFile -ShareName "$ShareName"  | Where-Obj
 # Get files from each directory, check if older than $DaysOld, delete it if it is
 foreach ($dir in $Dirs) {
     $Files = Get-AzStorageFile -ShareName "$ShareName" -Path $dir.Name -Context $StorageContext | Get-AzStorageFile
-    Write-Output "Got $($Files.count) files in $($dir.Name)..."
     foreach ($file in $Files) {
         # check if file is not .vhd, if so, skip and move to next iteration
         if ($file.Name -notmatch '\.vhd') {
@@ -56,7 +55,6 @@ foreach ($dir in $Dirs) {
     # if directory is now empty, delete it
     $Files = Get-AzStorageFile -ShareName "$ShareName" -Path $dir.Name -Context $StorageContext | Get-AzStorageFile
     if ($Files.Count -eq 0) {
-        Write-Output "$($dir.Name) is empty, deleting..."
         Remove-AzStorageDirectory -Context $StorageContext -ShareName "$ShareName" -Path $dir.name
     }
 }
