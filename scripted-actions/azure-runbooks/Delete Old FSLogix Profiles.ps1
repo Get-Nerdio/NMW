@@ -17,7 +17,7 @@
     "IsRequired": true
   },
   "StorageKeySecureVarName": {
-    "Description": "Name of the secure variable containing theh storage account key. Make sure this secure variable is passed to this script.",
+    "Description": "Name of the secure variable containing the storage account key. Make sure this secure variable is passed to this script.",
     "IsRequired": false,
     "DefaultValue": "FslStorageKey"
   }
@@ -34,7 +34,7 @@ $Dirs = $StorageContext | Get-AzStorageFile -ShareName "$ShareName"  | Where-Obj
 # Get files from each directory, check if older than $DaysOld, delete it if it is
 foreach ($dir in $Dirs) {
     $Files = Get-AzStorageFile -ShareName "$ShareName" -Path $dir.Name -Context $StorageContext | Get-AzStorageFile
-    Write-Outout "Got $($Files.count) files in $($dir.Name)..."
+    Write-Output "Got $($Files.count) files in $($dir.Name)..."
     foreach ($file in $Files) {
         # check if file is not .vhd, if so, skip and move to next iteration
         if ($file.Name -notmatch '\.vhd') {
