@@ -57,6 +57,6 @@ foreach ($dir in $Dirs) {
     $Files = Get-AzStorageFile -ShareName "$ShareName" -Path $dir.Name -Context $StorageContext | Get-AzStorageFile
     if ($Files.Count -eq 0) {
         Write-Output "$($dir.Name) is empty, deleting..."
-        $dir | Remove-AzStorageFile 
+        Remove-AzStorageDirectory -Context $StorageContext -ShareName "$ShareName" -Path $dir.name
     }
 }
