@@ -278,7 +278,7 @@ if ($PrivateEndpointSubnet.ServiceEndpoints -contains 'Microsoft.KeyVault') {
 Write-Output "Delegate app service subnet to webfarms"
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue 
 # Check if subnet delegation already exists
-$AppSubnetDelegation = Get-AzDelegation -Name "$Prefix-app-$NMWIdString-subnetdelegation" -ResourceGroupName $NMWResourceGroupName -ErrorAction SilentlyContinue
+$AppSubnetDelegation = Get-AzDelegation -Name "$Prefix-app-$NMWIdString-subnetdelegation" -Subnet $AppServiceSubnet -ErrorAction SilentlyContinue
 if ($AppSubnetDelegation) {
     Write-Output "App service subnet delegation already exists"
 } else {
