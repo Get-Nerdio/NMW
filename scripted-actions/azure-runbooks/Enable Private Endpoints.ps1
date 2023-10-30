@@ -169,27 +169,48 @@ if ($VNet) {
 if ($PrivateDnsKeyVaultId) {
     $KeyVaultDnsZone = Get-AzResource -ResourceId $PrivateDnsKeyVaultId
 } else {
+  # check if dns zone already exists
+  $KeyVaultDnzZone = Get-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.vaultcore.azure.net -ErrorAction SilentlyContinue
+  if ($KeyVaultDnzZone) { 
+    Write-Output "Private DNS Zone for Key Vault already exists"
+  }
+  else {
     Write-Output "Creating Private DNS Zones for Key Vault"
     $KeyVaultDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.vaultcore.azure.net
     New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.vaultcore.azure.net -Name $Prefix-vault-privatelink -VirtualNetworkId $vnet.Id
+  }
 }
  
 # Create private dns zones for SQL if id not supplied
 if ($PrivateDnsSqlId) {
     $SqlDnsZone = Get-AzResource -ResourceId $PrivateDnsSqlId
 } else {
+  # check if sql dns zone already exists
+  $SqlDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.database.windows.net -ErrorAction SilentlyContinue
+  if ($SqlDnsZone) {
+    Write-Output "Private DNS Zone for SQL already exists"
+  }
+  else {
     Write-Output "Creating Private DNS Zones for SQL"
     $SqlDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.database.windows.net
     New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.database.windows.net -Name $Prefix-database-privatelink -VirtualNetworkId $vnet.Id
+  }
 }
  
 # Create private dns zones for Storage if id not supplied
 if ($PrivateDnsStorageId) {
     $StorageDnsZone = Get-AzResource -ResourceId $PrivateDnsStorageId
 } else {
-    Write-Output "Creating Private DNS Zones for Storage"
-    $StorageDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.file.core.windows.net
-    New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.file.core.windows.net -Name $prefix-file-privatelink -VirtualNetworkId $vnet.Id
+    # check if storage dns zone already exists
+    $StorageDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.file.core.windows.net -ErrorAction SilentlyContinue
+    if ($StorageDnsZone) {
+        Write-Output "Private DNS Zone for Storage already exists"
+    }
+    else {
+      Write-Output "Creating Private DNS Zones for Storage"
+      $StorageDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NMWResourceGroupName -Name privatelink.file.core.windows.net
+      New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NMWResourceGroupName -ZoneName privatelink.file.core.windows.net -Name $prefix-file-privatelink -VirtualNetworkId $vnet.Id
+    }
 }
  
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue
@@ -198,32 +219,84 @@ $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName
  
 Write-Output "Configuring keyvault service connection and DNS zone"
 $KeyVault = Get-AzKeyVault -VaultName $KeyVaultName -ResourceGroupName $NMWResourceGroupName 
-$KvServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-kv-$NMWIdString-serviceconnection" -PrivateLinkServiceId $KeyVault.ResourceId -GroupId vault
-New-AzPrivateEndpoint -Name "$Prefix-app-kv-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $KvServiceConnection
-$Config = New-AzPrivateDnsZoneConfig -Name privatelink.vaultcore.azure.net -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
-New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-kv-$NMWIdString-privateendpoint" -Name "$Prefix-app-kv-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
- 
+# Check if keyvault service connection already exists
+$KvServiceConnection = Get-AzPrivateLinkServiceConnection -Name "$Prefix-app-kv-$NMWIdString-serviceconnection" -ResourceGroupName $NMWResourceGroupName -ErrorAction SilentlyContinue
+if ($KvServiceConnection) {
+    Write-Output "Key Vault service connection already exists"
+} else {
+  $KvServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-kv-$NMWIdString-serviceconnection" -PrivateLinkServiceId $KeyVault.ResourceId -GroupId vault
+}
+# check if keyvault private endpoint already exists
+$KvPrivateEndpoint = Get-AzPrivateEndpoint -Name "$Prefix-app-kv-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -ErrorAction SilentlyContinue
+if ($KvPrivateEndpoint) {
+    Write-Output "Key Vault private endpoint already exists"
+} else {
+    New-AzPrivateEndpoint -Name "$Prefix-app-kv-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $KvServiceConnection
+}
+# check if keyvault dns zone group already exists
+$KvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-kv-$NMWIdString-privateendpoint" -ErrorAction SilentlyContinue
+if ($KvDnsZoneGroup) {
+    Write-Output "Key Vault DNS zone group already exists"
+} else {
+    $Config = New-AzPrivateDnsZoneConfig -Name privatelink.vaultcore.azure.net -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
+    New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-kv-$NMWIdString-privateendpoint" -Name "$Prefix-app-kv-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
+}
+
 Write-Output "Configuring sql service connection and DNS zone"
 $SqlServer = Get-AzSqlServer -ResourceGroupName $NMWResourceGroupName -ServerName $SqlServerName 
-$SqlServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-sql-$NMWIdString-serviceconnection" -PrivateLinkServiceId $SqlServer.ResourceId -GroupId sqlserver
-New-AzPrivateEndpoint -Name "$Prefix-app-sql-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $SqlServiceConnection
-$Config = New-AzPrivateDnsZoneConfig -Name 'privatelink.database.azure.net' -PrivateDnsZoneId $SqlDnsZone.ResourceId
-New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-sql-$NMWIdString-privateendpoint" -Name "$Prefix-app-sql-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
- 
+# check if sql service connection already exists
+$SqlServiceConnection = Get-AzPrivateLinkServiceConnection -Name "$Prefix-app-sql-$NMWIdString-serviceconnection" -ResourceGroupName $NMWResourceGroupName -ErrorAction SilentlyContinue
+if ($SqlServiceConnection) {
+    Write-Output "SQL service connection already exists"
+} else {
+    $SqlServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-sql-$NMWIdString-serviceconnection" -PrivateLinkServiceId $SqlServer.ResourceId -GroupId sqlserver
+}
+
+#check if sql private endpoint already exists
+$SqlPrivateEndpoint = Get-AzPrivateEndpoint -Name "$Prefix-app-sql-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -ErrorAction SilentlyContinue
+if ($SqlPrivateEndpoint) {
+    Write-Output "SQL private endpoint already exists"
+} else {
+    New-AzPrivateEndpoint -Name "$Prefix-app-sql-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $SqlServiceConnection
+}
+# check if sql dns zone group already exists
+$SqlDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-sql-$NMWIdString-privateendpoint" -ErrorAction SilentlyContinue
+if ($SqlDnsZoneGroup) {
+    Write-Output "SQL DNS zone group already exists"
+} else {
+    $Config = New-AzPrivateDnsZoneConfig -Name privatelink.database.windows.net -PrivateDnsZoneId $SqlDnsZone.ResourceId
+    New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-sql-$NMWIdString-privateendpoint" -Name "$Prefix-app-sql-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
+}
+
+
 Write-Output "Add VNet integration for key vault and sql"
 $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
 $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
  
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue
-$VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnetRange -ServiceEndpoint Microsoft.KeyVault,Microsoft.Sql,Microsoft.Storage | Set-AzVirtualNetwork
- 
+# check if service endpoints already exist
+$PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
+if ($PrivateEndpointSubnet.ServiceEndpoints -contains 'Microsoft.KeyVault') {
+    Write-Output "Key Vault service endpoint already exists"
+} else {
+    Write-Output "Adding service endpoints for key vault and sql"
+    $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue 
+    $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnetRange -ServiceEndpoint Microsoft.KeyVault,Microsoft.Sql | Set-AzVirtualNetwork
+}
+
 Write-Output "Delegate app service subnet to webfarms"
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue 
-$AppSubnetDelegation = New-AzDelegation -Name "$Prefix-app-$NMWIdString-subnetdelegation" -ServiceName Microsoft.Web/serverFarms
-$AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
-$AppServiceSubnet.Delegations.Add($AppSubnetDelegation)
-Set-AzVirtualNetwork -VirtualNetwork $VNet
- 
+# Check if subnet delegation already exists
+$AppSubnetDelegation = Get-AzDelegation -Name "$Prefix-app-$NMWIdString-subnetdelegation" -ResourceGroupName $NMWResourceGroupName -ErrorAction SilentlyContinue
+if ($AppSubnetDelegation) {
+    Write-Output "App service subnet delegation already exists"
+} else {
+    $AppSubnetDelegation = New-AzDelegation -Name "$Prefix-app-$NMWIdString-subnetdelegation" -ServiceName Microsoft.Web/serverFarms
+    $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
+  $AppServiceSubnet.Delegations.Add($AppSubnetDelegation)
+  Set-AzVirtualNetwork -VirtualNetwork $VNet
+}
+
 Write-Output "Create app service VNet integration"
 $vNetResourceGroupName = $VNet.ResourceGroupName
  
@@ -245,19 +318,25 @@ Write-Output "Add application settings to use private dns"
  
 $app = Get-AzWebApp -Name $NMWAppName -ResourceGroupName $NMWResourceGroupName
 $appSettings = $app.SiteConfig.AppSettings
+# Check if current application settings already include private dns settings
+if ($appSettings.WEBSITE_VNET_ROUTE_ALL -and $appSettings.WEBSITE_DNS_SERVER ) {
+    Write-Output "Application settings already include private dns settings"
+} else {
+}
 $newAppSettings = @{}
 ForEach ($item in $appSettings) {
     $newAppSettings[$item.Name] = $item.Value
-}
-$newAppSettings += @{WEBSITE_VNET_ROUTE_ALL = '1'; WEBSITE_DNS_SERVER = '168.63.129.16'}
+    $newAppSettings += @{WEBSITE_VNET_ROUTE_ALL = '1'; WEBSITE_DNS_SERVER = '168.63.129.16'}
  
-# getting around az.websites module bug preventing app settings update
-$module = Get-Module az.websites
-if ($module.Version -lt '2.7.0') {
-    Set-AzWebApp -AppSettings $newAppSettings -Name $NMWAppName -ResourceGroupName $NMWResourceGroupName -HttpsOnly
-} else {
-    Set-AzWebApp -AppSettings $newAppSettings -Name $NMWAppName -ResourceGroupName $NMWResourceGroupName
+  # getting around az.websites module bug preventing app settings update
+  $module = Get-Module az.websites
+  if ($module.Version -lt '2.7.0') {
+      Set-AzWebApp -AppSettings $newAppSettings -Name $NMWAppName -ResourceGroupName $NMWResourceGroupName -HttpsOnly
+  } else {
+      Set-AzWebApp -AppSettings $newAppSettings -Name $NMWAppName -ResourceGroupName $NMWResourceGroupName
+  }
 }
+
  
 Write-Output "Network deny rules for key vault and sql"
 Add-AzKeyVaultNetworkRule -VaultName $KeyVaultName -VirtualNetworkResourceId $PrivateEndpointSubnet.id -ResourceGroupName $NMWResourceGroupName 
@@ -284,30 +363,48 @@ if ($MakeAppServicePrivate -eq 'true') {
     }
  
     $AppService = Get-AzWebApp -ResourceGroupName $NMWResourceGroupName -Name $NMWAppName 
-    $AppServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-$NMWIdString-serviceconnection" -PrivateLinkServiceId $AppService.Id -GroupId sites 
+    # check if app service service connection already exists
+    $AppServiceConnection = Get-AzPrivateLinkServiceConnection -Name "$Prefix-app-$NMWIdString-serviceconnection" -ResourceGroupName $NMWResourceGroupName -ErrorAction SilentlyContinue
+    if ($AppServiceConnection) {
+        Write-Output "App service service connection already exists"
+    } else {
+        $AppServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-$NMWIdString-serviceconnection" -PrivateLinkServiceId $AppService.Id -GroupId sites 
+    }
+    # check if app service private endpoint already exists
+
     New-AzPrivateEndpoint -Name "$Prefix-app-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $AppServiceConnection 
     $Config = New-AzPrivateDnsZoneConfig -Name 'privatelink.azurewebsites.net' -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
-    New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-$NMWIdString-privateendpoint" -Name "$Prefix-app-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
+    New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-$NMWIdString-privateendpoint" -Name "$Prefix-app-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config -ErrorAction Continue
 }
  
 if ($StorageAccountResourceId) {
   write-output   "Making storage account private"
     $StorageAccount = Get-AzResource -ResourceId $StorageAccountResourceId
-    $StorageServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-files-$NMWIdString-serviceconnection" -PrivateLinkServiceId $StorageAccount.id -GroupId file
-    New-AzPrivateEndpoint -Name "$Prefix-app-files-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $StorageServiceConnection 
-    $Config = New-AzPrivateDnsZoneConfig -Name 'privatelink.file.core.windows.net' -PrivateDnsZoneId $StorageDnsZone.ResourceId
-    New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-files-$NMWIdString-privateendpoint" -Name "$Prefix-app-files-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
-    Add-AzStorageAccountNetworkRule -ResourceGroupName $NMWResourceGroupName -Name $StorageAccount.Name -VirtualNetworkResourceId $PrivateEndpointSubnet.id 
-    Update-AzStorageAccountNetworkRuleSet -ResourceGroupName $NMWResourceGroupName -Name $StorageAccount.Name -DefaultAction Deny
-    if ($PeerVnetId) {
-        try {
-            Add-AzStorageAccountNetworkRule -ResourceGroupName $NMWResourceGroupName -Name $StorageAccount.Name -VirtualNetworkResourceId $PeerVnetId
-        }
-        Catch {
-            # Error here likely indicates storage account is not in a compatible region. Storage account must be in the same region as the vnet, or a paired region
-            Write-Output "ERROR: Unable to create vnet integration to storage account.  Account must be in same region as the vnet, or a paired region."
-        }
+    # check if storage account service connection already exists
+    $StorageServiceConnection = Get-AzPrivateLinkServiceConnection -Name "$Prefix-app-files-$NMWIdString-serviceconnection" -ResourceGroupName $NMWResourceGroupName -ErrorAction SilentlyContinue
+    if ($StorageServiceConnection) {
+        Write-Output "Storage account service connection already exists"
+    } else {
+        $StorageServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-files-$NMWIdString-serviceconnection" -PrivateLinkServiceId $StorageAccount.id -GroupId file
     }
+    # check if storage account private endpoint already exists
+    $StoragePrivateEndpoint = Get-AzPrivateEndpoint -Name "$Prefix-app-files-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -ErrorAction SilentlyContinue
+    if ($StoragePrivateEndpoint) {
+        Write-Output "Storage account private endpoint already exists"
+    } else {
+    
+      New-AzPrivateEndpoint -Name "$Prefix-app-files-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $StorageServiceConnection 
+      $Config = New-AzPrivateDnsZoneConfig -Name 'privatelink.file.core.windows.net' -PrivateDnsZoneId $StorageDnsZone.ResourceId
+    }
+    # check if storage account dns zone group already exists
+    $StorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-files-$NMWIdString-privateendpoint" -ErrorAction SilentlyContinue
+    if ($StorageDnsZoneGroup) {
+        Write-Output "Storage account DNS zone group already exists"
+    } else {
+      New-AzPrivateDnsZoneGroup -ResourceGroupName $NMWResourceGroupName -PrivateEndpointName "$Prefix-app-files-$NMWIdString-privateendpoint" -Name "$Prefix-app-files-$NMWIdString-dnszonegroup" -PrivateDnsZoneConfig $config
+    }
+    Add-AzStorageAccountNetworkRule -ResourceGroupName $NMWResourceGroupName -Name $StorageAccount.Name -VirtualNetworkResourceId $PrivateEndpointSubnet.id -ErrorAction Continue
+    Update-AzStorageAccountNetworkRuleSet -ResourceGroupName $NMWResourceGroupName -Name $StorageAccount.Name -DefaultAction Deny -ErrorAction Continue
 }
  
 if ($PeerVnetId) {
