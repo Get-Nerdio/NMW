@@ -219,13 +219,8 @@ $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName
  
 Write-Output "Configuring keyvault service connection and DNS zone"
 $KeyVault = Get-AzKeyVault -VaultName $KeyVaultName -ResourceGroupName $NMWResourceGroupName 
-# Check if keyvault service connection already exists
-$KvServiceConnection = Get-AzPrivateLinkServiceConnection -Name "$Prefix-app-kv-$NMWIdString-serviceconnection" -ResourceGroupName $NMWResourceGroupName -ErrorAction SilentlyContinue
-if ($KvServiceConnection) {
-    Write-Output "Key Vault service connection already exists"
-} else {
-  $KvServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-kv-$NMWIdString-serviceconnection" -PrivateLinkServiceId $KeyVault.ResourceId -GroupId vault
-}
+$KvServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-kv-$NMWIdString-serviceconnection" -PrivateLinkServiceId $KeyVault.ResourceId -GroupId vault -ErrorAction Continue
+
 # check if keyvault private endpoint already exists
 $KvPrivateEndpoint = Get-AzPrivateEndpoint -Name "$Prefix-app-kv-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -ErrorAction SilentlyContinue
 if ($KvPrivateEndpoint) {
@@ -245,12 +240,8 @@ if ($KvDnsZoneGroup) {
 Write-Output "Configuring sql service connection and DNS zone"
 $SqlServer = Get-AzSqlServer -ResourceGroupName $NMWResourceGroupName -ServerName $SqlServerName 
 # check if sql service connection already exists
-$SqlServiceConnection = Get-AzPrivateLinkServiceConnection -Name "$Prefix-app-sql-$NMWIdString-serviceconnection" -ResourceGroupName $NMWResourceGroupName -ErrorAction SilentlyContinue
-if ($SqlServiceConnection) {
-    Write-Output "SQL service connection already exists"
-} else {
-    $SqlServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-sql-$NMWIdString-serviceconnection" -PrivateLinkServiceId $SqlServer.ResourceId -GroupId sqlserver
-}
+$SqlServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-sql-$NMWIdString-serviceconnection" -PrivateLinkServiceId $SqlServer.ResourceId -GroupId sqlserver -ErrorAction Continue
+
 
 #check if sql private endpoint already exists
 $SqlPrivateEndpoint = Get-AzPrivateEndpoint -Name "$Prefix-app-sql-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -ErrorAction SilentlyContinue
@@ -363,13 +354,8 @@ if ($MakeAppServicePrivate -eq 'true') {
     }
  
     $AppService = Get-AzWebApp -ResourceGroupName $NMWResourceGroupName -Name $NMWAppName 
-    # check if app service service connection already exists
-    $AppServiceConnection = Get-AzPrivateLinkServiceConnection -Name "$Prefix-app-$NMWIdString-serviceconnection" -ResourceGroupName $NMWResourceGroupName -ErrorAction SilentlyContinue
-    if ($AppServiceConnection) {
-        Write-Output "App service service connection already exists"
-    } else {
-        $AppServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-$NMWIdString-serviceconnection" -PrivateLinkServiceId $AppService.Id -GroupId sites 
-    }
+    $AppServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-$NMWIdString-serviceconnection" -PrivateLinkServiceId $AppService.Id -GroupId sites  -ErrorAction Continue
+    
     # check if app service private endpoint already exists
 
     New-AzPrivateEndpoint -Name "$Prefix-app-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -Location $NMWRegionName -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $AppServiceConnection 
@@ -381,12 +367,8 @@ if ($StorageAccountResourceId) {
   write-output   "Making storage account private"
     $StorageAccount = Get-AzResource -ResourceId $StorageAccountResourceId
     # check if storage account service connection already exists
-    $StorageServiceConnection = Get-AzPrivateLinkServiceConnection -Name "$Prefix-app-files-$NMWIdString-serviceconnection" -ResourceGroupName $NMWResourceGroupName -ErrorAction SilentlyContinue
-    if ($StorageServiceConnection) {
-        Write-Output "Storage account service connection already exists"
-    } else {
-        $StorageServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-files-$NMWIdString-serviceconnection" -PrivateLinkServiceId $StorageAccount.id -GroupId file
-    }
+    $StorageServiceConnection = New-AzPrivateLinkServiceConnection -Name "$Prefix-app-files-$NMWIdString-serviceconnection" -PrivateLinkServiceId $StorageAccount.id -GroupId file -ErrorAction Continue
+    
     # check if storage account private endpoint already exists
     $StoragePrivateEndpoint = Get-AzPrivateEndpoint -Name "$Prefix-app-files-$NMWIdString-privateendpoint" -ResourceGroupName $NMWResourceGroupName -ErrorAction SilentlyContinue
     if ($StoragePrivateEndpoint) {
