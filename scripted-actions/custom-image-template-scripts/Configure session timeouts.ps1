@@ -1,6 +1,6 @@
 <#
   Author: Akash Chawla
-  Source: https://github.com/Azure/RDS-Templates/blob/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-06-12
+  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-09-15
 #>
 
 #description: Configure timeout thresholds for sessions
