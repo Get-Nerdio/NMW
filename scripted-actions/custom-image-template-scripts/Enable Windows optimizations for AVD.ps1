@@ -1,6 +1,6 @@
 <#
   Author: Akash Chawla
-  Source: https://github.com/Azure/RDS-Templates/blob/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-06-12
+  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-09-15
 #>
 
 #description: Enable Windows optimizations for AVD
@@ -74,20 +74,14 @@ PROCESS {
         try 
         {
             $ScheduledTasksFilePath = Join-Path -Path $WorkingLocation -ChildPath 'ScheduledTasks.json'
-
-            if($WindowsVersion -eq "2004") {
-                $ScheduledTaskUrl = "https://raw.githubusercontent.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/main/2004/ConfigurationFiles/ScheduledTasks.json"
-            } 
-            else {
-                $ScheduledTaskUrl = "https://raw.githubusercontent.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/main/2009/ConfigurationFiles/ScheduledTasks.json"
-            }
+            $ScheduledTaskUrl = "https://raw.githubusercontent.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/main/2009/ConfigurationFiles/ScheduledTasks.json"
 
             Invoke-WebRequest $ScheduledTaskUrl -OutFile $ScheduledTasksFilePath -UseBasicParsing
 
             If (Test-Path $ScheduledTasksFilePath)
             {
                 Write-Host "AVD AIB Customization : Windows Optimizations - [VDI Optimize] Disable Scheduled Tasks" 
-                $SchTasksList = (Get-Content $ScheduledTasksFilePath | AVD AIBConvertFrom-Json).Where( { $_.VDIState -eq 'Disabled' })
+                $SchTasksList = (Get-Content $ScheduledTasksFilePath | ConvertFrom-Json).Where( { $_.VDIState -eq 'Disabled' })
                 If ($SchTasksList.count -gt 0)
                 {
                     Foreach ($Item in $SchTasksList)
@@ -140,13 +134,7 @@ PROCESS {
     If ($Optimizations -contains "DefaultUserSettings" -or $Optimizations -contains "All")
     {
         $DefaultUserSettingsFilePath = Join-Path -Path $WorkingLocation -ChildPath 'DefaultUserSettings.json'
-
-        if($WindowsVersion -eq "2004") {
-            $DefaultUserSettingsUrl = "https://raw.githubusercontent.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/main/2004/ConfigurationFiles/DefaultUserSettings.json"
-        } 
-        else {
-            $DefaultUserSettingsUrl = "https://raw.githubusercontent.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/main/2009/ConfigurationFiles/ScheduledTasks.json"
-        }
+        $DefaultUserSettingsUrl = "https://raw.githubusercontent.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/main/2009/ConfigurationFiles/DefaultUserSettings.json"
 
         Invoke-WebRequest $DefaultUserSettingsUrl -OutFile $DefaultUserSettingsFilePath -UseBasicParsing
 
@@ -219,13 +207,7 @@ PROCESS {
      #region Disable Windows Traces
     If ($Optimizations -contains "AutoLoggers" -or $Optimizations -contains "All")
     {
-        if($WindowsVersion -eq "2004") {
-            $AutoLoggersUrl = "https://raw.githubusercontent.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/main/2004/ConfigurationFiles/Autologgers.Json"
-        } 
-        else {
-            $AutoLoggersUrl = "https://raw.githubusercontent.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/main/2009/ConfigurationFiles/Autologgers.Json"
-        }
-
+        $AutoLoggersUrl = "https://raw.githubusercontent.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/main/2009/ConfigurationFiles/Autologgers.Json"
         $AutoLoggersFilePath = Join-Path -Path $WorkingLocation -ChildPath 'Autologgers.json'
         
         Invoke-WebRequest $AutoLoggersUrl -OutFile $AutoLoggersFilePath -UseBasicParsing
@@ -270,13 +252,8 @@ PROCESS {
     #region Disable Services
     If ($Optimizations -contains "Services" -or $Optimizations -contains "All")
     {
-        if($WindowsVersion -eq "2004") {
-            $ServicesUrl = "https://raw.githubusercontent.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/main/2004/ConfigurationFiles/Services.json"
-        } 
-        else {
-            $ServicesUrl = "https://raw.githubusercontent.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/main/2009/ConfigurationFiles/Services.json"
-        }
 
+        $ServicesUrl = "https://raw.githubusercontent.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/main/2009/ConfigurationFiles/Services.json"
         $ServicesFilePath = Join-Path -Path $WorkingLocation -ChildPath 'Services.json'
         
         Invoke-WebRequest $ServicesUrl -OutFile $ServicesFilePath -UseBasicParsing
@@ -324,12 +301,7 @@ PROCESS {
     # LanManWorkstation optimizations
     If ($Optimizations -contains "NetworkOptimizations" -or $Optimizations -contains "All")
     {
-        if($WindowsVersion -eq "2004") {
-            $NetworkOptimizationsUrl = "https://raw.githubusercontent.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/main/2004/ConfigurationFiles/LanManWorkstation.json"
-        } 
-        else {
-           $NetworkOptimizationsUrl = "https://raw.githubusercontent.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/main/2009/ConfigurationFiles/LanManWorkstation.json"
-        }
+        $NetworkOptimizationsUrl = "https://raw.githubusercontent.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/main/2009/ConfigurationFiles/LanManWorkstation.json"
 
         $NetworkOptimizationsFilePath = Join-Path -Path $WorkingLocation -ChildPath 'LanManWorkstation.json'
         Invoke-WebRequest $NetworkOptimizationsUrl -OutFile $NetworkOptimizationsFilePath -UseBasicParsing

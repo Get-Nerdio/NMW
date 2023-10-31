@@ -1,6 +1,6 @@
 <#
   Author: Akash Chawla
-  Source: https://github.com/Azure/RDS-Templates/blob/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-06-12
+  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-09-15
 #>
 
 #description: Install FSLogix. This also configures MS Defender anti-virus exclusions
@@ -11,15 +11,6 @@
   "ProfilePath": {
     "Description": "Enter the SMB path for your FSLogix profiles",
     "DisplayName": "Profile path"
-  },
-  "FSLogixInstaller": {
-    "Description": "Select version of FSLogix installer",
-    "DisplayName": "FSLogix version",
-    "OptionsSet": [
-      {"Label": "2201 hotfix 1", "Value": "https://download.microsoft.com/download/e/a/1/ea1bcf0a-e66d-48d2-ac9f-e385e5a7456e/FSLogix_Apps_2.9.8171.14983.zip"},
-      {"Label": "2201", "Value": "https://download.microsoft.com/download/9/2/5/9257adcf-abdf-4ab3-b37f-416d70682315/FSLogix_Apps_2.9.8111.53415.zip"},
-      {"Label": "2110", "Value": "https://download.microsoft.com/download/0/a/4/0a4c3a18-f6c8-4bcd-91fc-97ce845e2d3e/FSLogix_Apps_2.9.8361.52326.zip"}
-    ]
   },
   "VHDSize": {
     "Description": "Specify the size for new VHD(x) in megabytes",
@@ -32,9 +23,6 @@
 Param (        
     [Parameter(Mandatory=$false)]
         [string]$ProfilePath,
-
-    [Parameter(Mandatory=$true)]
-        [string]$FSLogixInstaller,
 
     [Parameter(Mandatory=$false)]
         [string]$VHDSize
@@ -68,6 +56,7 @@ else {
 #################################
 #    Download WVD Componants    #
 #################################
+$FSLogixInstaller = "https://aka.ms/fslogix_download"
 Write-Host "AVD AIB Customization - Install FSLogix : Downloading FSLogix from URI: $FSLogixInstaller"
 Invoke-WebRequest -Uri $FSLogixInstaller -OutFile "$LocalWVDpath$FSInstaller"
 
