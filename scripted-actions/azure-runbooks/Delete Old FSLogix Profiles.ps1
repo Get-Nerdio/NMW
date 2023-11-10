@@ -16,8 +16,8 @@
     "Description": "Age of files to check for deletion.",
     "IsRequired": true
   },
-  "StorageKeySecureVarName": {
-    "Description": "Name of the secure variable containing the storage account key. Make sure this secure variable is passed to this script.",
+  "StorageKeySecureVar": {
+    "Description": "Secure variable containing the storage account key. Make sure this secure variable is passed to this script.",
     "IsRequired": false,
     "DefaultValue": "FslStorageKey"
   }
@@ -26,7 +26,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$StorageContext = New-AzStorageContext -StorageAccountName $StorageAccountName -StorageAccountKey $($SecureVars."$StorageKeySecureVarName")
+$StorageContext = New-AzStorageContext -StorageAccountName $StorageAccountName -StorageAccountKey $StorageKeySecureVar
 Write-Output "Storage Account Connected"
 
 $Dirs = $StorageContext | Get-AzStorageFile -ShareName "$ShareName"  | Where-Object {$_.GetType().Name -eq "AzureStorageFileDirectory"}
