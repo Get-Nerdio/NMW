@@ -123,7 +123,7 @@ function Set-NmeVars {
         $script:NmeCclAppInsightsName = Get-AzApplicationInsights -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object  { $_.Tag.Keys -contains $key } | Where-Object {$_.tag[$key] -eq 'CC_DEPLOYMENT_RESOURCE'}| Select-Object -ExpandProperty Name
         if ($NmeCclAppInsightsName.count -ne 1) {
             # bug in some Az.ApplicationInsights versions
-            throw "Unable to find CCL App Insights. Az.ApplicationInsights module may need to be updated in automation account."
+            throw "Unable to find CCL App Insights. Az.ApplicationInsights module may need to be updated to greater than v2.0.0 in the NME scripted action automation account."
         }
         Write-Verbose "NmeCclAppInsightsName is $NmeCclAppInsightsName"
         Write-Verbose "Getting CCL Log Analytics Workspace"
@@ -145,7 +145,7 @@ function Set-NmeVars {
     $NmeAppInsights = Get-AzApplicationInsights -ResourceGroupName $NmeRg | Where-Object { $_.InstrumentationKey -eq ($NmeWebApp.siteconfig.appsettings | Where-Object  {$_.name -eq 'ApplicationInsights:InstrumentationKey'} | Select-Object -ExpandProperty value) }
     if ($NmeAppInsights.count -ne 1) {
         # bug in some Az.ApplicationInsights versions
-        throw "Unable to find Nerdio Manager App Insights. Az.ApplicationInsights module may need to be updated in automation account."
+        throw "Unable to find CCL App Insights. Az.ApplicationInsights module may need to be updated to greater than v2.0.0 in the NME scripted action automation account."
     }
     $script:NmeAppInsightsLAWName = ($NmeAppInsights.WorkspaceResourceId).Split("/")[-1]
     $script:NmeAppInsightsName = $NmeAppInsights.name
@@ -1016,7 +1016,14 @@ function New-NmeHybridWorkerVm {
         $disk = Get-AzDisk -ResourceGroupName $ResourceGroupName -DiskName $azureVmOsDiskName -ErrorAction Continue
 
         # Check if hybrid worker group already exists
-        $HybridWorkerGroup = Get-AzAutomationHybridRunbookWorkerGroup -ResourceGroupName $ResourceGroupName -AutomationAccountName $AA.AutomationAccountName -Name $HybridWorkerGroupName -ErrorAction SilentlyContinue
+        try {$HybridWorkerGroup = Get-AzAutomationHybridRunbookWorkerGroup -ResourceGroupName $ResourceGroupName -AutomationAccountName $AA.AutomationAccountName -Name $HybridWorkerGroupName -ErrorAction SilentlyContinue}
+        catch [System.Management.Automation.CommandNotFoundException] {
+            # old version of Az.Automation module
+            Throw "Command Get-AzAutomationHybridRunbookWorkerGroup not found. Please update your Az.Automation module to the latest version."
+        }
+        catch {
+            Throw $_
+        }
         if ($HybridWorkerGroup) {
             Write-Output "Hybrid worker group $HybridWorkerGroupName created"
         }
@@ -1224,6 +1231,7 @@ if ($MakeSaStoragePrivate -eq 'True') {
 
         }
         catch {
+            Write-Output "Unable to create hybrid worker VM for scripted actions automation account. See exception for details"
             Throw $_
         }
     }
