@@ -113,14 +113,14 @@ function Set-NmeVars {
     $keyvaultTags = $NmeKeyVault.Tags
     $key = $keyvaultTags.GetEnumerator() | Where-Object { $_.Value -eq "PAAS" } | Select-Object -ExpandProperty Name
     Write-Verbose "got key $key"
-    if ($key) {$cclwebapp = Get-AzWebApp -ResourceGroupName $NmeRg | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'}
+    if ($key) {
+        $cclwebapp = Get-AzWebApp -ResourceGroupName $NmeRg | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'}
         if ($cclwebapp) {
             Write-Verbose "Found CCL web app"
             $script:NmeCclWebAppName = $cclwebapp.Name
         }
-        $CclInsightsInstrumentationKey = $cclwebapp.SiteConfig.appsettings | where name -eq APPINSIGHTS_INSTRUMENTATIONKEY | select -ExpandProperty value
         Write-Verbose "Getting CCL App Insights"
-        $script:NmeCclAppInsightsName = Get-AzApplicationInsights -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.InstrumentationKey -eq $CclInsightsInstrumentationKey } | Select-Object -ExpandProperty Name
+        $script:NmeCclAppInsightsName = Get-AzApplicationInsights -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object  { $_.Tag.Keys -contains $key } | Where-Object {$_.tag[$key] -eq 'CC_DEPLOYMENT_RESOURCE'}| Select-Object -ExpandProperty Name
         if ($NmeCclAppInsightsName.count -ne 1) {
             # bug in some Az.ApplicationInsights versions
             throw "Unable to find CCL App Insights. Az.ApplicationInsights module may need to be updated in automation account."
