@@ -87,17 +87,6 @@ endpoint vnet.
   }
 }
 #>
-
-<#
-$privatelinkVnetName = 'nme-nw-private-vnet'
-$vnetaddressrange = '10.250.250.0/23'
-$privateendpointSubnetname = 'endpoints'
-$privateendpointSubnetrange = '10.250.250.0/24'
-$AppServiceSubnetName = 'app'
-$AppServiceSubnetrange = '10.250.251.0/28'
-$makeSaStoragePrivate = 'True'
-$keyvaultname = 'nmw-app-kv-7ffgyjilmdfqg'
-#>
  
 $ErrorActionPreference = 'Stop'
 
@@ -1305,23 +1294,6 @@ if ($NmeCclStorageAccountName) {
     }
 }
 
-<#
-$WebappResource = Get-AzResource -ResourceId $NmeWebApp.id
-if ($MakeAppServicePrivate -eq 'True') {
-    $WebappResource.properties.SiteConfig.IpSecurityRestrictionsdefaultAction = 'Deny'
-    $WebappResource | Set-AzResource -Force | Out-Null
-}
-else {
-    $WebappResource.properties.SiteConfig.IpSecurityRestrictionsdefaultAction = 'Allow'
-    $WebappResource | Set-AzResource -Force | Out-Null
-}
-if ($NmeCclWebAppName) {
-    $NmeCclWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeCclWebAppName
-    $CclWebappResource = Get-AzResource -ResourceId $NmeCclWebApp.id
-    $CclWebappResource.properties.SiteConfig.IpSecurityRestrictionsdefaultAction = 'Deny'
-    $CclWebappResource | Set-AzResource -Force | Out-Null
-}
-#>
 if ($PeerVnetIds) {
     Write-Output "Peering vnets" 
     $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
