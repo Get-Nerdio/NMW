@@ -234,7 +234,7 @@ if ($ExistingDNSZonesRG) {
         $OdsDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.ods.opinsights.azure.com -ErrorAction Stop
         $MonitorAgentDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.agentsvc.azure-automation.net -ErrorAction Stop
         if ($MakeAppServicePrivate -eq 'True') {
-            $WebAppDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.azurewebsites.net -ErrorAction Stop
+            $AppServiceDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.azurewebsites.net -ErrorAction Stop
         }
     }
     catch {
@@ -256,9 +256,6 @@ else {
     $AppServiceDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.azurewebsites.net -ErrorAction SilentlyContinue
 }
 
-
-
-$AppServicePlan = Get-AzAppServicePlan -ResourceGroupName $NmeRG -Name $NmeAppServicePlanName
 
 
 #### main script ####
@@ -492,7 +489,6 @@ if ($KvDnsZoneGroup) {
     Write-Output "Key Vault DNS zone group created"
 } else {
     Write-Output "Configuring keyvault DNS zone group"
-    $KeyVaultDnzZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.vaultcore.azure.net
     $Config = New-AzPrivateDnsZoneConfig -Name privatelink.vaultcore.azure.net -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
     $KvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $DnsRg -PrivateEndpointName "$KvPrivateEndpointName" -Name "$KvDnsZoneGroupName" -PrivateDnsZoneConfig $config
 }
@@ -547,7 +543,6 @@ if ($SqlDnsZoneGroup) {
     $SqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $DnsRg -PrivateEndpointName "$SqlPrivateEndpointName" -Name "$SqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
 }
 
-$NmeAutomationAccount = Get-AzAutomationAccount -ResourceGroupName $NmeRg -Name $NmeAutomationAccountName
 
 # check if automation account private endpoint is created
 $AutomationPrivateEndpoint = Get-AzPrivateEndpoint -Name "$AutomationPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
