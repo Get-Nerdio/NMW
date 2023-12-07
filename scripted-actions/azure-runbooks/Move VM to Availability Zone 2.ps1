@@ -50,10 +50,11 @@ elseif ($SkuInfo.locationinfo.zones -notcontains $Zone) {
 }
 
 #Export the JSON file; 
-Write-Output -Message "Exporting VM configuration to the follwoing location $env:temp \$vmname.json" 
-Get-AzVM -ResourceGroupName $rgname -Name $vmname |ConvertTo-Json -depth 100|Out-file -FilePath $env:temp\$vmname.json
+Write-Output -Message "Exporting VM configuration to location $env:temp\$vmname.json" 
+Get-AzVM -ResourceGroupName $rgname -Name $vmname |ConvertTo-Json -depth 100|Out-file -FilePath "$env:temp\$vmname.json"
 
 #import from json
+Write-Output -Message "Importing VM configuration from location $env:temp\$vmname.json"
 $json = "$env:temp\$vmname.json"
 $import = Get-Content $json -Raw|ConvertFrom-Json
 	#create variables for redeployment 
@@ -62,16 +63,19 @@ $loc = $import.Location
 
 $vmsize = $import.HardwareProfile.VmSize
 $vmname = $import.Name
-$disks = $import.Datadisks
+$disks = $import.StorageProfile.Datadisks
 #getting the existing bootdiagnostic stoage account name and parsing the storage account name only
 $bootdiagnostics = $import.DiagnosticsProfile.BootDiagnostics.StorageUri
-$bootdiag = $bootdiagnostics.Substring(8,$bootdiagnostics.length-31)
+if ($bootdiagnostics) {
+    $bootdiag = $bootdiagnostics.Substring(8,$bootdiagnostics.length-31)
+}
+Write-Output "Set variables for redeployment"
 
 try {
     #Snapshot info OS Disk
     $snapshotOS =  New-azSnapshotConfig -SourceUri $import.StorageProfile.OsDisk.ManagedDisk.Id -Location $loc -CreateOption copy -SkuName Standard_ZRS
     Write-Output "Creating snapshot of VM os disk"
-    New-AzSnapshot -Snapshot $snapshotOS -SnapshotName OSdisksnap$vmname -ResourceGroupName $rgname | Out-Null
+    New-AzSnapshot -Snapshot $snapshotOS -SnapshotName "OSdisksnap$vmname" -ResourceGroupName $rgname | Out-Null
 
     $osdisk = get-azdisk -ResourceGroupName $rgname -DiskName $import.StorageProfile.OsDisk.Name
 
@@ -103,8 +107,9 @@ $vm = New-AzVMConfig -VMName $vmname -VMSize $vmsize -Zone $Zone;
 
 Write-Output -Message "Adding existing boot diagnostics storage account back $bootdiag" 
 #setting bootdiagnotics storage account to the old account
-Set-AzVMBootDiagnostic -VM $vm -Enable -ResourceGroupName $rgname -StorageAccountName $bootdiag | Out-Null
-
+if ($bootdiag) {
+    Set-AzVMBootDiagnostic -VM $vm -Enable -ResourceGroupName $rgname -StorageAccountName $bootdiag | Out-Null
+}
 #Select OS Verion type -Windows or -Linux
 #OS Disk info
 $NewOSDisKID =get-azdisk -ResourceGroupName $rgname -DiskName OSdiskzone$Zone$vmname |Select-Object -ExpandProperty ID
