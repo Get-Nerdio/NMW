@@ -35,7 +35,6 @@ if ($GetVMinfo.zones -eq $Zone) {
 #Stop deallocate the VM
 $VMStatus = Get-AzVM -ResourceGroupName $rgname -Name $vmname -Status
 if ($VMStatus.powerstate -ne 'deallocated') {
-    Write-Output "Starting VM $AzureVMName"
     Write-Output -Message "Attempting to Stop VM $vmname" 
     Stop-AzVM -ResourceGroupName $rgname -Name $vmname -Force | Out-Null
 
@@ -133,30 +132,30 @@ foreach ($nic in $getvminfo.NetworkProfile.NetworkInterfaces) {
 
 foreach ($disk in $GetVMinfo.StorageProfile.DataDisks) {
 
-$snapshotdata =  New-azSnapshotConfig -SourceUri $disk.ManagedDisk.Id -Location $loc -CreateOption copy -SkuName Standard_ZRS
-$SSName = "Snapshot$($disk.Name)$($vmname)"
-New-AzSnapshot -Snapshot $snapshotdata -SnapshotName $SSName -ResourceGroupName $rgname | Out-Null
+    $snapshotdata =  New-azSnapshotConfig -SourceUri $disk.ManagedDisk.Id -Location $loc -CreateOption copy -SkuName Standard_ZRS
+    $SSName = "Snapshot$($disk.Name)$($vmname)"
+    New-AzSnapshot -Snapshot $snapshotdata -SnapshotName $SSName -ResourceGroupName $rgname | Out-Null
 
-get-azdisk -ResourceGroupName $rgname -DiskName $disk.Name
+    get-azdisk -ResourceGroupName $rgname -DiskName $disk.Name
 
-Write-Output -Message "Creating snapshot $SSName from disk $($disk.Name)" 
-$snapshotdatadisk = Get-AzSnapshot -ResourceGroupName $rgname -SnapshotName $SSName
+    Write-Output -Message "Creating snapshot $SSName from disk $($disk.Name)" 
+    $snapshotdatadisk = Get-AzSnapshot -ResourceGroupName $rgname -SnapshotName $SSName
 
-$disktype = get-azdisk -ResourceGroupName $rgname -DiskName $disk.Name
-$datadisktype = $disktype.sku | Select-Object -ExpandProperty name
+    $disktype = get-azdisk -ResourceGroupName $rgname -DiskName $disk.Name
+    $datadisktype = $disktype.sku | Select-Object -ExpandProperty name
 
-$diskConfig = New-AzDiskConfig -SkuName $datadisktype -Location $loc -CreateOption Copy -SourceResourceId $snapshotdatadisk.Id -Zone $Zone
-$diskname = "$VMname$($disk.Name)"
+    $diskConfig = New-AzDiskConfig -SkuName $datadisktype -Location $loc -CreateOption Copy -SourceResourceId $snapshotdatadisk.Id -Zone $Zone
+    $diskname = "$VMname$($disk.Name)"
 
-Write-Output -Message "Creating Creating new disk $diskname from snapshot $SSName"  
-New-AzDisk -Disk $diskConfig -ResourceGroupName $rgname -DiskName $diskname| Out-Null
+    Write-Output -Message "Creating Creating new disk $diskname from snapshot $SSName"  
+    New-AzDisk -Disk $diskConfig -ResourceGroupName $rgname -DiskName $diskname| Out-Null
 
-$DataDisKID = get-azdisk -ResourceGroupName $rgname -DiskName $diskname | Select-Object -ExpandProperty ID
-Write-Output -Message "Adding data disk to new VM $diskname"  
-Add-AzVMDataDisk -VM $vm -Name $diskname -ManagedDiskId $DataDisKID -Caching $disk.Caching -Lun $disk.Lun -CreateOption Attach| Out-Null
+    $DataDisKID = get-azdisk -ResourceGroupName $rgname -DiskName $diskname | Select-Object -ExpandProperty ID
+    Write-Output -Message "Adding data disk to new VM $diskname"  
+    Add-AzVMDataDisk -VM $vm -Name $diskname -ManagedDiskId $DataDisKID -Caching $disk.Caching -Lun $disk.Lun -CreateOption Attach| Out-Null
 
-Write-Output -Message "Cleaning up snapshot $SSName for disk $($disk.name)"  | Out-Null
-Remove-AzSnapshot -ResourceGroupName $rgname -SnapshotName $SSName -Force -Verbose | Out-Null
+    Write-Output -Message "Cleaning up snapshot $SSName for disk $($disk.name)"  | Out-Null
+    Remove-AzSnapshot -ResourceGroupName $rgname -SnapshotName $SSName -Force -Verbose | Out-Null
 }
 
 Write-Output "Removing original os disk"
