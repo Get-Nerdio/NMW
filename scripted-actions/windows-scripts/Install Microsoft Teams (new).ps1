@@ -5,10 +5,11 @@
 Notes:
 This script performs the following:
 1. Sets registry value for MS Teams to WVD Mode
-2. Uninstall MSTeams and WebRTC program
-3. Downloads and Installs latest version of MS Teams machine-wide (Not per-user)
-4. Downloads and Installs latest version of WebRTC component
-5. Sends logs to C:\Windows\temp\NerdioManagerLogs\ScriptedActions\msteams
+2. Checks for EdgeWebView2 and installs if needed
+3. Uninstall MSTeams and WebRTC program
+4. Downloads and Installs latest version of MS Teams machine-wide (Not per-user)
+5. Downloads and Installs latest version of WebRTC component
+6. Sends logs to C:\Windows\temp\NerdioManagerLogs\ScriptedActions\msteams
 #>
 
 # Start powershell logging
