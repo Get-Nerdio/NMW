@@ -102,8 +102,12 @@ Write-Output -Message "Cleaning up snapshot OSdisksnap$vmname for disk $($osdisk
 Remove-AzSnapshot -ResourceGroupName $rgname -SnapshotName OSdisksnap$vmname -Force | Out-Null
 
 #create the vm config
-$vm = New-AzVMConfig -VMName $vmname -VMSize $vmsize -Zone $Zone;
-
+if ($GetVMinfo.SecurityProfile.EncryptionAtHost) {
+    $vm = New-AzVMConfig -VMName $vmname -VMSize $vmsize -Zone $Zone -EncryptionAtHost
+}
+else {
+    $vm = New-AzVMConfig -VMName $vmname -VMSize $vmsize -Zone $Zone;
+}
 Write-Output -Message "Adding existing boot diagnostics storage account back $bootdiag" 
 #setting bootdiagnotics storage account to the old account
 if ($bootdiag) {
