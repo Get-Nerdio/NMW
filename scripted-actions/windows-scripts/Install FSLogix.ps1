@@ -38,7 +38,9 @@ Expand-Archive `
 cd "C:\Windows\Temp\fslogix\install\"
 
 $Dir = Get-ChildItem C:\Windows\Temp\fslogix\install\ | Where-Object PSIsContainer -eq $true
-
+if ($Dir.Count -gt 1) {
+    $Dir = Get-ChildItem C:\Windows\Temp\fslogix\ | Where-Object PSIsContainer -eq $true
+}
 
 # Install FSLogix. 
 Write-Host "INFO: Installing FSLogix. . ."
