@@ -72,11 +72,15 @@ Write-Output "Set variables for redeployment"
 
 try {
     #Snapshot info OS Disk
-    $snapshotOS =  New-azSnapshotConfig -SourceUri $import.StorageProfile.OsDisk.ManagedDisk.Id -Location $loc -CreateOption copy -SkuName Standard_ZRS
+    $osdisk = get-azdisk -ResourceGroupName $rgname -DiskName $import.StorageProfile.OsDisk.Name
+    if ($osdisk.Encryption.Type -eq 'EncryptionAtRestWithCustomerKey') { 
+        $snapshotOS =  New-azSnapshotConfig -SourceUri $import.StorageProfile.OsDisk.ManagedDisk.Id -Location $loc -CreateOption copy -SkuName Standard_ZRS -DiskEncryptionSetId $osdisk.Encryption.DiskEncryptionSetId
+    }
+    else {
+        $snapshotOS =  New-azSnapshotConfig -SourceUri $import.StorageProfile.OsDisk.ManagedDisk.Id -Location $loc -CreateOption copy -SkuName Standard_ZRS
+    }
     Write-Output "Creating snapshot of VM os disk"
     New-AzSnapshot -Snapshot $snapshotOS -SnapshotName "OSdisksnap$vmname" -ResourceGroupName $rgname | Out-Null
-
-    $osdisk = get-azdisk -ResourceGroupName $rgname -DiskName $import.StorageProfile.OsDisk.Name
 
     Write-Output -Message "Creating snapshot OSdisksnap$vmname from disk $($osdisk.Name)" 
     $snapshotOSdisk = Get-AzSnapshot -ResourceGroupName $rgname -SnapshotName OSdisksnap$vmname 
@@ -93,9 +97,14 @@ Remove-AzVM -ResourceGroupName $rgname -Name $vmname -Force | Out-Null
 $disktype = get-azdisk -ResourceGroupName $rgname -DiskName $import.StorageProfile.OsDisk.Name
 $OSdisktype = $disktype.sku | Select-Object -ExpandProperty name
 
-$diskConfig = New-AzDiskConfig -SkuName $OSdisktype -Location $loc -CreateOption Copy -SourceResourceId $snapshotOSdisk.Id -Zone $Zone
+if ($disktype.Encryption.Type -eq 'EncryptionAtRestWithCustomerKey') {
+    $diskConfig = New-AzDiskConfig -SkuName $OSdisktype -Location $loc -CreateOption Copy -SourceResourceId $snapshotOSdisk.Id -Zone $Zone -DiskEncryptionSetId $disktype.Encryption.DiskEncryptionSetId
+}
+else {
+    $diskConfig = New-AzDiskConfig -SkuName $OSdisktype -Location $loc -CreateOption Copy -SourceResourceId $snapshotOSdisk.Id -Zone $Zone 
+}
 Write-Output -Message "Creating Creating new disk OSdiskzone$Zone$vmname from snapshot OSdisksnap$vmname"  
-New-AzDisk -Disk $diskConfig -ResourceGroupName $rgname -DiskName OSdiskzone$Zone$vmname | Out-Null
+New-AzDisk -Disk $diskConfig -ResourceGroupName $rgname -DiskName OSdiskzone$Zone$vmname  | Out-Null
 
 #Cleanup of snapshot osDISK SNAPSHOT
 Write-Output -Message "Cleaning up snapshot OSdisksnap$vmname for disk $($osdisk.name)" 
@@ -103,7 +112,7 @@ Remove-AzSnapshot -ResourceGroupName $rgname -SnapshotName OSdisksnap$vmname -Fo
 
 #create the vm config
 if ($GetVMinfo.SecurityProfile.EncryptionAtHost) {
-    $vm = New-AzVMConfig -VMName $vmname -VMSize $vmsize -Zone $Zone -EncryptionAtHost
+    $vm = New-AzVMConfig -VMName $vmname -VMSize $vmsize -Zone $Zone -EncryptionAtHost 
 }
 else {
     $vm = New-AzVMConfig -VMName $vmname -VMSize $vmsize -Zone $Zone;
@@ -116,8 +125,12 @@ if ($bootdiag) {
 #Select OS Verion type -Windows or -Linux
 #OS Disk info
 $NewOSDisKID =get-azdisk -ResourceGroupName $rgname -DiskName OSdiskzone$Zone$vmname |Select-Object -ExpandProperty ID
-$vm = Set-AzVMOSDisk -VM $vm -ManagedDiskID $NewOSDisKID -name OSdiskzone$Zone$vmname -Caching $import.StorageProfile.OsDisk.Caching -CreateOption attach -Windows #-Linux
-
+if ($GetVMinfo.SecurityProfile.EncryptionAtHost) {
+    $vm = Set-AzVMOSDisk -VM $vm -ManagedDiskID $NewOSDisKID -name OSdiskzone$Zone$vmname -Caching $import.StorageProfile.OsDisk.Caching -CreateOption attach -Windows -DiskEncryptionSetId $disktype.Encryption.DiskEncryptionSetId
+}
+else {
+    $vm = Set-AzVMOSDisk -VM $vm -ManagedDiskID $NewOSDisKID -name OSdiskzone$Zone$vmname -Caching $import.StorageProfile.OsDisk.Caching -CreateOption attach -Windows #-Linux
+}
 #network card info
 foreach ($nic in $getvminfo.NetworkProfile.NetworkInterfaces) {	
 	if ($nic.Primary -eq "True")
