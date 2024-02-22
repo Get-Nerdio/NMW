@@ -15,6 +15,8 @@ automation account in order for the script to run successfully.
 $EnableSecureBoot = $true
 $EnableVtpm = $true
 
+$ErrorActionPreference = 'Stop'
+
 $VMStatus = Get-AzVM -ResourceGroupName $AzureResourceGroupName -Name $AzureVMName -Status
 
 # check if the VM is already in trusted launch
@@ -26,7 +28,7 @@ if (($vminfo).SecurityProfile.SecurityType -eq "TrustedLaunch") {
 
 # check if the VM is gen 2
 if ($VMStatus.HyperVGeneration -ne "V2") {
-    Write-Output "VM is not Gen 2. TrustedLaunch is currently only supported on Gen 2 VMs."
+    Throw "VM is not Gen 2. TrustedLaunch is currently only supported on Gen 2 VMs."
     Exit
 }
 
@@ -44,7 +46,7 @@ try {
     $VMInfo | Update-AzVM -SecurityType TrustedLaunch  -EnableSecureBoot $EnableSecureBoot -EnableVtpm $EnableVtpm
 }
 catch {
-    Write-error "Failed to enable TrustedLaunch. You may need to update the Az.Compute in the scripted actions automation account to the latest version."
+    Throw "Failed to enable TrustedLaunch. You may need to update the Az.Compute in the scripted actions automation account to the latest version."
     throw $_
 }
 
