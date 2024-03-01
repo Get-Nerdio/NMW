@@ -44,9 +44,6 @@ if ($VMStatus.statuses.displaystatus -notcontains 'VM deallocated') {
     Write-Output "Stopping VM"
     Stop-AzVM -ResourceGroupName $AzureResourceGroupName -Name $AzureVMName -Force
 }
-# stop vm
-Write-Output "Stopping VM"
-Stop-AzVM -ResourceGroupName $AzureResourceGroupName -Name $AzureVMName -Force
 
 # enable trusted launch
 Write-Output "Enabling TrustedLaunch"
@@ -54,8 +51,9 @@ try {
     $VMInfo | Update-AzVM -SecurityType TrustedLaunch  -EnableSecureBoot $EnableSecureBoot -EnableVtpm $EnableVtpm
 }
 catch {
+    Write-Error $_
     Throw "Failed to enable TrustedLaunch. You may need to update the Az.Compute in the scripted actions automation account to the latest version."
-    throw $_
+    
 }
 
 if ($VMStatus.statuses.displaystatus -notcontains 'VM deallocated') {
