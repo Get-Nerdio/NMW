@@ -1,4 +1,4 @@
-#description: Installs/Updates New MS Teams client. Enables Teams WVD Optimization mode. Recommend to run regularly on Desktop Images.
+#description: Installs/Updates New MS Teams client. Enables Teams WVD Optimization mode.
 #execution mode: IndividualWithRestart
 #tags: Nerdio, Apps install
 <#
