@@ -22,7 +22,7 @@ https://learn.microsoft.com/en-us/azure/virtual-network/nat-gateway/nat-overview
     "IsRequired": true
   },
   "SubnetName": {
-    "Description": "Subnet in which to create the temp VM.",
+    "Description": "Subnet with which to associate the NAT Gateway.",
     "IsRequired": true
   }
 }
