@@ -19,7 +19,7 @@ $RuleEditor = 1
 $JavaRuleEditor = 1
 $Service = 1
 $ODFC = 1           # Enable FSLOGIX ODFC Service Logging
-$Profile = 1        # Enable FSLOGIX Profile Service Logging
+$ProfileLogging = 1        # Enable FSLOGIX Profile Service Logging
 $FrxLauncher = 1
 $RuleCompilation = 1
 $Font = 1
@@ -48,7 +48,7 @@ Set-ItemProperty -Path HKLM:\Software\FSLogix\Logging -Name "RuleEditor" -Type D
 Set-ItemProperty -Path HKLM:\Software\FSLogix\Logging -Name "JavaRuleEditor" -Type Dword -Value $JavaRuleEditor
 Set-ItemProperty -Path HKLM:\Software\FSLogix\Logging -Name "Service" -Type Dword -Value $Service
 Set-ItemProperty -Path HKLM:\Software\FSLogix\Logging -Name "ODFC" -Type Dword -Value $ODFC
-Set-ItemProperty -Path HKLM:\Software\FSLogix\Logging -Name "Profile" -Type Dword -Value $Profile
+Set-ItemProperty -Path HKLM:\Software\FSLogix\Logging -Name "Profile" -Type Dword -Value $ProfileLogging
 Set-ItemProperty -Path HKLM:\Software\FSLogix\Logging -Name "FrxLauncher" -Type Dword -Value $FrxLauncher
 Set-ItemProperty -Path HKLM:\Software\FSLogix\Logging -Name "RuleCompilation" -Type Dword -Value $RuleCompilation
 Set-ItemProperty -Path HKLM:\Software\FSLogix\Logging -Name "Font" -Type Dword -Value $Font
