@@ -2,7 +2,7 @@
 #tags: FSLogix, Nerdio
 
 <# Notes
-- This script sets FSLogix logging settings. To customize the logging settings, modify the variables in the script.
+- This script sets FSLogix logging settings. To customize the logging settings, clone this script and modify the variables.
 #>
 
 # Variables for logging settings
