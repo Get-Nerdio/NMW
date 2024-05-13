@@ -2,7 +2,7 @@
 #tags: Nerdio, FSLogix
 
 <# Notes
-- This script sets FSLogix App Service settings. To customize the settings, modify the variables in the script.
+- This script sets FSLogix App Service settings. To customize the settings, clone this script and modify the variables.
 #>
 
 # Variables for FSLogix App Service settings
