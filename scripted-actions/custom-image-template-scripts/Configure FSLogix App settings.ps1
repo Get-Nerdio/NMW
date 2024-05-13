@@ -1,6 +1,10 @@
 #description: Configures FSLogix App Service settings
 #tags: Nerdio, FSLogix
 
+<# Notes
+- This script sets FSLogix App Service settings. To customize the settings, modify the variables in the script.
+#>
+
 # Variables for FSLogix App Service settings
 $CleanupInvalidSessions = 1 # Cleans up invalid sessions to allow successful sign-in for user's next session.
 $RoamRecycleBin = 1        # Redirects user's Recycle Bin into the VHD(x) container to allow restoring items from any machine.

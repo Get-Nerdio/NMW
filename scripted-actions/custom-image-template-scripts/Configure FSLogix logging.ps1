@@ -1,6 +1,10 @@
 #description: Sets FSLogix logging settings
 #tags: FSLogix, Nerdio
 
+<# Notes
+- This script sets FSLogix logging settings. To customize the logging settings, modify the variables in the script.
+#>
+
 # Variables for logging settings
 $LogFileKeepingPeriod = 7  # A new log file is created each day. This specifies how many to keep.
 $LoggingEnabled = 2        # When set to '0', all log files are disabled. '1' for component-specific logs, '2' for all logs enabled.
