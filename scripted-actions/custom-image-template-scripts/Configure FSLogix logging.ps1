@@ -2,7 +2,7 @@
 #tags: FSLogix, Nerdio
 
 <# Notes
-- This script sets FSLogix logging settings. To customize the logging settings, clone this script and modify the variables.
+- This script sets FSLogix logging settings. To customize the logging settings, modify the variables in the script.
 #>
 
 # Variables for logging settings
@@ -39,7 +39,7 @@ Set-ItemProperty -Path HKLM:\Software\FSLogix\Logging -Name "LogFileKeepingPerio
 Set-ItemProperty -Path HKLM:\Software\FSLogix\Logging -Name "LoggingEnabled" -Type Dword -Value $LoggingEnabled
 Set-ItemProperty -Path HKLM:\Software\FSLogix\Logging -Name "LogDir" -Type String -Value $LogDir
 Set-ItemProperty -Path HKLM:\Software\FSLogix\Logging -Name "LoggingLevel" -Type Dword -Value $LoggingLevel
-Set-ItemProperty -Path HKLM:\Software\FSLogix\Logging -Name "RobocopyLogPath" -Type REG_SZ -Value $RobocopyLogPath
+if ($RobocopyLogPath) {Set-ItemProperty -Path HKLM:\Software\FSLogix\Logging -Name "RobocopyLogPath" -Type REG_SZ -Value $RobocopyLogPath}
 
 # Component specific log files
 Set-ItemProperty -Path HKLM:\Software\FSLogix\Logging -Name "ConfigTool" -Type Dword -Value $ConfigTool
