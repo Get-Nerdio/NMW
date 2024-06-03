@@ -22,6 +22,75 @@ $subscriptionID = $AzureSubscriptionId
 $rgname = $AzureResourceGroupName
 $vmname = $AzureVMName
 
+#-------------------------Functions-------------------------------
+function Copy-Disk {
+    param ($Disk, $Location, $DiskName, $Zone, $RgName)
+    $snapshotName = "Snapshot$($DiskName)"
+    Write-Output -Message "Creating snapshot $snapshotName from disk $($Disk.Name) location $Location DiskName $DiskName Zone $Zone RgName $RgName"
+    $snapshotConfig =  New-azSnapshotConfig -SourceUri $Disk.Id -Location $Location -CreateOption copy -SkuName Standard_ZRS
+
+    try {
+        Write-Output -Message "Creating snapshot $snapshotName from disk $($Disk.Name)"
+        New-AzSnapshot -Snapshot $snapshotConfig -SnapshotName $snapshotName -ResourceGroupName $RgName | Out-Null
+    }
+    catch {
+        Throw "Unable to create snapshot. Ensure that the Azure region is supported for availability zones and ZRS storage."
+    }
+    
+    $snapshot = Get-AzSnapshot -ResourceGroupName $RgName -SnapshotName $snapshotName
+    $diskSku = $Disk.sku | Select-Object -ExpandProperty name
+    $diskConfig = New-AzDiskConfig -SkuName $diskSku -Location $Location -CreateOption Copy -SourceResourceId $snapshot.Id -Zone $Zone
+
+    Write-Output -Message "Creating Creating new disk $DiskName from snapshot $snapshotName"
+    New-AzDisk -Disk $diskConfig -ResourceGroupName $RgName -DiskName $DiskName| Out-Null
+    
+    if ($Disk.Encryption.Type -eq 'EncryptionAtRestWithCustomerKey') {
+        New-AzDiskUpdateConfig -EncryptionType "EncryptionAtRestWithCustomerKey" -DiskEncryptionSetId $Disk.Encryption.DiskEncryptionSetId | Update-AzDisk -ResourceGroupName $RgName -DiskName $diskName
+    }
+
+    Write-Output -Message "Cleaning up snapshot $snapshotName for disk $DiskName"
+    Remove-AzSnapshot -ResourceGroupName $RgName -SnapshotName $snapshotName -Force -Verbose | Out-Null
+}
+
+function Get-SnapshotOrDefault {
+    param ($SnapshotName, $RgName)
+    try {
+        $snap = Get-AzSnapshot -ResourceGroupName $RgName -SnapshotName $SnapshotName
+        return $snap
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-DiskOrDefault {
+    param ($DiskName, $RgName)
+    try {
+        $disk = Get-AzDisk -ResourceGroupName $RgName -DiskName $DiskName
+        return $disk
+    }
+    catch {
+        return $null
+    }
+}
+
+function Cleanup-Disk {
+    param ($DiskName, $RgName)
+    Write-Output -Message "Cleanup Disk $DiskName"
+    $snapshotName = "Snapshot$($DiskName)"
+    $snap = Get-SnapshotOrDefault -SnapshotName $snapshotName -RgName $RgName
+    if ($snap -ne $null) {
+        $snap | Remove-AzSnapshot -Force | Out-Null
+    }
+
+    $newDisk = Get-DiskOrDefault -DiskName $DiskName -RgName $RgName
+    if ($newDisk -ne $null) {
+        $newDisk | remove-azdisk -Force | Out-Null
+    }
+}
+
+#--------------------------Execution-----------------------------
+
 #Log in to your subscription
 Set-AzContext -Subscription $subscriptionID
 
@@ -34,7 +103,7 @@ if ($GetVMinfo.zones -eq $Zone) {
 
 #Stop deallocate the VM
 $VMStatus = Get-AzVM -ResourceGroupName $rgname -Name $vmname -Status
-if ($VMStatus.powerstate -ne 'deallocated') {
+if ($VMStatus.statuses.displaystatus -notcontains 'VM deallocated') {
     Write-Output -Message "Attempting to Stop VM $vmname" 
     Stop-AzVM -ResourceGroupName $rgname -Name $vmname -Force | Out-Null
 
@@ -50,7 +119,7 @@ elseif ($SkuInfo.locationinfo.zones -notcontains $Zone) {
 
 #Export the JSON file; 
 Write-Output -Message "Exporting VM configuration to location $env:temp\$vmname.json" 
-Get-AzVM -ResourceGroupName $rgname -Name $vmname |ConvertTo-Json -depth 100|Out-file -FilePath "$env:temp\$vmname.json"
+Get-AzVM -ResourceGroupName $rgname -Name $vmname | ConvertTo-Json -depth 100 | Out-file -FilePath "$env:temp\$vmname.json"
 
 #import from json
 Write-Output -Message "Importing VM configuration from location $env:temp\$vmname.json"
@@ -70,52 +139,36 @@ if ($bootdiagnostics) {
 }
 Write-Output "Set variables for redeployment"
 
+$osDiskName = "OSdiskzone$Zone$vmname"
+$osdisk = get-azdisk -ResourceGroupName $rgname -DiskName $import.StorageProfile.OsDisk.Name
+
 try {
-    #Snapshot info OS Disk
-    $snapshotOS =  New-azSnapshotConfig -SourceUri $import.StorageProfile.OsDisk.ManagedDisk.Id -Location $loc -CreateOption copy -SkuName Standard_ZRS
-    Write-Output "Creating snapshot of VM os disk"
-    New-AzSnapshot -Snapshot $snapshotOS -SnapshotName "OSdisksnap$vmname" -ResourceGroupName $rgname | Out-Null
-
-    $osdisk = get-azdisk -ResourceGroupName $rgname -DiskName $import.StorageProfile.OsDisk.Name
-
-    Write-Output -Message "Creating snapshot OSdisksnap$vmname from disk $($osdisk.Name)" 
-    $snapshotOSdisk = Get-AzSnapshot -ResourceGroupName $rgname -SnapshotName OSdisksnap$vmname 
+    Copy-Disk -Disk $osdisk -Location $loc -DiskName $osDiskName -Zone $zone -RgName $rgname
 }
 catch {
-    Throw "Unable to create snapshot. Ensure that the Azure region is supported for availability zones and ZRS storage."
+    Cleanup-Disk -DiskName $osDiskName -RgName $rgname
+    throw $_
 }
 
-Write-Output "Deleting the original VM"
-Remove-AzVM -ResourceGroupName $rgname -Name $vmname -Force | Out-Null
-
-
-#Getdisk OS type
-$disktype = get-azdisk -ResourceGroupName $rgname -DiskName $import.StorageProfile.OsDisk.Name
-$OSdisktype = $disktype.sku | Select-Object -ExpandProperty name
-
-$diskConfig = New-AzDiskConfig -SkuName $OSdisktype -Location $loc -CreateOption Copy -SourceResourceId $snapshotOSdisk.Id -Zone $Zone
-Write-Output -Message "Creating Creating new disk OSdiskzone$Zone$vmname from snapshot OSdisksnap$vmname"  
-New-AzDisk -Disk $diskConfig -ResourceGroupName $rgname -DiskName OSdiskzone$Zone$vmname | Out-Null
-
-#Cleanup of snapshot osDISK SNAPSHOT
-Write-Output -Message "Cleaning up snapshot OSdisksnap$vmname for disk $($osdisk.name)" 
-Remove-AzSnapshot -ResourceGroupName $rgname -SnapshotName OSdisksnap$vmname -Force | Out-Null
-
 #create the vm config
-$vm = New-AzVMConfig -VMName $vmname -VMSize $vmsize -Zone $Zone;
+$NewOSDisKID = get-azdisk -ResourceGroupName $rgname -DiskName $osDiskName | Select-Object -ExpandProperty ID
+if ($GetVMinfo.SecurityProfile.EncryptionAtHost) {
+    $vm = New-AzVMConfig -VMName $vmname -VMSize $vmsize -Zone $Zone -EncryptionAtHost
+    $vm = Set-AzVMOSDisk -VM $vm -ManagedDiskID $NewOSDisKID -name $osDiskName -Caching $import.StorageProfile.OsDisk.Caching -CreateOption attach -Windows -DiskEncryptionSetId $osdisk.Encryption.DiskEncryptionSetId
+}
+else {
+    $vm = New-AzVMConfig -VMName $vmname -VMSize $vmsize -Zone $Zone
+    $vm = Set-AzVMOSDisk -VM $vm -ManagedDiskID $NewOSDisKID -name $osDiskName -Caching $import.StorageProfile.OsDisk.Caching -CreateOption attach -Windows #-Linux
+}
 
 Write-Output -Message "Adding existing boot diagnostics storage account back $bootdiag" 
 #setting bootdiagnotics storage account to the old account
 if ($bootdiag) {
     Set-AzVMBootDiagnostic -VM $vm -Enable -ResourceGroupName $rgname -StorageAccountName $bootdiag | Out-Null
 }
-#Select OS Verion type -Windows or -Linux
-#OS Disk info
-$NewOSDisKID =get-azdisk -ResourceGroupName $rgname -DiskName OSdiskzone$Zone$vmname |Select-Object -ExpandProperty ID
-$vm = Set-AzVMOSDisk -VM $vm -ManagedDiskID $NewOSDisKID -name OSdiskzone$Zone$vmname -Caching $import.StorageProfile.OsDisk.Caching -CreateOption attach -Windows #-Linux
 
 #network card info
-foreach ($nic in $getvminfo.NetworkProfile.NetworkInterfaces) {	
+foreach ($nic in $GetVMinfo.NetworkProfile.NetworkInterfaces) {	
 	if ($nic.Primary -eq "True")
 		{
     		Add-AzVMNetworkInterface -VM $vm -Id $nic.Id -Primary | Out-Null
@@ -128,46 +181,78 @@ foreach ($nic in $getvminfo.NetworkProfile.NetworkInterfaces) {
 
             }
 }
+try {
+    foreach ($disk in $GetVMinfo.StorageProfile.DataDisks) {
+        $diskname = "$VMname$($disk.Name)"
+        $dataDisk = get-azdisk -ResourceGroupName $rgname -DiskName $disk.Name
+    
+        Copy-Disk -Disk $dataDisk -Location $loc -DiskName $diskName -Zone $zone -RgName $rgname
+    
+        $DataDisKID = get-azdisk -ResourceGroupName $rgname -DiskName $diskname | Select-Object -ExpandProperty ID
+        Write-Output -Message "Adding data disk to new VM $diskname"  
+        Add-AzVMDataDisk -VM $vm -Name $diskname -ManagedDiskId $DataDisKID -Caching $disk.Caching -Lun $disk.Lun -CreateOption Attach | Out-Null
+    }
+}
+catch {
+    foreach ($disk in $GetVMinfo.StorageProfile.DataDisks) {
+        $diskName = "$VMname$($disk.Name)"
+        Cleanup-Disk -DiskName $diskName -RgName $rgname
+    }
+    Cleanup-Disk -DiskName $osDiskName -RgName $rgname
+    throw $_
+}
 
 
-foreach ($disk in $GetVMinfo.StorageProfile.DataDisks) {
+Write-Output "Deleting the original VM"
+Remove-AzVM -ResourceGroupName $rgname -Name $vmname -Force | Out-Null
 
-    $snapshotdata =  New-azSnapshotConfig -SourceUri $disk.ManagedDisk.Id -Location $loc -CreateOption copy -SkuName Standard_ZRS
-    $SSName = "Snapshot$($disk.Name)$($vmname)"
-    New-AzSnapshot -Snapshot $snapshotdata -SnapshotName $SSName -ResourceGroupName $rgname | Out-Null
+try {
+    #create the VM
+    Write-Output "Creating the new VM"
+    New-AzVM -ResourceGroupName $rgname -Location $loc -VM $vm -Tag $GetVMinfo.tags -Verbose | Out-Null
+}
+catch {
+    #restore the VM
+    Write-Output "Restore the original VM"
+    $OSDisKID = $osdisk | Select-Object -ExpandProperty ID
+    if ($GetVMinfo.SecurityProfile.EncryptionAtHost) {
+        $vm = New-AzVMConfig -VMName $vmname -VMSize $vmsize -EncryptionAtHost
+        $vm = Set-AzVMOSDisk -VM $vm -ManagedDiskID $OSDisKID -name $osdisk.Name -Caching $import.StorageProfile.OsDisk.Caching -CreateOption attach -Windows -DiskEncryptionSetId $osdisk.Encryption.DiskEncryptionSetId
+    }
+    else {
+        $vm = New-AzVMConfig -VMName $vmname -VMSize $vmsize
+        $vm = Set-AzVMOSDisk -VM $vm -ManagedDiskID $OSDisKID -name $osdisk.Name -Caching $import.StorageProfile.OsDisk.Caching -CreateOption attach -Windows #-Linux
+    }
+    if ($bootdiag) {
+        Set-AzVMBootDiagnostic -VM $vm -Enable -ResourceGroupName $rgname -StorageAccountName $bootdiag | Out-Null
+    }
+    foreach ($nic in $GetVMinfo.NetworkProfile.NetworkInterfaces) {	
+        if ($nic.Primary -eq "True")
+        {
+            Add-AzVMNetworkInterface -VM $vm -Id $nic.Id -Primary | Out-Null
+        }
+        else
+        {
+            Add-AzVMNetworkInterface -VM $vm -Id $nic.Id | Out-Null
+        }
+    }
+    foreach ($disk in $GetVMinfo.StorageProfile.DataDisks) {
+        $createdDiskName = "$VMname$($disk.Name)"
+        Cleanup-Disk -DiskName $createdDiskName -RgName $rgname
+        $DataDisKID = get-azdisk -ResourceGroupName $rgname -DiskName $disk.Name | Select-Object -ExpandProperty ID
+        Add-AzVMDataDisk -VM $vm -Name $disk.Name -ManagedDiskId $DataDisKID -Caching $disk.Caching -Lun $disk.Lun -CreateOption Attach | Out-Null
+    }
+    New-AzVM -ResourceGroupName $rgname -Location $loc -VM $vm -Tag $GetVMinfo.tags -Verbose | Out-Null
 
-    get-azdisk -ResourceGroupName $rgname -DiskName $disk.Name
-
-    Write-Output -Message "Creating snapshot $SSName from disk $($disk.Name)" 
-    $snapshotdatadisk = Get-AzSnapshot -ResourceGroupName $rgname -SnapshotName $SSName
-
-    $disktype = get-azdisk -ResourceGroupName $rgname -DiskName $disk.Name
-    $datadisktype = $disktype.sku | Select-Object -ExpandProperty name
-
-    $diskConfig = New-AzDiskConfig -SkuName $datadisktype -Location $loc -CreateOption Copy -SourceResourceId $snapshotdatadisk.Id -Zone $Zone
-    $diskname = "$VMname$($disk.Name)"
-
-    Write-Output -Message "Creating Creating new disk $diskname from snapshot $SSName"  
-    New-AzDisk -Disk $diskConfig -ResourceGroupName $rgname -DiskName $diskname| Out-Null
-
-    $DataDisKID = get-azdisk -ResourceGroupName $rgname -DiskName $diskname | Select-Object -ExpandProperty ID
-    Write-Output -Message "Adding data disk to new VM $diskname"  
-    Add-AzVMDataDisk -VM $vm -Name $diskname -ManagedDiskId $DataDisKID -Caching $disk.Caching -Lun $disk.Lun -CreateOption Attach| Out-Null
-
-    Write-Output -Message "Cleaning up snapshot $SSName for disk $($disk.name)"  | Out-Null
-    Remove-AzSnapshot -ResourceGroupName $rgname -SnapshotName $SSName -Force -Verbose | Out-Null
+    Cleanup-Disk -DiskName $osDiskName -RgName $rgname
+    throw $_
 }
 
 Write-Output "Removing original os disk"
 $osdisk | remove-azdisk -Force | Out-Null
-#create the VM
-Write-Output "Creating the new VM"
-New-AzVM -ResourceGroupName $rgname -Location $loc -VM $vm -Tag $GetVMinfo.tags -Verbose | Out-Null
 
 # If VM was deallocated to begin with, deallocate again before finishing
-if ($VMStatus.powerstate -eq 'deallocated') {
-    Write-Output "stopping VM $AzureVMName"
+if ($VMStatus.statuses.displaystatus -notcontains 'VM deallocated') {
     Write-Output -Message "Attempting to Stop VM $vmname" 
     Stop-AzVM -ResourceGroupName $rgname -Name $vmname -Force | Out-Null
-
 }
