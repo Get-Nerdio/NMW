@@ -1,6 +1,6 @@
 <#
   Author: Akash Chawla
-  Source: https://github.com/Azure/RDS-Templates/blob/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-06-12
+  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-09-15
 #>
 
 #description: Install language packs
@@ -80,6 +80,11 @@ function Install-LanguagePack {
          $LanguagesDictionary.Add("Turkish (Turkey)",	"tr-TR")
          $LanguagesDictionary.Add("Ukrainian (Ukraine)",	"uk-UA")
          $LanguagesDictionary.Add("English (Australia)",	"en-AU")
+
+         # Disable LanguageComponentsInstaller while installing language packs
+         # See Bug 45044965: Installing language pack fails with error: ERROR_SHARING_VIOLATION for more details
+         Disable-ScheduledTask -TaskName "\Microsoft\Windows\LanguageComponentsInstaller\Installation"
+         Disable-ScheduledTask -TaskName "\Microsoft\Windows\LanguageComponentsInstaller\ReconcileLanguageResources"
     } # Begin
     PROCESS {
 
@@ -90,14 +95,14 @@ function Install-LanguagePack {
                  try {
                     Write-Host "*** AVD AIB CUSTOMIZER PHASE : Install language packs -  Attempt: $i ***"   
                     $LanguageCode =  $LanguagesDictionary.$Language
-                    Install-Language -Language $LanguageCode
+                    Install-Language -Language $LanguageCode -ErrorAction Stop
                     Write-Host "*** AVD AIB CUSTOMIZER PHASE : Install language packs -  Installed language $LanguageCode ***"   
                     break
                 }
                 catch {
-                        Write-Host "*** AVD AIB CUSTOMIZER PHASE : Install language packs - Exception occurred***"
-                        Write-Host $PSItem.Exception
-                        continue
+                    Write-Host "*** AVD AIB CUSTOMIZER PHASE : Install language packs - Exception occurred***"
+                    Write-Host $PSItem.Exception
+                    continue
                 }
             }
         }
@@ -109,6 +114,9 @@ function Install-LanguagePack {
             Remove-Item -Path $templateFilePathFolder -Force -Recurse -ErrorAction Continue
         }
 
+        # Enable LanguageComponentsInstaller after language packs are installed
+        Enable-ScheduledTask -TaskName "\Microsoft\Windows\LanguageComponentsInstaller\Installation"
+        Enable-ScheduledTask -TaskName "\Microsoft\Windows\LanguageComponentsInstaller\ReconcileLanguageResources"
         $stopwatch.Stop()
         $elapsedTime = $stopwatch.Elapsed
         Write-Host "*** AVD AIB CUSTOMIZER PHASE : Install language packs -  Exit Code: $LASTEXITCODE ***"    
@@ -117,3 +125,7 @@ function Install-LanguagePack {
 }
 
  Install-LanguagePack -LanguageList $LanguageList
+
+ #############
+#    END    #
+#############

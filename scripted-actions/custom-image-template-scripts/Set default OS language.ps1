@@ -1,6 +1,6 @@
 <#
   Author: Akash Chawla
-  Source: https://github.com/Azure/RDS-Templates/blob/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-06-12
+  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-09-15
 #>
 
 #description: Set default OS language
@@ -92,6 +92,12 @@ $LanguagesDictionary.Add("English (Australia)",	"en-AU")
 
 try {
 
+  
+  # Disable LanguageComponentsInstaller while installing language packs
+  # See Bug 45044965: Installing language pack fails with error: ERROR_SHARING_VIOLATION for more details
+  Disable-ScheduledTask -TaskName "\Microsoft\Windows\LanguageComponentsInstaller\Installation"
+  Disable-ScheduledTask -TaskName "\Microsoft\Windows\LanguageComponentsInstaller\ReconcileLanguageResources"
+
   $languageDetails = Get-RegionInfo -Name $Language
 
   if($null -eq $languageDetails) {
@@ -124,7 +130,7 @@ try {
     for($i=1; $i -le 5; $i++) {
         try {
             Write-Host "*** AVD AIB CUSTOMIZER PHASE : Set default language - Install language packs -  Attempt: $i ***"   
-            Install-Language -Language $LanguageTag
+            Install-Language -Language $LanguageTag -ErrorAction Stop
             Write-Host "*** AVD AIB CUSTOMIZER PHASE : Set default lanhguage - Install language packs -  Installed language $LanguageCode ***"   
             break
         }
@@ -138,13 +144,23 @@ try {
   else {
      Write-Host "*** AVD AIB CUSTOMIZER PHASE : Set default language - Language pack for $LanguageTag is installed already***"
   }
-
-  Install-Language -Language $LanguageTag -CopyToSettings 
+  
   Set-systempreferreduilanguage -Language $LanguageTag
   Set-WinSystemLocale -SystemLocale $LanguageTag
   Set-Culture -CultureInfo $LanguageTag
   Set-WinUILanguageOverride -Language $LanguageTag
-  Set-WinUserLanguageList -LanguageList $LanguageTag -Force
+  
+  # Enable language Keyboard for Windows.
+  $userLanguageList = New-WinUserLanguageList -Language $languageCode
+  $installedUserLanguagesList = Get-WinUserLanguageList
+
+  foreach($language in $installedUserLanguagesList)
+  {
+       $userLanguageList.Add($language.LanguageTag)
+  }
+
+  Set-WinUserLanguageList -LanguageList $userLanguageList -Force
+
   Write-Host "*** AVD AIB CUSTOMIZER PHASE: Set default Language - $Language with $LanguageTag has been set as the default System Preferred UI Language***"
 
   if($null -ne $GeoID) {
@@ -160,6 +176,10 @@ catch {
 if ((Test-Path -Path $templateFilePathFolder -ErrorAction SilentlyContinue)) {
     Remove-Item -Path $templateFilePathFolder -Force -Recurse -ErrorAction Continue
 }
+
+# Enable LanguageComponentsInstaller after language packs are installed
+Enable-ScheduledTask -TaskName "\Microsoft\Windows\LanguageComponentsInstaller\Installation"
+Enable-ScheduledTask -TaskName "\Microsoft\Windows\LanguageComponentsInstaller\ReconcileLanguageResources"
 
 $stopwatch.Stop()
 $elapsedTime = $stopwatch.Elapsed
