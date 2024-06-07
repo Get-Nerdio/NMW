@@ -1,6 +1,6 @@
 <#
   Author: Akash Chawla
-  Source: https://github.com/Azure/RDS-Templates/blob/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-06-12
+  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-09-15
 #>
 
 #description: Remove selected AppX Packages
@@ -12,16 +12,17 @@
     "Description": "Select built-in AppX packages to remove",
     "DisplayName": "Packages",
     "OptionsSet": [
+      {"Value": "Clipchamp.Clipchamp"},
       {"Value": "Microsoft.BingNews"},
       {"Value": "Microsoft.BingWeather"},
       {"Value": "Microsoft.GamingApp"},
       {"Value": "Microsoft.GetHelp"},
       {"Value": "Microsoft.Getstarted"},
       {"Value": "Microsoft.MicrosoftOfficeHub"},
-      {"Value": "Microsoft.Office.OneNote"},
       {"Value": "Microsoft.MicrosoftSolitaireCollection"},
       {"Value": "Microsoft.MicrosoftStickyNotes"},
       {"Value": "Microsoft.MSPaint"},
+      {"Value": "Microsoft.Office.OneNote"},
       {"Value": "Microsoft.People"},
       {"Value": "Microsoft.PowerAutomateDesktop"},
       {"Value": "Microsoft.ScreenSketch"},
@@ -38,15 +39,14 @@
       {"Value": "Microsoft.WindowsSoundRecorder"},
       {"Value": "Microsoft.WindowsTerminal"},
       {"Value": "Microsoft.Xbox.TCUI"},
+      {"Value": "Microsoft.XboxApp"},
       {"Value": "Microsoft.XboxGameOverlay"},
       {"Value": "Microsoft.XboxGamingOverlay"},
       {"Value": "Microsoft.XboxIdentityProvider"},
       {"Value": "Microsoft.XboxSpeechToTextOverlay"},
       {"Value": "Microsoft.YourPhone"},
       {"Value": "Microsoft.ZuneMusic"},
-      {"Value": "Microsoft.ZuneVideo"},
-      {"Value": "Microsoft.XboxApp"},
-      {"Value": "Microsoft.Windowsstore"}
+      {"Value": "Microsoft.ZuneVideo"}
     ]
   }
 }
