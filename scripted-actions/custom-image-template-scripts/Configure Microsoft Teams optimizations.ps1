@@ -1,6 +1,6 @@
 <#
   Author: Akash Chawla
-  Source: https://github.com/Azure/RDS-Templates/blob/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-06-12
+  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-09-15
 #>
 
 #description: Configure Microsoft Teams optimizations
@@ -13,6 +13,7 @@
     "DisplayName": "Teams client",
     "OptionsSet": [
       {"Label": "Latest", "Value": "https://teams.microsoft.com/downloads/desktopurl?env=production&plat=windows&arch=x64&managedInstaller=true&download=true"},
+      {"Label": "Latest (x32)", "Value": "https://teams.microsoft.com/downloads/desktopurl?env=production&plat=windows&managedInstaller=true&download=true"},
       {"Label": "1.6.00.4472", "Value": "https://statics.teams.cdn.office.net/production-windows-x64/1.6.00.4472/Teams_windows_x64.msi"},
       {"Label": "1.6.00.1381", "Value": "https://statics.teams.cdn.office.net/production-windows-x64/1.6.00.1381/Teams_windows_x64.msi"},
       {"Label": "1.6.00.376", "Value": "https://statics.teams.cdn.office.net/production-windows-x64/1.6.00.376/Teams_windows_x64.msi"},
