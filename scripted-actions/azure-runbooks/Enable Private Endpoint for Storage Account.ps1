@@ -4,6 +4,7 @@
 <# Notes:
     This script will create a private endpoint and private endpoint connection for an Azure Files storage account and link the private DNS zone.
 
+    This script is intended to be used in conjunction with the "Enable Private Endpoints" scripted action, to add storage accounts to the private vnet.
 #>
 
 <# Variables:
@@ -38,15 +39,33 @@ $ErrorActionPreference = 'Stop'
 
 # Get the storage account
 $storageAccount = Get-AzResource -ResourceId $StorageAccountResourceId
+# if no storage account found, throw an error
+if (-not $storageAccount) {
+    throw "Storage account $StorageAccountResourceId not found"
+}
 
 # Create private link service connection
+Write-Output "Creating private link service connection"
 $privateLinkServiceConnection = New-AzPrivateLinkServiceConnection -Name "$($storageAccount.Name)PrivateLinkServiceConnection" -PrivateLinkServiceId $storageAccount.Id -GroupId "file"
 
 # Get subnet
+Write-Output "Getting subnet"
 $subnet = Get-AzVirtualNetwork -Name $VNetName -ResourceGroupName $VNetResourceGroup | Select-Object -ExpandProperty subnets | Where-Object Name -eq $SubnetName
+# if subnet not found, throw an error
+if (-not $subnet) {
+    throw "Subnet '$SubnetName' not found in VNet '$VNetName' in resource group '$VNetResourceGroup'"
+}
 
+# check for private endpoint
+$privateEndpoint = Get-AzPrivateEndpoint -ResourceGroupName $VNetResourceGroup -Name "$($storageAccount.Name)PrivateEndpoint"
+if ($privateEndpoint) {
+    Write-Output "Private endpoint exists"
+}
+else {
 # Create private endpoint
-$privateEndpoint = New-AzPrivateEndpoint -ResourceGroupName $VNetResourceGroup -Name "$($storageAccount.Name)PrivateEndpoint" -Location $storageAccount.Location -Subnet $subnet -PrivateLinkServiceConnection $privateLinkServiceConnection
+    Write-Output "Creating private endpoint"
+    $privateEndpoint = New-AzPrivateEndpoint -ResourceGroupName $VNetResourceGroup -Name "$($storageAccount.Name)PrivateEndpoint" -Location $storageAccount.Location -Subnet $subnet -PrivateLinkServiceConnection $privateLinkServiceConnection
+}
 
 # Create private DNS zone config
 $Config = New-AzPrivateDnsZoneConfig -Name 'privatelink.file.core.windows.net' -PrivateDnsZoneId $PrivateDnsZoneResourceId
