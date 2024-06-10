@@ -4,6 +4,7 @@
 <# Notes:
     This script will create a private endpoint and private endpoint connection for an Azure Files storage account and link the private DNS zone.
 
+    This script is intended to be used in conjunction with the "Enable Private Endpoints" scripted action, to add storage accounts to the private vnet.
 #>
 
 <# Variables:
@@ -40,7 +41,7 @@ $ErrorActionPreference = 'Stop'
 $storageAccount = Get-AzResource -ResourceId $StorageAccountResourceId
 # if no storage account found, throw an error
 if (-not $storageAccount) {
-    throw "Storage account not found"
+    throw "Storage account $StorageAccountResourceId not found"
 }
 
 # Create private link service connection
@@ -52,7 +53,7 @@ Write-Output "Getting subnet"
 $subnet = Get-AzVirtualNetwork -Name $VNetName -ResourceGroupName $VNetResourceGroup | Select-Object -ExpandProperty subnets | Where-Object Name -eq $SubnetName
 # if subnet not found, throw an error
 if (-not $subnet) {
-    throw "Subnet not found"
+    throw "Subnet '$SubnetName' not found in VNet '$VNetName' in resource group '$VNetResourceGroup'"
 }
 
 # check for private endpoint
