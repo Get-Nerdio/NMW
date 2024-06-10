@@ -53,8 +53,13 @@ foreach ($dir in $Dirs) {
         $LastModified = $file.LastModified.DateTime
         $DaysSinceModified = (Get-Date) - $LastModified
         if ($DaysSinceModified.Days -gt $DaysOld) {
+          if ($WhatIf) {
+            Write-Output "WHATIF: $($file.Name) is older than $DaysOld days, WOULD delete..."
+          }
+          else {
             Write-Output "$($file.Name) is older than $DaysOld days, deleting..." 
-            $file | Remove-AzStorageFile -WhatIf:$WhatIf 4>&1
+            $file | Remove-AzStorageFile 
+          }
         }
         else {
             Write-Output "$($file.Name) is not older than $DaysOld days, skipping..."
@@ -63,6 +68,12 @@ foreach ($dir in $Dirs) {
     # if directory is now empty, delete it
     $Files = Get-AzStorageFile -ShareName "$ShareName" -Path $dir.Name -Context $StorageContext | Get-AzStorageFile
     if ($Files.Count -eq 0) {
-        Remove-AzStorageDirectory -Context $StorageContext -ShareName "$ShareName" -Path $dir.name -whatif:$WhatIf 4>&1
+        if ($WhatIf) {
+            Write-Output "WHATIF: $($dir.Name) is empty, WOULD delete..."
+        }
+        else {
+          Write-Output "$($dir.Name) is empty, deleting..."
+          Remove-AzStorageDirectory -Context $StorageContext -ShareName "$ShareName" -Path $dir.name 
+        }
     }
 }
