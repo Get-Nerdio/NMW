@@ -20,11 +20,18 @@
     "Description": "Secure variable containing the storage account key. Make sure this secure variable is passed to this script.",
     "IsRequired": false,
     "DefaultValue": "FslStorageKey"
+  },
+  "WhatIf": {
+    "Description": "If set to true, the script will only output what it would do without actually doing it.",
+    "IsRequired": false,
+    "DefaultValue": false
   }
 }
 #>
 
 $ErrorActionPreference = 'Stop'
+
+[bool]$WhatIf = $WhatIf -eq 'true'
 
 $StorageContext = New-AzStorageContext -StorageAccountName $StorageAccountName -StorageAccountKey $StorageKeySecureVar
 Write-Output "Storage Account Connected"
@@ -46,7 +53,7 @@ foreach ($dir in $Dirs) {
         $DaysSinceModified = (Get-Date) - $LastModified
         if ($DaysSinceModified.Days -gt $DaysOld) {
             Write-Output "$($file.Name) is older than $DaysOld days, deleting..." 
-            $file | Remove-AzStorageFile 
+            $file | Remove-AzStorageFile -WhatIf:$WhatIf
         }
         else {
             Write-Output "$($file.Name) is not older than $DaysOld days, skipping..."
@@ -55,6 +62,6 @@ foreach ($dir in $Dirs) {
     # if directory is now empty, delete it
     $Files = Get-AzStorageFile -ShareName "$ShareName" -Path $dir.Name -Context $StorageContext | Get-AzStorageFile
     if ($Files.Count -eq 0) {
-        Remove-AzStorageDirectory -Context $StorageContext -ShareName "$ShareName" -Path $dir.name
+        Remove-AzStorageDirectory -Context $StorageContext -ShareName "$ShareName" -Path $dir.name -whatif:$WhatIf
     }
 }
