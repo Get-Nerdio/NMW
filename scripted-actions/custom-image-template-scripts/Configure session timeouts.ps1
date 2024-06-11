@@ -1,6 +1,6 @@
 <#
   Author: Akash Chawla
-  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-09-15
+  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2024-03-27
 #>
 
 #description: Configure timeout thresholds for sessions
@@ -113,8 +113,7 @@
     ]
   },
   "fResetBroken": {
-    "DisplayName": "End session when time limits are reached",
-    "Type": "switch"
+    "DisplayName": "End session when time limits are reached"
   }
 }
 #>
@@ -134,7 +133,7 @@
         [string] $RemoteAppLogoffTimeLimit,
 
         [Parameter(Mandatory=$false)]
-        [string] $fResetBroken
+        [switch] $fResetBroken
  )
 
  
