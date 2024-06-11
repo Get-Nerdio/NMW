@@ -1,6 +1,6 @@
 <#
   Author: Akash Chawla
-  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-09-15
+  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2024-03-27
 #>
 
 #description: Remove selected AppX Packages
@@ -60,7 +60,7 @@
         [System.String[]] $AppxPackages
  )
 
- function Remove-AppxPackage($AppxPackages) {
+ function Remove-ProvidedAppxPackages($AppxPackages) {
    
         Begin {
             $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -105,4 +105,4 @@
         }
  }
 
- Remove-AppxPackage -AppxPackages $AppxPackages
+ Remove-ProvidedAppxPackages -AppxPackages $AppxPackages

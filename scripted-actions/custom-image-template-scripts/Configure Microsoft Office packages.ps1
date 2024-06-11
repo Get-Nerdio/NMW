@@ -1,6 +1,6 @@
 <#
   Author: Akash Chawla
-  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-09-15
+  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2024-03-27
 #>
 
 #description: Install or uninstall Microsoft Office applications
@@ -214,6 +214,7 @@ function installOfficeUsingODT($Applications, $Version, $Type) {
         $guid = [guid]::NewGuid().Guid
         $tempFolder = (Join-Path -Path "C:\temp\" -ChildPath $guid)
         $ODTDownloadUrl = 'https://www.microsoft.com/en-us/download/confirmation.aspx?id=49117'
+        $templateFilePathFolder = "C:\AVDImage"
 
         if (!(Test-Path -Path $tempFolder)) {
             New-Item -Path $tempFolder -ItemType Directory
