@@ -57,7 +57,7 @@ if (-not $subnet) {
 }
 
 # check for private endpoint
-$privateEndpoint = Get-AzPrivateEndpoint -ResourceGroupName $VNetResourceGroup -Name "$($storageAccount.Name)PrivateEndpoint"
+$privateEndpoint = Get-AzPrivateEndpoint -ResourceGroupName $VNetResourceGroup -Name "$($storageAccount.Name)PrivateEndpoint" -ErrorAction SilentlyContinue
 if ($privateEndpoint) {
     Write-Output "Private endpoint exists"
 }
