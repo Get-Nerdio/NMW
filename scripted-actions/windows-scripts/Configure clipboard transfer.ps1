@@ -3,6 +3,15 @@
 #tags: Nerdio
 #Requires -RunAsAdministrator
 
+<#
+Notes:
+This script configures clipboard transfer restrictions between Azure VM and Web client.
+To use the script ensure it is run on VM with appropriate version of Windows
+(see https://learn.microsoft.com/en-us/azure/virtual-desktop/clipboard-transfer-direction-data-types?tabs=intune#prerequisites).
+On prior Widnows versions it will create required configuration, but this configuration
+will not take any effect. 
+#>
+
 <#variables:
 {
   "HostToClientMode": {
