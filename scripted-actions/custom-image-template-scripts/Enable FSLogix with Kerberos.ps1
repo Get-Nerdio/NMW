@@ -1,6 +1,6 @@
-﻿<#
+<#
   Author: Akash Chawla
-  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-09-15
+  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2024-03-27
 #>
 
 #description: Access to Azure File shares for FSLogix profiles
