@@ -1,6 +1,6 @@
 <#
   Author: Akash Chawla
-  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2023-09-15
+  Source: https://github.com/Azure/RDS-Templates/tree/master/CustomImageTemplateScripts/CustomImageTemplateScripts_2024-03-27
 #>
 
 #description: Install and enable multimedia redirection for smooth video playback
@@ -18,13 +18,11 @@
   },
   "EnableEdge": {
     "Description": "Install the MMR browser extension for Microsoft Edge",
-    "DisplayName": "Enable MMR for Edge",
-    "Type": "bool"
+    "DisplayName": "Enable MMR for Edge"
   },
   "EnableChrome": {
     "Description": "Install the MMR browser extension for Google Chrome. If Chrome is not installed, the latest version will be installed using this script",
-    "DisplayName": "Enable MMR for Chrome",
-    "Type": "bool"
+    "DisplayName": "Enable MMR for Chrome"
   }
 }
 #>
@@ -38,12 +36,12 @@
     [Parameter(
         Mandatory
     )]
-    [string]$EnableEdge,
+    [bool]$EnableEdge,
 
     [Parameter(
         Mandatory
     )]
-    [string]$EnableChrome
+    [bool]$EnableChrome
 )
 
 function InstallAndEnableMMR($VCRedistributableLink, $EnableChrome, $EnableEdge) {
