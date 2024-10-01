@@ -1,0 +1,30 @@
+{
+    "displayName": "CA003: Block legacy authentication",
+    "state": "enabled",
+    "conditions": {
+        "applications": {
+            "includeApplications": ["All"],
+            "excludeApplications": [],
+            "includeUserActions": []
+        },
+        "users": {
+            "includeUsers": ["None"],
+            "excludeUsers": [],
+            "includeGroups": [],
+            "excludeGroups": [],
+            "includeRoles": [],
+            "excludeRoles": []
+        },
+        "platforms": null,
+        "locations": null,
+        "signInRiskLevels": [],
+        "clientAppTypes": [3, 5]
+    },
+    "grantControls": {
+        "operator": "OR",
+        "builtInControls": [0],
+        "customAuthenticationFactors": [],
+        "termsOfUse": []
+    },
+    "sessionControls": null
+}

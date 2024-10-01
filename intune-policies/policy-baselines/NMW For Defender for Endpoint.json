@@ -1,0 +1,20 @@
+{
+    "name": "Defender for Endpoint",
+    "description": "Built-in policy baseline for Defender for Endpoint",
+    "tags": [
+        "Defender for Endpoint"
+    ],
+    "baselineType": "ForDefenderForEndpoint",
+    "policies": [
+        "/intune-policies/compliance-policies/NMW Windows Advanced Compliancy with Defender.json",
+        "/intune-policies/application-control-policies/NMW Application Control (audit mode).json",
+        "/intune-policies/application-control-policies/NMW Enforce SmartScreen.json",
+        "/intune-policies/security-baseline-policies/NMW Force Bitlocker for fixed disks only.json",
+        "/intune-policies/macos-firewall-policies/NMW macOS Firewall.json",
+        "/intune-policies/attack-surface-reduction-rules-policies/NMW Attack Surface Reduction.json",
+        "/intune-policies/microsoft-defender-antivirus-policies/NMW Defender Antivirus for macOS.json",
+        "/intune-policies/microsoft-defender-antivirus-policies/NMW Defender Antivirus for Windows 10_11.json",
+        "/intune-policies/windows-firewall-policies/NMW Windows Defender Firewall.json",
+        "/intune-policies/endpoint-detection-and-response-policies/NMW Defender onboarding for Windows 10_11.json"
+    ]
+}
