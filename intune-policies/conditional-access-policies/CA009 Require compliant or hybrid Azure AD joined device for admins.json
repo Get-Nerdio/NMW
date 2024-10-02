@@ -1,0 +1,30 @@
+{
+    "displayName": "CA009: Require compliant or hybrid Azure AD joined device for admins",
+    "state": "enabledForReportingButNotEnforced",
+    "conditions": {
+        "applications": {
+            "includeApplications": ["All"],
+            "excludeApplications": [],
+            "includeUserActions": []
+        },
+        "users": {
+            "includeUsers": ["None"],
+            "excludeUsers": [],
+            "includeGroups": [],
+            "excludeGroups": [],
+            "includeRoles": [],
+            "excludeRoles": []
+        },
+        "platforms": null,
+        "locations": null,
+        "signInRiskLevels": [],
+        "clientAppTypes": [0]
+    },
+    "grantControls": {
+        "operator": "OR",
+        "builtInControls": [2, 3],
+        "customAuthenticationFactors": [],
+        "termsOfUse": []
+    },
+    "sessionControls": null
+}

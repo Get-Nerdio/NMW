@@ -1,0 +1,30 @@
+{
+    "displayName": "CA007: Require multi-factor authentication for risky sign-ins",
+    "state": "enabled",
+    "conditions": {
+        "applications": {
+            "includeApplications": ["All"],
+            "excludeApplications": [],
+            "includeUserActions": []
+        },
+        "users": {
+            "includeUsers": ["None"],
+            "excludeUsers": [],
+            "includeGroups": [],
+            "excludeGroups": [],
+            "includeRoles": [],
+            "excludeRoles": []
+        },
+        "platforms": null,
+        "locations": null,
+        "signInRiskLevels": [2, 1],
+        "clientAppTypes": [0]
+    },
+    "grantControls": {
+        "operator": "OR",
+        "builtInControls": [1],
+        "customAuthenticationFactors": [],
+        "termsOfUse": []
+    },
+    "sessionControls": null
+}
