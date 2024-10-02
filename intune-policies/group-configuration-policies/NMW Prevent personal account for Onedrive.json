@@ -1,0 +1,11 @@
+{
+    "_wap_tags": "Security",
+    "displayName": "NMW Prevent personal account for Onedrive",
+    "description": "",
+    "definitionValues": [
+        {
+            "definition@odata.bind": "https://graph.microsoft.com/beta/deviceManagement/groupPolicyDefinitions('e03416be-f01b-4377-9caa-a7f6e812f5e5')",
+            "enabled": true
+        }
+    ]
+}

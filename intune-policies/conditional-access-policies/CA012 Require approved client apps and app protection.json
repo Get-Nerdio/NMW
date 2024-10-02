@@ -1,0 +1,33 @@
+{
+    "displayName": "CA012: Require approved client apps and app protection",
+    "state": "enabled",
+    "conditions": {
+        "applications": {
+            "includeApplications": ["All"],
+            "excludeApplications": [],
+            "includeUserActions": []
+        },
+        "users": {
+            "includeUsers": ["None"],
+            "excludeUsers": [],
+            "includeGroups": [],
+            "excludeGroups": [],
+            "includeRoles": [],
+            "excludeRoles": []
+        },
+        "platforms": {
+            "includePlatforms": [0, 1],
+            "excludePlatforms": []
+        },
+        "locations": null,
+        "signInRiskLevels": [],
+        "clientAppTypes": [0]
+    },
+    "grantControls": {
+        "operator": "OR",
+        "builtInControls": [4, 5],
+        "customAuthenticationFactors": [],
+        "termsOfUse": []
+    },
+    "sessionControls": null
+}

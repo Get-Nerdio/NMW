@@ -1,0 +1,31 @@
+{
+    "@odata.type": "#microsoft.graph.sharedPCConfiguration",
+    "deviceManagementApplicabilityRuleOsEdition":  null,
+    "deviceManagementApplicabilityRuleOsVersion":  null,
+    "deviceManagementApplicabilityRuleDeviceMode":  null,
+    "description": "Enable Shared PC for Azure AD accounts only (no guest accounts). For more information on what\u0027s enabled in Share PC mode visit:\nhttps://learn.microsoft.com/en-us/windows/configuration/shared-pc-technical",
+    "displayName": "NMW Enable Shared multi-user device",
+    "allowedAccounts": "domain",
+    "localStorage": "disabled",
+    "allowLocalStorage": false,
+    "setAccountManager": "enabled",
+    "disableAccountManager": false,
+    "setEduPolicies": "notConfigured",
+    "disableEduPolicies": false,
+    "setPowerPolicies": "disabled",
+    "disablePowerPolicies": true,
+    "signInOnResume": "enabled",
+    "disableSignInOnResume": false,
+    "enabled": true,
+    "idleTimeBeforeSleepInSeconds": 30,
+    "kioskAppDisplayName": null,
+    "kioskAppUserModelId": null,
+    "maintenanceStartTime": "02:00:00.0000000",
+    "fastFirstSignIn": "notConfigured",
+    "accountManagerPolicy": {
+        "accountDeletionPolicy": "diskSpaceThresholdOrInactiveThreshold",
+        "cacheAccountsAboveDiskFreePercentage": 90,
+        "inactiveThresholdDays": 60,
+        "removeAccountsBelowDiskFreePercentage": 90
+    }
+}
