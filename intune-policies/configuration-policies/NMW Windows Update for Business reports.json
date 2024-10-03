@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "Updates",
     "description": "Enables devices to start reporting data to the WUfB Reports Log Analytics Workspace. In conjunction with WUfB enabled at the tenant level, this will allow NMW to report on Windows Updates.\n\nMore information:\nhttps://help.nerdio.net/hc/en-us/articles/13353356604045-Overview-of-Intune-Windows-Updates",
     "name": "NMW Windows Update for Business reports",
     "platforms": "windows10",

@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "IOS",
     "@odata.type": "#microsoft.graph.iosCompliancePolicy",
     "description": null,
     "displayName": "NMW iOS BYOD Compliancy",

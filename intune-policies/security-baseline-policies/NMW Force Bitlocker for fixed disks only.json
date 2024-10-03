@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "Security",
     "templateId": "d1174162-1dd2-4976-affc-6667049ab0ae",
     "description": "This policy enables BitLocker to fully encrypt fixed OS and data disks, based on AES 128-bit XTS. Keys will be stored in Azure AD and client-driven key rotation will be enabled. There\u0027s no block for write-access to unencrypted removable drives.",
     "displayName": "NMW Force Bitlocker for fixed disks only",

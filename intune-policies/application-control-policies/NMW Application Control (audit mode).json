@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "Defender for Endpoint",
     "templateId": "63be6324-e3c9-4c97-948a-e7f4b96f0f20",
     "description": "Sets AppLocker to audit mode for Store apps and SmartLocker, doesn\u0027t block file overrides by SmartScreen, and disables SmartScreen prompts in the shell. This config audits app usage without enforcing restrictions or SmartScreen interventions.",
     "displayName": "NMW Application Control (audit mode)",

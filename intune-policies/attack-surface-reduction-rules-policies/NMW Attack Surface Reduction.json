@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "Defender for Endpoint",
     "description": "Implements Defender ASR rules to block unauthorized actions and processes on Windows 10 devices, including script execution and process creation from risky sources. It enables controlled folder access for ransomware protection.",
     "name": "NMW Attack Surface Reduction",
     "platforms": "windows10",

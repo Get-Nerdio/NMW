@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "Android",
     "@odata.type": "#microsoft.graph.androidWorkProfileCompliancePolicy",
     "description": null,
     "displayName": "NMW Android BYOD Compliancy",
