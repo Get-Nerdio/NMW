@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "iOS",
     "@odata.type": "#microsoft.graph.iosUpdateConfiguration",
     "deviceManagementApplicabilityRuleOsEdition":  null,
     "deviceManagementApplicabilityRuleOsVersion":  null,

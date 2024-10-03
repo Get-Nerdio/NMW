@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "AVD",
     "description": "Use this policy to enable watermark protection for AVD sessions to reduce the risk of data exfiltration.",
     "name": "NMW Enable watermark for AVD session hosts",
     "platforms": "windows10",

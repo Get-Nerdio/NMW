@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "Windows",
     "@odata.type": "#microsoft.graph.windows10CompliancePolicy",
     "description": null,
     "displayName": "NMW Windows Basic Compliancy (no TPM)",

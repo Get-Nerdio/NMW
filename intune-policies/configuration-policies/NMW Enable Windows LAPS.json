@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "Endpoint Security",
     "description": "Enable the Local Admin Password Solution to store the password for the built-in local administrator account to Entra ID. When expired, the managed admin's user session will be logged off automatically.",
     "name": "NMW Enable Windows LAPS",
     "platforms": "windows10",

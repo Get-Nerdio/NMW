@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "Defender for Endpoint",
     "templateId": "5340aa10-47a8-4e67-893f-690984e4d5da",
     "description": "Activates macOS firewall, blocks all incoming connections, and leaves stealth mode disabled, indicating the device remains visible on the network. No specific applications are configured to bypass the firewall, allowing for separate customization.",
     "displayName": "NMW macOS Firewall",

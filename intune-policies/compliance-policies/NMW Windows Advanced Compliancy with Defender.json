@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "Defender for Endpoint",
     "@odata.type": "#microsoft.graph.windows10CompliancePolicy",
     "description": "This policy enforces advanced compliance on Windows devices with a focus on Defender capabilities. It does not mandate a password or set specific password complexities, reflecting a device-default approach. Key security features mandated include BitLocker encryption, Secure Boot, and Code Integrity, with active firewall, Defender antivirus, antispyware, and real-time protection (RTP) enabled. Device Threat Protection is activated, requiring a minimum security level of \u0027low\u0027. TPM is required for device integrity, but it does not enforce early launch anti-malware, memory integrity, kernel DMA protection, virtualization-based security, firmware protection, or storage encryption. This policy aims to ensure a fundamental level of device and data protection through encryption and malware defense without imposing stringent password policies.",
     "displayName": "NMW Windows Advanced Compliancy with Defender",

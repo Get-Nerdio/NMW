@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "Defender for Endpoint",
     "description": "This policy configures Microsoft Defender Antivirus on Windows 10/11 devices, focusing on comprehensive protection features. It enables archive scanning, behavior monitoring, cloud protection, and real-time monitoring. The policy also manages scanning settings for removable drives, email, scripts, and network protection, including PUAs defense and sample submission consent.",
     "name": "NMW Defender Antivirus for Windows 10/11",
     "platforms": "windows10",
