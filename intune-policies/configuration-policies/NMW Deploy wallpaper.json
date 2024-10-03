@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "User Experience",
     "description": "Change the default Windows wallpaper to a custom wallpaper. You can clone and change the URL to point to an image of your choice.",
     "name": "NMW Deploy wallpaper",
     "platforms": "windows10",

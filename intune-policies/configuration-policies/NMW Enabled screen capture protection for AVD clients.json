@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "AVD",
     "description": "Use this policy to enable screen capture protection for AVD sessions to reduce the risk of data exfiltration.",
     "name": "NMW Enabled screen capture protection for AVD clients",
     "platforms": "windows10",

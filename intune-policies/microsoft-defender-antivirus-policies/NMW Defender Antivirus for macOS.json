@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "Defender for Endpoint",
     "description": "This policy configures Microsoft Defender Antivirus settings on macOS devices to enhance security. It includes settings for exclusions, threat type settings merge policy, maximum on-demand scan threads, scanning after definition updates, archive scanning, antivirus engine enforcement level, enabling the antivirus, automatic sample submission, diagnostic level, automatic definition update, general enforcement level, tamper protection enforcement level, consumer experience adjustments, hiding the status menu icon, and user-initiated feedback.",
     "name": "NMW Defender Antivirus for macOS",
     "platforms": "macOS",

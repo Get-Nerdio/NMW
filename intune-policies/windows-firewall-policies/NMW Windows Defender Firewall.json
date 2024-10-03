@@ -1,5 +1,4 @@
 {
-    "_wap_tags": "Defender for Endpoint",
     "description": "This policy enables and configures Windows Defender Firewall settings across domain, private, and public profiles on Windows 10 devices. It ensures the firewall is active for all profiles, sets default actions for inbound and outbound traffic, and controls notifications for inbound activities. The policy aims to bolster network security by managing how incoming and outgoing network traffic is handled and by providing feedback mechanisms for network-related events.",
     "name": "NMW Windows Defender Firewall",
     "platforms": "windows10",
