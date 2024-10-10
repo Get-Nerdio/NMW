@@ -1,0 +1,33 @@
+{
+    "displayName": "CA010: Block access for unknown or unsupported device platform",
+    "state": "enabled",
+    "conditions": {
+        "applications": {
+            "includeApplications": ["All"],
+            "excludeApplications": [],
+            "includeUserActions": []
+        },
+        "users": {
+            "includeUsers": ["None"],
+            "excludeUsers": [],
+            "includeGroups": [],
+            "excludeGroups": [],
+            "includeRoles": [],
+            "excludeRoles": []
+        },
+        "platforms": {
+            "includePlatforms": [5],
+            "excludePlatforms": [0, 1, 2, 4]
+        },
+        "locations": null,
+        "signInRiskLevels": [],
+        "clientAppTypes": [0]
+    },
+    "grantControls": {
+        "operator": "OR",
+        "builtInControls": [0],
+        "customAuthenticationFactors": [],
+        "termsOfUse": []
+    },
+    "sessionControls": null
+}

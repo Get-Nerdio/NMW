@@ -1,0 +1,32 @@
+{
+    "displayName": "CA014: Use application enforced restrictions for unmanaged devices",
+    "state": "enabled",
+    "conditions": {
+        "applications": {
+            "includeApplications": ["Office365"],
+            "excludeApplications": [],
+            "includeUserActions": []
+        },
+        "users": {
+            "includeUsers": ["None"],
+            "excludeUsers": [],
+            "includeGroups": [],
+            "excludeGroups": [],
+            "includeRoles": [],
+            "excludeRoles": []
+        },
+        "platforms": null,
+        "locations": null,
+        "signInRiskLevels": [],
+        "clientAppTypes": [0]
+    },
+    "grantControls": null,
+    "sessionControls": {
+        "applicationEnforcedRestrictions": {
+            "isEnabled": true
+        },
+        "cloudAppSecurity": null,
+        "signInFrequency": null,
+        "persistentBrowser": null
+    }
+}

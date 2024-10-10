@@ -1,0 +1,15 @@
+{
+    "@odata.type": "#microsoft.graph.macOSSoftwareUpdateConfiguration",
+    "deviceManagementApplicabilityRuleOsEdition":  null,
+    "deviceManagementApplicabilityRuleOsVersion":  null,
+    "deviceManagementApplicabilityRuleDeviceMode":  null,
+    "description": "",
+    "displayName": "NMW macOS Update policy",
+    "criticalUpdateBehavior": "default",
+    "configDataUpdateBehavior": "downloadOnly",
+    "firmwareUpdateBehavior": "downloadOnly",
+    "allOtherUpdateBehavior": "downloadOnly",
+    "updateScheduleType": "alwaysUpdate",
+    "updateTimeWindowUtcOffsetInMinutes": null,
+    "customUpdateTimeWindows": []
+}
