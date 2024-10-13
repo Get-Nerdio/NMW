@@ -2,12 +2,15 @@
     "displayName": "CA003: Block legacy authentication",
     "state": "enabled",
     "conditions": {
+        "@odata.type": "#microsoft.graph.conditionalAccessConditionSet",
         "applications": {
+            "@odata.type": "#microsoft.graph.conditionalAccessApplications",
             "includeApplications": ["All"],
             "excludeApplications": [],
             "includeUserActions": []
         },
         "users": {
+            "@odata.type": "#microsoft.graph.conditionalAccessUsers",
             "includeUsers": ["None"],
             "excludeUsers": [],
             "includeGroups": [],
@@ -18,11 +21,12 @@
         "platforms": null,
         "locations": null,
         "signInRiskLevels": [],
-        "clientAppTypes": [3, 5]
+        "clientAppTypes": ["exchangeActiveSync", "other"]
     },
     "grantControls": {
+        "@odata.type": "#microsoft.graph.conditionalAccessGrantControls",
         "operator": "OR",
-        "builtInControls": [0],
+        "builtInControls": ["block"],
         "customAuthenticationFactors": [],
         "termsOfUse": []
     },
