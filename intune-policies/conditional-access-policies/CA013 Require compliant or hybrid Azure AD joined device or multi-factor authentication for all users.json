@@ -2,12 +2,15 @@
     "displayName": "CA013: Require compliant or hybrid Azure AD joined device or multi-factor authentication for all users",
     "state": "enabledForReportingButNotEnforced",
     "conditions": {
+        "@odata.type": "#microsoft.graph.conditionalAccessConditionSet",
         "applications": {
+            "@odata.type": "#microsoft.graph.conditionalAccessApplications",
             "includeApplications": ["All"],
             "excludeApplications": [],
             "includeUserActions": []
         },
         "users": {
+            "@odata.type": "#microsoft.graph.conditionalAccessUsers",
             "includeUsers": ["None"],
             "excludeUsers": [],
             "includeGroups": [],
@@ -16,16 +19,18 @@
             "excludeRoles": []
         },
         "platforms": {
-            "includePlatforms": [2, 4],
+            "@odata.type": "microsoft.graph.conditionalAccessPlatforms",
+            "includePlatforms": ["windows", "macOS"],
             "excludePlatforms": []
         },
         "locations": null,
         "signInRiskLevels": [],
-        "clientAppTypes": [1, 2]
+        "clientAppTypes": ["browser", "mobileAppsAndDesktopClients"]
     },
     "grantControls": {
+        "@odata.type": "#microsoft.graph.conditionalAccessGrantControls",
         "operator": "OR",
-        "builtInControls": [1, 2, 3],
+        "builtInControls": ["mfa", "compliantDevice", "domainJoinedDevice"],
         "customAuthenticationFactors": [],
         "termsOfUse": []
     },
