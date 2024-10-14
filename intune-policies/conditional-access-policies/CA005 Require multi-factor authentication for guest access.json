@@ -2,12 +2,15 @@
     "displayName": "CA005: Require multi-factor authentication for guest access",
     "state": "enabled",
     "conditions": {
+        "@odata.type": "#microsoft.graph.conditionalAccessConditionSet",
         "applications": {
+            "@odata.type": "#microsoft.graph.conditionalAccessApplications",
             "includeApplications": ["All"],
             "excludeApplications": [],
             "includeUserActions": []
         },
         "users": {
+            "@odata.type": "#microsoft.graph.conditionalAccessUsers",
             "includeUsers": ["None"],
             "excludeUsers": [],
             "includeGroups": [],
@@ -18,11 +21,12 @@
         "platforms": null,
         "locations": null,
         "signInRiskLevels": [],
-        "clientAppTypes": [0]
+        "clientAppTypes": ["All"]
     },
     "grantControls": {
+        "@odata.type": "#microsoft.graph.conditionalAccessGrantControls",
         "operator": "OR",
-        "builtInControls": [1],
+        "builtInControls": ["mfa"],
         "customAuthenticationFactors": [],
         "termsOfUse": []
     },
