@@ -1,5 +1,5 @@
 {
-    "displayName": "CA007: Require multi-factor authentication for risky sign-ins",
+    "displayName": "CA007(P2 license only): Require multi-factor authentication for risky sign-ins",
     "state": "enabled",
     "conditions": {
         "@odata.type": "#microsoft.graph.conditionalAccessConditionSet",
