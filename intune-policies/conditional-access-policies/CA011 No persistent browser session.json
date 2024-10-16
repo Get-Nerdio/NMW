@@ -28,12 +28,14 @@
         "applicationEnforcedRestrictions": null,
         "cloudAppSecurity": null,
         "signInFrequency": {
-            "type": 1,
+            "@odata.type": "microsoft.graph.signInFrequencySessionControl",
+            "type": "1",
             "value": 1,
             "isEnabled": true
         },
         "persistentBrowser": {
-            "mode": 1,
+            "@odata.type": "microsoft.graph.persistentBrowserSessionControl",
+            "mode": "1",
             "isEnabled": true
         }
     }
