@@ -101,8 +101,11 @@ if (-not (Test-Path $Path)) {
     throw
 }
 
-Copy-Item $Path -Destination "C:\windows\system32\GroupPolicy\Machine\Registry_Backup.pol"
-Write-Host "Backup file: C:\windows\system32\GroupPolicy\Machine\Registry_Backup.pol"
+$CurrentDate = Get-Date -Format "dd-MMM-yyyy"
+$BackupFile = "C:\windows\system32\GroupPolicy\Machine\Registry_Backup_$CurrentDate.pol"
+
+Copy-Item $Path -Destination $BackupFile
+Write-Host "Backup file: $BackupFile"
 
 [string] $policyContents = Get-Content $Path -Raw
 [byte[]] $policyContentInBytes = Get-Content $Path -Raw -Encoding Byte
