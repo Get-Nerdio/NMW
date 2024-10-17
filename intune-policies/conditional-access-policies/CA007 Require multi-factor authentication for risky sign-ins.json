@@ -1,13 +1,16 @@
 {
-    "displayName": "CA007: Require multi-factor authentication for risky sign-ins",
+    "displayName": "CA007(P2 license only): Require multi-factor authentication for risky sign-ins",
     "state": "enabled",
     "conditions": {
+        "@odata.type": "#microsoft.graph.conditionalAccessConditionSet",
         "applications": {
+            "@odata.type": "#microsoft.graph.conditionalAccessApplications",
             "includeApplications": ["All"],
             "excludeApplications": [],
             "includeUserActions": []
         },
         "users": {
+            "@odata.type": "#microsoft.graph.conditionalAccessUsers",
             "includeUsers": ["None"],
             "excludeUsers": [],
             "includeGroups": [],
@@ -17,12 +20,13 @@
         },
         "platforms": null,
         "locations": null,
-        "signInRiskLevels": [2, 1],
-        "clientAppTypes": [0]
+        "signInRiskLevels": ["high", "medium"],
+        "clientAppTypes": ["All"]
     },
     "grantControls": {
+        "@odata.type": "#microsoft.graph.conditionalAccessGrantControls",
         "operator": "OR",
-        "builtInControls": [1],
+        "builtInControls": ["mfa"],
         "customAuthenticationFactors": [],
         "termsOfUse": []
     },
