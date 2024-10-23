@@ -1,0 +1,38 @@
+{
+    "displayName": "CA012: Require approved client apps and app protection",
+    "state": "enabled",
+    "conditions": {
+        "@odata.type": "#microsoft.graph.conditionalAccessConditionSet",
+        "applications": {
+            "@odata.type": "#microsoft.graph.conditionalAccessApplications",
+            "includeApplications": ["All"],
+            "excludeApplications": [],
+            "includeUserActions": []
+        },
+        "users": {
+            "@odata.type": "#microsoft.graph.conditionalAccessUsers",
+            "includeUsers": ["None"],
+            "excludeUsers": [],
+            "includeGroups": [],
+            "excludeGroups": [],
+            "includeRoles": [],
+            "excludeRoles": []
+        },
+        "platforms": {
+            "@odata.type": "microsoft.graph.conditionalAccessPlatforms",
+            "includePlatforms": ["android", "iOS"],
+            "excludePlatforms": []
+        },
+        "locations": null,
+        "signInRiskLevels": [],
+        "clientAppTypes": ["All"]
+    },
+    "grantControls": {
+        "@odata.type": "#microsoft.graph.conditionalAccessGrantControls",
+        "operator": "OR",
+        "builtInControls": ["approvedApplication", "compliantApplication"],
+        "customAuthenticationFactors": [],
+        "termsOfUse": []
+    },
+    "sessionControls": null
+}

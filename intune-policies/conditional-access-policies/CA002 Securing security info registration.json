@@ -1,0 +1,38 @@
+{
+    "displayName": "CA002: Securing security info registration",
+    "state": "enabled",
+    "conditions": {
+        "@odata.type": "#microsoft.graph.conditionalAccessConditionSet",
+        "applications": {
+            "@odata.type": "#microsoft.graph.conditionalAccessApplications",
+            "includeApplications": [],
+            "excludeApplications": [],
+            "includeUserActions": ["urn:user:registersecurityinfo"]
+        },
+        "users": {
+            "@odata.type": "#microsoft.graph.conditionalAccessUsers",
+            "includeUsers": ["None"],
+            "excludeUsers": [],
+            "includeGroups": [],
+            "excludeGroups": [],
+            "includeRoles": [],
+            "excludeRoles": []
+        },
+        "platforms": null,
+        "locations": {
+            "@odata.type": "microsoft.graph.conditionalAccessLocations",
+            "includeLocations": ["All"],
+            "excludeLocations": ["AllTrusted"]
+        },
+        "signInRiskLevels": [],
+        "clientAppTypes": ["All"]
+    },
+    "grantControls": {
+        "@odata.type": "#microsoft.graph.conditionalAccessGrantControls",
+        "operator": "OR",
+        "builtInControls": ["mfa"],
+        "customAuthenticationFactors": [],
+        "termsOfUse": []
+    },
+    "sessionControls": null
+}

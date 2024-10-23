@@ -1,0 +1,11 @@
+{
+    "@odata.type": "#microsoft.graph.windowsHealthMonitoringConfiguration",
+    "deviceManagementApplicabilityRuleOsEdition":  null,
+    "deviceManagementApplicabilityRuleOsVersion":  null,
+    "deviceManagementApplicabilityRuleDeviceMode":  null,
+    "description": "Enables the collection of data required to report on performance and productivity scores for endpoints. Please note this settings in this policy are required for NMW to show the Endpoint Analytics scores in the device properties.\n\nFor more information, please check:\nhttps://learn.microsoft.com/en-us/mem/analytics/overview",
+    "displayName": "NMW Enable Endpoint Analytics",
+    "allowDeviceHealthMonitoring": "enabled",
+    "configDeviceHealthMonitoringScope": "bootPerformance",
+    "configDeviceHealthMonitoringCustomScope": null
+}

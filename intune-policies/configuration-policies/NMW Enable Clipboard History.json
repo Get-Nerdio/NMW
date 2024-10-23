@@ -1,0 +1,28 @@
+{
+    "description": "Enables the cloud-based clipboard for Windows, which adds the ability for users to use the Windows Key + V for advanced clipboard features.",
+    "name": "NMW Enable Clipboard History",
+    "platforms": "windows10",
+    "settingCount": 1,
+    "technologies": "mdm",
+    "templateReference": {
+        "templateId": "",
+        "templateFamily": "none",
+        "templateDisplayName": null,
+        "templateDisplayVersion": null
+    },
+    "settings": [
+        {
+            "id": "0",
+            "settingInstance": {
+                "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance",
+                "settingDefinitionId": "device_vendor_msft_policy_config_experience_allowclipboardhistory",
+                "settingInstanceTemplateReference": null,
+                "choiceSettingValue": {
+                    "settingValueTemplateReference": null,
+                    "value": "device_vendor_msft_policy_config_experience_allowclipboardhistory_1",
+                    "children": []
+                }
+            }
+        }
+    ]
+}
