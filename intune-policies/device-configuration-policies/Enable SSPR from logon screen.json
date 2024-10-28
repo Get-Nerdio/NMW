@@ -1,0 +1,20 @@
+{
+    "@odata.type": "#microsoft.graph.windows10CustomConfiguration",
+    "deviceManagementApplicabilityRuleOsEdition":  null,
+    "deviceManagementApplicabilityRuleOsVersion":  null,
+    "deviceManagementApplicabilityRuleDeviceMode":  null,
+    "description": "Enables users to use the Self Service Password Reset features from the Windows logon screen. This allows users to keep productive without the need for contacting the IT helpdesk.\n\nMore details:\nhttps://learn.microsoft.com/en-us/azure/active-directory/authentication/howto-sspr-windows",
+    "displayName": "Enable SSPR from logon screen",
+    "omaSettings": [
+        {
+            "@odata.type": "#microsoft.graph.omaSettingInteger",
+            "displayName": "AllowAadPasswordReset",
+            "description": null,
+            "omaUri": "./Device/Vendor/MSFT/Policy/Config/Authentication/AllowAadPasswordReset",
+            "secretReferenceValueId": null,
+            "isEncrypted": false,
+            "value": 1,
+            "isReadOnly": false
+        }
+    ]
+}
