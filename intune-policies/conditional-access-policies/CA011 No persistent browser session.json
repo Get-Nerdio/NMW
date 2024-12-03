@@ -1,0 +1,42 @@
+{
+    "displayName": "CA011: No persistent browser session",
+    "state": "enabled",
+    "conditions": {
+        "@odata.type": "#microsoft.graph.conditionalAccessConditionSet",
+        "applications": {
+            "@odata.type": "#microsoft.graph.conditionalAccessApplications",
+            "includeApplications": ["All"],
+            "excludeApplications": [],
+            "includeUserActions": []
+        },
+        "users": {
+            "@odata.type": "#microsoft.graph.conditionalAccessUsers",
+            "includeUsers": ["None"],
+            "excludeUsers": [],
+            "includeGroups": [],
+            "excludeGroups": [],
+            "includeRoles": [],
+            "excludeRoles": []
+        },
+        "platforms": null,
+        "locations": null,
+        "signInRiskLevels": [],
+        "clientAppTypes": ["All"]
+    },
+    "grantControls": null,
+    "sessionControls": {
+        "applicationEnforcedRestrictions": null,
+        "cloudAppSecurity": null,
+        "signInFrequency": {
+            "@odata.type": "microsoft.graph.signInFrequencySessionControl",
+            "type": "1",
+            "value": 1,
+            "isEnabled": true
+        },
+        "persistentBrowser": {
+            "@odata.type": "microsoft.graph.persistentBrowserSessionControl",
+            "mode": "1",
+            "isEnabled": true
+        }
+    }
+}

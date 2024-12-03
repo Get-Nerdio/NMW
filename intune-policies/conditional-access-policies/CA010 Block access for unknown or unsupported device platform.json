@@ -1,0 +1,38 @@
+{
+    "displayName": "CA010: Block access for unknown or unsupported device platform",
+    "state": "enabled",
+    "conditions": {
+        "@odata.type": "#microsoft.graph.conditionalAccessConditionSet",
+        "applications": {
+            "@odata.type": "#microsoft.graph.conditionalAccessApplications",
+            "includeApplications": ["All"],
+            "excludeApplications": [],
+            "includeUserActions": []
+        },
+        "users": {
+            "@odata.type": "#microsoft.graph.conditionalAccessUsers",
+            "includeUsers": ["None"],
+            "excludeUsers": [],
+            "includeGroups": [],
+            "excludeGroups": [],
+            "includeRoles": [],
+            "excludeRoles": []
+        },
+        "platforms": {
+            "@odata.type": "microsoft.graph.conditionalAccessPlatforms",
+            "includePlatforms": ["all"],
+            "excludePlatforms": ["android", "iOS", "windows", "macOS"]
+        },
+        "locations": null,
+        "signInRiskLevels": [],
+        "clientAppTypes": ["All"]
+    },
+    "grantControls": {
+        "@odata.type": "#microsoft.graph.conditionalAccessGrantControls",
+        "operator": "OR",
+        "builtInControls": ["block"],
+        "customAuthenticationFactors": [],
+        "termsOfUse": []
+    },
+    "sessionControls": null
+}
