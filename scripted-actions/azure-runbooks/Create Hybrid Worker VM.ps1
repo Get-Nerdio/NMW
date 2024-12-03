@@ -201,7 +201,7 @@ try {
                     -Name "HybridWorkerExtension" `
                     -Publisher "Microsoft.Azure.Automation.HybridWorker" `
                     -ExtensionType HybridWorkerForWindows `
-                    -TypeHandlerVersion 0.1 `
+                    -TypeHandlerVersion 1.1 `
                     -Settings $settings
 
   if ($SetExtension.StatusCode -eq 'OK') {
