@@ -30,7 +30,7 @@ Write-host "Current time (UTC-0): $LogTime"
 mkdir "$env:windir\Temp\odt_sa\raw" -Force
 
 # parse through the MS Download Center page to get the most up-to-date download link
-$MSDlSite2 = Invoke-WebRequest "https://www.microsoft.com/en-us/download/confirmation.aspx?id=49117" -UseBasicParsing
+$MSDlSite2 = Invoke-WebRequest "https://www.microsoft.com/en-us/download/details.aspx?id=49117" -UseBasicParsing
 ForEach ($Href in $MSDlSite2.Links.Href)
 {
     if ($Href -match "officedeploymenttool" ){
