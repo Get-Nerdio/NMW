@@ -58,12 +58,12 @@ endpoint vnet.
     "DefaultValue": "10.250.251.0/28"
   },
   "ExistingDNSZonesRG": {
-    "Description": "If you have private DNS zones already configured for use with the new private endpoints, specify their resource group here.",
+    "Description": "If you have private DNS zones already configured for use with the new private endpoints, specify their resource group here. This script will retrieve the existing DNS Zones and link them to the private network. Nerdio Manager needs to be linked to this RG in Settings, but can be unlinked after running this script.",
     "IsRequired": false,
     "DefaultValue": ""
   },
   "ExistingDNSZonesSubId": {
-    "Description": "If your existing private DNS zones are in a separate subscription from NME, specify the subscription id here.",
+    "Description": "If your existing private DNS zones are in a separate subscription from NME, specify the subscription id here. Nerdio needs to be linked to this subscription in Settings, but can be unlinked after running this script.",
     "IsRequired": false,
     "DefaultValue": ""
   },
