@@ -540,8 +540,8 @@ if ($NmeCclKeyVaultName) {
         Write-Output "CCL Key Vault DNS zone group created"
     } else {
         Write-Output "Configuring CCL keyvault DNS zone group"
-        $CclKeyVaultDnzZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.vaultcore.azure.net
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.vaultcore.azure.net -PrivateDnsZoneId $CclKeyVaultDnzZone.ResourceId
+        $CclKeyVaultDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.vaultcore.azure.net
+        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.vaultcore.azure.net -PrivateDnsZoneId $CclKeyVaultDnsZone.ResourceId
         $CclKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclKvPrivateEndpointName" -Name "$CclKvDnsZoneGroupName" -PrivateDnsZoneConfig $config
     }
 }
