@@ -540,8 +540,7 @@ if ($NmeCclKeyVaultName) {
         Write-Output "CCL Key Vault DNS zone group created"
     } else {
         Write-Output "Configuring CCL keyvault DNS zone group"
-        $CclKeyVaultDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.vaultcore.azure.net
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.vaultcore.azure.net -PrivateDnsZoneId $CclKeyVaultDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.vaultcore.azure.net -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
         $CclKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclKvPrivateEndpointName" -Name "$CclKvDnsZoneGroupName" -PrivateDnsZoneConfig $config
     }
 }
@@ -565,7 +564,6 @@ if ($SqlDnsZoneGroup) {
     Write-Output "SQL DNS zone group created"
 } else {
     Write-Output "Configuring sql DNS zone group"
-    $SqlDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.database.windows.net
     $Config = New-AzPrivateDnsZoneConfig -Name privatelink.database.windows.net -PrivateDnsZoneId $SqlDnsZone.ResourceId
     $SqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$SqlPrivateEndpointName" -Name "$SqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
 }
@@ -589,7 +587,6 @@ if ($AutomationDnsZoneGroup) {
     Write-Output "Automation DNS zone group created"
 } else {
     Write-Output "Configuring automation DNS zone group"
-    $AutomationDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.azure-automation.net
     $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azure-automation.net -PrivateDnsZoneId $AutomationDnsZone.ResourceId
     $AutomationDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AutomationPrivateEndpointName" -Name "$K$AutomationDnsZoneGroupName" -PrivateDnsZoneConfig $config
 }
@@ -614,8 +611,7 @@ if ($NmeScriptedActionsAccountName) {
         Write-Output "Scripted actions DNS zone group created"
     } else {
         Write-Output "Configuring scripted actions DNS zone group"
-        $ScriptedActionsDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.azure-automation.net
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azure-automation.net -PrivateDnsZoneId $ScriptedActionsDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azure-automation.net -PrivateDnsZoneId $AutomationDnsZone.ResourceId
         $ScriptedActionsDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsPrivateEndpointName -Name "$ScriptedActionsDnsZoneGroupName" -PrivateDnsZoneConfig $config
     }
 
@@ -639,8 +635,7 @@ if ($NmeScriptedActionsAccountName) {
             Write-Output "Scripted actions storage DNS zone group created"
         } else {
             Write-Output "Configuring scripted actions storage DNS zone group"
-            $ScriptedActionsStorageDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.blob.core.windows.net
-            $Config = New-AzPrivateDnsZoneConfig -Name privatelink.blob.core.windows.net -PrivateDnsZoneId $ScriptedActionsStorageDnsZone.ResourceId
+            $Config = New-AzPrivateDnsZoneConfig -Name privatelink.blob.core.windows.net -PrivateDnsZoneId $StorageDnsZone.ResourceId
             $ScriptedActionsStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$ScriptedActionsStoragePrivateEndpointName" -Name $SaStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
         }
 
@@ -667,8 +662,7 @@ if ($NmeCclStorageAccountName) {
         Write-Output "CCL storage DNS zone group created"
     } else {
         Write-Output "Configuring CCL storage DNS zone group"
-        $CclStorageDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.blob.core.windows.net
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.blob.core.windows.net -PrivateDnsZoneId $CclStorageDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.blob.core.windows.net -PrivateDnsZoneId $StorageDnsZone.ResourceId
         $CclStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclStoragePrivateEndpointName" -Name $CclStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
     }
 
@@ -693,7 +687,6 @@ if ($AppServiceDnsZoneGroup) {
     Write-Output "App Service DNS zone group created"
 } else {
     Write-Output "Configuring app service DNS zone group"
-    $AppServiceDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.azurewebsites.net
     $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azurewebsites.net -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
     $AppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AppServicePrivateEndpointName" -Name $AppServicePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
 }
@@ -728,7 +721,6 @@ if ($NmeCclWebAppName) {
         Write-Output "CCL App Service DNS zone group created"
     } else {
         Write-Output "Configuring CCL app service DNS zone group"
-        $AppServiceDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.azurewebsites.net
         $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azurewebsites.net -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
         $CclAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclAppServicePrivateEndpointName" -Name $AppServicePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
     }
