@@ -62,6 +62,11 @@ endpoint vnet.
     "IsRequired": false,
     "DefaultValue": ""
   },
+  "ExistingDNSZonesSubId": {
+    "Description": "If your existing private DNS zones are in a separate subscription from NME, specify the subscription id here.",
+    "IsRequired": false,
+    "DefaultValue": ""
+  },
   "MakeSaStoragePrivate": {
     "Description": "Make the scripted actions storage account private. Will create a hybrid worker VM, if one does not already exist. This will result in increased cost for Nerdio Manager Azure resources",
     "IsRequired": false,
@@ -223,6 +228,10 @@ $HybridWorkerGroupName = "$Prefix-hybridworker-group"
 # set resource group for dns zones
 if ($ExistingDNSZonesRG) {
     $DnsRg = $ExistingDNSZonesRG
+    if ($existingDNSZonesSubId) {
+        Write-Output "Setting context to subscription $existingDNSZonesSubId to retrieve existing DNS zones"
+        $context = Set-AzContext -Subscription $existingDNSZonesSubId
+    }
     try {
     # get DNS zones
         $KeyVaultDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.vaultcore.azure.net -ErrorAction Stop
@@ -238,11 +247,17 @@ if ($ExistingDNSZonesRG) {
         if ($MakeAppServicePrivate -eq 'True') {
             $AppServiceDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.azurewebsites.net -ErrorAction Stop
         }
+        Write-Output "Found existing DNS zones in resource group $DnsRg"
     }
     catch {
         Write-Output "Unable to find one or more of the DNS zones in resource group $DnsRg"
         Throw $_
     }
+    if ($existingDNSZonesSubId) {
+        Write-Output "Setting context to subscription $NmeSubscriptionId"
+        $context = Set-AzContext -Subscription $NmeSubscriptionId
+    }
+
 }
 else {
     $DnsRg = $NmeRg
@@ -301,6 +316,10 @@ if ($VNet) {
 
 #region create DNS zones and links
 # Create and link private dns zone for key vault
+if ($existingDNSZonesSubId) {
+    Write-Output "Setting context to subscription $existingDNSZonesSubId to create network links in DNS zones"
+    $context = Set-AzContext -Subscription $existingDNSZonesSubId
+}
 if ($KeyVaultDnsZone) { 
     Write-Output "Private DNS Zone for Key Vault created"
     #check for linked zone
@@ -466,7 +485,13 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
         $MonitorAgentZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName privatelink.agentsvc.azure-automation.net -Name $MonitorAgentZoneLinkName -VirtualNetworkId $vnet.Id
     }
 }
+if ($existingDNSZonesSubId) {
+    Write-Output "Setting context to subscription $NmeSubscriptionId"
+    $context = Set-AzContext -Subscription $NmeSubscriptionId
+}
 #endregion
+
+
 
 #region create private endpoints
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue
