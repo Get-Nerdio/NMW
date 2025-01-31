@@ -286,7 +286,7 @@ Function Check-LastRunResults {
             if ($JobHash.hash -eq $ThisScriptHash.hash){
                 Write-Output "Output of previous script run:"
                 Get-AzAutomationJobOutput -Id $details.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName | select summary -ExpandProperty summary
-                Write-Output "App Service restarted after successfully running this script."
+                Write-Output "App Service restarted after successfully running this script. If you need to re-run the script, please wait $($minutesago - ((get-date -AsUTC) - $app.LastModifiedTimeUtc).minutes) minutes and try again."
                 Exit
             }
         }
