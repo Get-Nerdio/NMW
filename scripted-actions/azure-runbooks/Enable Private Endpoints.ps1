@@ -243,7 +243,7 @@ if ($ExistingDNSZonesRG) {
         $SqlDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.database.windows.net -ErrorAction Stop
         $AutomationDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.azure-automation.net -ErrorAction Stop
         $StorageDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.blob.core.windows.net -ErrorAction Stop
-        if ($MakeAzureMonitorPrivate) {
+        if ($MakeAzureMonitorPrivate -eq 'True') {
             $MonitorDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.monitor.azure.com -ErrorAction Stop
             $OpsDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.oms.opinsights.azure.com -ErrorAction Stop
             $OdsDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.ods.opinsights.azure.com -ErrorAction Stop
