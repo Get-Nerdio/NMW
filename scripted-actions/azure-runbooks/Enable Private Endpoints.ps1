@@ -763,7 +763,7 @@ $AppService = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
 # check if app service private endpoint is created
 $AppServicePrivateEndpoint = Get-AzPrivateEndpoint -Name "$AppServicePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
 if ($AppServicePrivateEndpoint) {
-    Write-Output Found "App Service private endpoint"
+    Write-Output "Found App Service private endpoint"
 } 
 else {
     Write-Output "Configuring app service service connection and private endpoint"
