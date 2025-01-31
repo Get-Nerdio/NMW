@@ -287,7 +287,7 @@ Function Check-LastRunResults {
     Param()
     $MinutesAgo = 10
     $app = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
-    if ($app.LastModifiedTimeUtc -gt (get-date -AsUTC).AddMinutes(-$MinutesAgo)) {
+    if ($app.LastModifiedTimeUtc -gt (get-date).AddMinutes(-$MinutesAgo).ToUniversalTime()) {
         Write-Output "Web job has been restarted recently. Checking for previous script run"
         $ThisJob = Get-AzAutomationJob -id $PSPrivateMetadata['JobId'].Guid -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName 
         Invoke-WebRequest -UseBasicParsing -Uri $ThisJob.JobParameters.scriptUri -OutFile .\ThisScript.ps1
