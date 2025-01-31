@@ -278,9 +278,8 @@ if ($ExistingDNSZonesRG) {
             $OdsDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.ods.opinsights.azure.com -ErrorAction Stop
             $MonitorAgentDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.agentsvc.azure-automation.net -ErrorAction Stop
         }
-        if ($MakeAppServicePrivate -eq 'True') {
-            $AppServiceDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.azurewebsites.net -ErrorAction Stop
-        }
+        $AppServiceDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.azurewebsites.net -ErrorAction Stop
+        
         Write-Output "Found existing DNS zones in resource group $DnsRg"
     }
     catch {
