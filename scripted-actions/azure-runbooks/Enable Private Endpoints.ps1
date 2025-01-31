@@ -168,18 +168,6 @@ Set-NmeVars -keyvaultName $KeyVaultName
 $Prefix = $NmeTagPrefix
 
 # define variables for all azure resources this script will create
-$KeyVaultZoneLinkName = "$Prefix-vault-privatelink"
-$SqlZoneLinkName = "$Prefix-database-privatelink"
-$BlobZoneLinkName = "$prefix-blob-privatelink"
-$AutomationZoneLinkName = "$prefix-automation-privatelink"
-$AmplScopeName = "$Prefix-app-amplscope"
-$AmplRoleName = "$Prefix-app-amplrole"
-$MonitorZoneLinkName = "$Prefix-monitor-privatelink"
-$OpsZoneLinkName = "$Prefix-oms-privatelink"
-$OdsZoneLinkName = "$Prefix-ods-privatelink"
-$MonitorAgentZoneLinkName = "$Prefix-monitoragent-privatelink"
-$AppServiceZoneLinkName = "$Prefix-app-appservice-privatelink"
-$FileStoragePrivateDnsZoneLinkName = "$Prefix-filestorage-privatelink"
 
 # define variables for private endpoint names
 $KvPrivateEndpointName = "$Prefix-app-kv-privateendpoint"
@@ -230,6 +218,20 @@ $QueryAccessMode = 'Open'
 $HybridWorkerVMName = "$Prefix-hybridworker-vm"
 $HybridWorkerVMSize = 'Standard_D2s_v3'
 $HybridWorkerGroupName = "$Prefix-hybridworker-group"
+
+# define variables for private DNS zone links
+$KeyVaultZoneLinkName = "$Prefix-vault-privatelink"
+$SqlZoneLinkName = "$Prefix-database-privatelink"
+$BlobZoneLinkName = "$prefix-blob-privatelink"
+$AutomationZoneLinkName = "$prefix-automation-privatelink"
+$AmplScopeName = "$Prefix-app-amplscope"
+$AmplRoleName = "$Prefix-app-amplrole"
+$MonitorZoneLinkName = "$Prefix-monitor-privatelink"
+$OpsZoneLinkName = "$Prefix-oms-privatelink"
+$OdsZoneLinkName = "$Prefix-ods-privatelink"
+$MonitorAgentZoneLinkName = "$Prefix-monitoragent-privatelink"
+$AppServiceZoneLinkName = "$Prefix-app-appservice-privatelink"
+$FileStoragePrivateDnsZoneLinkName = "$Prefix-filestorage-privatelink"
 
 # Check if the web app has been restarted recently and if the script has been run before
 Function Check-LastRunResults {
