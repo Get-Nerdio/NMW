@@ -252,8 +252,11 @@ Function Check-LastRunResults {
             $JobHash = Get-FileHash .\JobScript.ps1 
             if ($JobHash.hash -eq $ThisScriptHash.hash){
                 Write-Output "Output of previous script run:"
-                Get-AzAutomationJobOutput -Id $details.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName | select summary -ExpandProperty summary
+                $JobOutput = Get-AzAutomationJobOutput -Id $details.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
+                $JobOutput | select summary -ExpandProperty summary
+                
                 Write-Output "App Service restarted after successfully running this script. If you need to re-run the script, please wait $($minutesago - ((get-date).AddMinutes(-$MinutesAgo).ToUniversalTime() - $app.LastModifiedTimeUtc).minutes) minutes and try again."
+                $joboutput| Where-Object type -eq warning | select summary -ExpandProperty summary | write-warning
                 Exit
             }
         }
@@ -362,7 +365,7 @@ if ($existingDNSZonesSubId) {
     $context = Set-AzContext -Subscription $existingDNSZonesSubId
 }
 if ($KeyVaultDnsZone) { 
-    Write-Output "Private DNS Zone for Key Vault created"
+    Write-Output "Found Private DNS Zone for Key Vault"
     #check for linked zone
     $KeyVaultZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.vaultcore.azure.net -ErrorAction SilentlyContinue
     if ($KeyVaultZoneLink.VirtualNetworkId -contains $vnet.id) {
@@ -556,7 +559,7 @@ $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName
 # check if keyvault private endpoint created
 $KvPrivateEndpoint = Get-AzPrivateEndpoint -Name "$KvPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
 if ($KvPrivateEndpoint) {
-    Write-Output "Key Vault private endpoint created"
+    Write-Output "Found Key Vault private endpoint"
     
 } 
 else {
@@ -568,7 +571,7 @@ else {
 # check if keyvault dns zone group created
 $KvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$KvPrivateEndpointName" -ErrorAction SilentlyContinue
 if ($KvDnsZoneGroup) {
-    Write-Output "Key Vault DNS zone group created"
+    Write-Output "Found Key Vault DNS zone group"
 } else {
     Write-Output "Configuring keyvault DNS zone group"
     $Config = New-AzPrivateDnsZoneConfig -Name privatelink.vaultcore.azure.net -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
@@ -582,7 +585,7 @@ if ($NmeCclKeyVaultName) {
     # create if ccl key vault private endpoint created
     $CclKvPrivateEndpoint = Get-AzPrivateEndpoint -Name "$CclKvPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
     if ($CclKvPrivateEndpoint) {
-        Write-Output "CCL Key Vault private endpoint created"
+        Write-Output "Found CCL Key Vault private endpoint"
     } 
     else {
         Write-Output "Configuring CCL keyvault service connection and private endpoint"
@@ -592,7 +595,7 @@ if ($NmeCclKeyVaultName) {
     # check if ccl keyvault dns zone group created
     $CclKvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclKvPrivateEndpointName" -ErrorAction SilentlyContinue
     if ($CclKvDnsZoneGroup) {
-        Write-Output "CCL Key Vault DNS zone group created"
+        Write-Output "Found CCL Key Vault DNS zone group"
     } else {
         Write-Output "Configuring CCL keyvault DNS zone group"
         $Config = New-AzPrivateDnsZoneConfig -Name privatelink.vaultcore.azure.net -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
@@ -605,7 +608,7 @@ $SqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeSqlServer
 #check if sql private endpoint created
 $SqlPrivateEndpoint = Get-AzPrivateEndpoint -Name "$SqlPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
 if ($SqlPrivateEndpoint) {
-    Write-Output "SQL private endpoint created"
+    Write-Output "Found SQL private endpoint"
 } 
 else {
     Write-Output "Configuring sql service connection and private endpoint"
@@ -616,7 +619,7 @@ else {
 # check if sql dns zone group created
 $SqlDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$SqlPrivateEndpointName" -ErrorAction SilentlyContinue
 if ($SqlDnsZoneGroup) {
-    Write-Output "SQL DNS zone group created"
+    Write-Output "Found SQL DNS zone group"
 } else {
     Write-Output "Configuring sql DNS zone group"
     $Config = New-AzPrivateDnsZoneConfig -Name privatelink.database.windows.net -PrivateDnsZoneId $SqlDnsZone.ResourceId
@@ -627,7 +630,7 @@ if ($SqlDnsZoneGroup) {
 # check if automation account private endpoint is created
 $AutomationPrivateEndpoint = Get-AzPrivateEndpoint -Name "$AutomationPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
 if ($AutomationPrivateEndpoint) {
-    Write-Output "Automation private endpoint created"
+    Write-Output "Found Automation private endpoint"
 } 
 else {
     Write-Output "Configuring automation service connection and private endpoint"
@@ -639,7 +642,7 @@ else {
 # check if automation account dns zone group created
 $AutomationDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AutomationPrivateEndpointName" -ErrorAction SilentlyContinue
 if ($AutomationDnsZoneGroup) {
-    Write-Output "Automation DNS zone group created"
+    Write-Output "Found Automation DNS zone group"
 } else {
     Write-Output "Configuring automation DNS zone group"
     $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azure-automation.net -PrivateDnsZoneId $AutomationDnsZone.ResourceId
@@ -652,7 +655,7 @@ if ($NmeScriptedActionsAccountName) {
     # check if scripted action automation account private endpoint is created
     $ScriptedActionsPrivateEndpoint = Get-AzPrivateEndpoint -Name $ScriptedActionsPrivateEndpointName -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
     if ($ScriptedActionsPrivateEndpoint) {
-        Write-Output "Scripted actions private endpoint created"
+        Write-Output "Found scripted actions private endpoint"
     } 
     else {
         Write-Output "Configuring scripted actions service connection and private endpoint"
@@ -663,7 +666,7 @@ if ($NmeScriptedActionsAccountName) {
     # check if scripted action automation account dns zone group created
     $ScriptedActionsDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsPrivateEndpointName -ErrorAction SilentlyContinue
     if ($ScriptedActionsDnsZoneGroup) {
-        Write-Output "Scripted actions DNS zone group created"
+        Write-Output "Found scripted actions DNS zone group"
     } else {
         Write-Output "Configuring scripted actions DNS zone group"
         $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azure-automation.net -PrivateDnsZoneId $AutomationDnsZone.ResourceId
@@ -676,7 +679,7 @@ if ($NmeScriptedActionsAccountName) {
         # check if scripted action storage account private endpoint is created
         $ScriptedActionsStoragePrivateEndpoint = Get-AzPrivateEndpoint -Name "$ScriptedActionsStoragePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
         if ($ScriptedActionsStoragePrivateEndpoint) {
-            Write-Output "Scripted actions storage private endpoint created"
+            Write-Output "Found scripted actions storage private endpoint"
         } 
         else {
             Write-Output "Configuring scripted actions storage service connection and private endpoint"
@@ -687,7 +690,7 @@ if ($NmeScriptedActionsAccountName) {
         # check if scripted action storage account dns zone group created
         $ScriptedActionsStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$ScriptedActionsStoragePrivateEndpointName" -ErrorAction SilentlyContinue
         if ($ScriptedActionsStorageDnsZoneGroup) {
-            Write-Output "Scripted actions storage DNS zone group created"
+            Write-Output "Found scripted actions storage DNS zone group"
         } else {
             Write-Output "Configuring scripted actions storage DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name privatelink.blob.core.windows.net -PrivateDnsZoneId $StorageDnsZone.ResourceId
@@ -703,7 +706,7 @@ if ($NmeCclStorageAccountName) {
     # check if ccl storage account private endpoint is created
     $CclStoragePrivateEndpoint = Get-AzPrivateEndpoint -Name "$CclStoragePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
     if ($CclStoragePrivateEndpoint) {
-        Write-Output "CCL storage private endpoint created"
+        Write-Output "Found CCL storage private endpoint"
     } 
     else {
         Write-Output "Configuring CCL storage service connection and private endpoint"
@@ -714,7 +717,7 @@ if ($NmeCclStorageAccountName) {
     # check if ccl storage account dns zone group created
     $CclStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclStoragePrivateEndpointName" -ErrorAction SilentlyContinue
     if ($CclStorageDnsZoneGroup) {
-        Write-Output "CCL storage DNS zone group created"
+        Write-Output "Found CCL storage DNS zone group"
     } else {
         Write-Output "Configuring CCL storage DNS zone group"
         $Config = New-AzPrivateDnsZoneConfig -Name privatelink.blob.core.windows.net -PrivateDnsZoneId $StorageDnsZone.ResourceId
@@ -729,7 +732,7 @@ if ($NmeDpsStorageAccountName) {
     # check if dps storage account private endpoint is created
     $DpsStoragePrivateEndpoint = Get-AzPrivateEndpoint -Name "$DpsStoragePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
     if ($DpsStoragePrivateEndpoint) {
-        Write-Output "DPS storage private endpoint created"
+        Write-Output "Found DPS storage private endpoint"
     } 
     else {
         Write-Output "Configuring DPS storage service connection and private endpoint"
@@ -740,7 +743,7 @@ if ($NmeDpsStorageAccountName) {
     # check if dps storage account dns zone group created
     $DpsStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$DpsStoragePrivateEndpointName" -ErrorAction SilentlyContinue
     if ($DpsStorageDnsZoneGroup) {
-        Write-Output "DPS storage DNS zone group created"
+        Write-Output "Found DPS storage DNS zone group"
     } else {
         Write-Output "Configuring DPS storage DNS zone group"
         $Config = New-AzPrivateDnsZoneConfig -Name privatelink.blob.core.windows.net -PrivateDnsZoneId $StorageDnsZone.ResourceId
@@ -757,7 +760,7 @@ $AppService = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
 # check if app service private endpoint is created
 $AppServicePrivateEndpoint = Get-AzPrivateEndpoint -Name "$AppServicePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
 if ($AppServicePrivateEndpoint) {
-    Write-Output "App Service private endpoint created"
+    Write-Output Found "App Service private endpoint"
 } 
 else {
     Write-Output "Configuring app service service connection and private endpoint"
@@ -769,7 +772,7 @@ else {
 # check if app service dns zone group created
 $AppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AppServicePrivateEndpointName" -ErrorAction SilentlyContinue
 if ($AppServiceDnsZoneGroup) {
-    Write-Output "App Service DNS zone group created"
+    Write-Output "Found App Service DNS zone group"
 } else {
     Write-Output "Configuring app service DNS zone group"
     $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azurewebsites.net -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
@@ -791,7 +794,7 @@ if ($NmeCclWebAppName) {
     # check if ccl app service private endpoint is created
     $CclAppServicePrivateEndpoint = Get-AzPrivateEndpoint -Name "$CclAppServicePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
     if ($CclAppServicePrivateEndpoint) {
-        Write-Output "CCL App Service private endpoint created"
+        Write-Output "Found CCL App Service private endpoint"
     } 
     else {
         Write-Output "Configuring CCL app service service connection and private endpoint"
@@ -803,7 +806,7 @@ if ($NmeCclWebAppName) {
     # check if ccl app service dns zone group created
     $CclAppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclAppServicePrivateEndpointName" -ErrorAction SilentlyContinue
     if ($CclAppServiceDnsZoneGroup) {
-        Write-Output "CCL App Service DNS zone group created"
+        Write-Output "Found CCL App Service DNS zone group"
     } else {
         Write-Output "Configuring CCL app service DNS zone group"
         $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azurewebsites.net -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
@@ -829,7 +832,7 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
     # Check if scope exists
     $AmplScope = Get-AzResource -ResourceId "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Insights/privateLinkScopes/$AmplScopeName" -ErrorAction SilentlyContinue
     if ($AmplScope) {
-        Write-Output "Azure Monitor private link scope created"
+        Write-Output "Found Azure Monitor private link scope"
     } 
     else {
         Write-Output "Creating Azure Monitor private link scope"
@@ -841,7 +844,7 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
     $NmeLAWName = $NmeLogAnalyticsWorkspaceId.Split("/")[-1]
     $LAWScope = Get-AzInsightsPrivateLinkScopedResource -ResourceGroupName $NmeRg -ScopeName $AmplScopeName -Name $NmeLAWName -ErrorAction SilentlyContinue
     if ($LAWScope) {
-        Write-Output "Azure Monitor LAW scope created"
+        Write-Output "Found Azure Monitor LAW scope"
     } 
     else {
         Write-Output "Creating Azure Monitor LAW scope"
@@ -851,7 +854,7 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
     # Check if App Insights Scope exists
     $AppInsightsScope = Get-AzInsightsPrivateLinkScopedResource -ResourceGroupName $NmeRg -ScopeName $AmplScopeName -Name "$NmeAppInsightsName" -ErrorAction SilentlyContinue
     if ($AppInsightsScope) {
-        Write-Output "Azure Monitor App Insights scope created"
+        Write-Output "Found Azure Monitor App Insights scope"
     } 
     else {
         Write-Output "Creating Azure Monitor App Insights scope"
@@ -862,7 +865,7 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
     # check if app insights law scope exists
     $AppInsightsLAWScope = Get-AzInsightsPrivateLinkScopedResource -ResourceGroupName $NmeRg -ScopeName $AmplScopeName -Name $NmeAppInsightsLAWName -ErrorAction SilentlyContinue
     if ($AppInsightsLAWScope) {
-        Write-Output "Azure Monitor App Insights LAW scope created"
+        Write-Output "Found Azure Monitor App Insights LAW scope"
     } 
     else {
         Write-Output "Creating Azure Monitor App Insights LAW scope"
@@ -875,7 +878,7 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
         # Check if CCL Insights Scope exists
         $CCLInsightsScope = Get-AzInsightsPrivateLinkScopedResource -ResourceGroupName $NmeRg -ScopeName $AmplScopeName -Name $NmeCclAppInsightsName -ErrorAction SilentlyContinue
         if ($CCLInsightsScope) {
-            Write-Output "Azure Monitor CCL Insights scope created"
+            Write-Output "Found Azure Monitor CCL Insights scope"
         } 
         else {
             Write-Output "Creating Azure Monitor CCL Insights scope"
@@ -888,7 +891,7 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
         # check if CCL LAW scope exists
         $CCLLAWScope = Get-AzInsightsPrivateLinkScopedResource -ResourceGroupName $NmeRg -ScopeName $AmplScopeName -Name $NmeCclLawName -ErrorAction SilentlyContinue
         if ($CCLLAWScope) {
-            Write-Output "Azure Monitor CCL LAW scope created"
+            Write-Output "Found Azure Monitor CCL LAW scope"
         } 
         else {
             Write-Output "Creating Azure Monitor CCL LAW scope"
@@ -900,7 +903,7 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
     # check if monitor private endpoint is created
     $MonitorPrivateEndpoint = Get-AzPrivateEndpoint -Name "$MonitorPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
     if ($MonitorPrivateEndpoint) {
-        Write-Output "Monitor private endpoint created"
+        Write-Output "Found Monitor private endpoint"
     } 
     else {
         Write-Output "Configuring monitor service connection and private endpoint"
@@ -911,7 +914,7 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
     # check if monitor dns zone group is created
     $MonitorDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$MonitorPrivateEndpointName" -ErrorAction SilentlyContinue
     if ($MonitorDnsZoneGroup) {
-        Write-Output "Monitor DNS zone group created"
+        Write-Output "Found Monitor DNS zone group"
     } else {
         Write-Output "Configuring monitor DNS zone group"
         $Configs = @()
@@ -941,7 +944,7 @@ if ($MakeSaStoragePrivate -eq 'True') {
 
 if ($privateendpointsubnet.ServiceEndpoints.service){
     if (!(Compare-Object $privateendpointsubnet.ServiceEndpoints.service -DifferenceObject $serviceEndpoints -ErrorAction SilentlyContinue)) {
-        Write-Output "Service endpoints created"
+        Write-Output "Found service endpoints"
     } else {
         Write-Output "Adding service endpoints"
         $Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
@@ -954,7 +957,7 @@ else {
 # enable network policy
 $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
 if ($PrivateEndpointSubnet.PrivateEndpointNetworkPolicies -eq 'Enabled') {
-    Write-Output "Network policies enabled"
+    Write-Output "Network policies already enabled"
 } else {
     Write-Output "Enabling network policies"
     $Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
@@ -967,7 +970,7 @@ $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName
 # Check if subnet delegation created
 $AppSubnetDelegation = Get-AzDelegation -Subnet $AppServiceSubnet -ErrorAction SilentlyContinue
 if ($AppSubnetDelegation.ServiceName -eq 'Microsoft.Web/serverFarms') {
-    Write-Output "App service subnet delegation created"
+    Write-Output "App service subnet delegation already created"
 } 
 else {
     Write-Output "Delegate app service subnet to webfarms"
@@ -978,7 +981,7 @@ else {
 $webApp = Get-AzResource -Id $NmeWebApp.id 
 # check if endpoint integration enabled
 if ($webApp.Properties.virtualNetworkSubnetId -eq $AppServiceSubnet.id) {
-    Write-Output "App service VNet integration enabled"
+    Write-Output "App service VNet integration already enabled"
 } 
 else {
     Write-Output "Enabling app service VNet integration"
@@ -992,7 +995,7 @@ if ($NmeCclWebAppName) {
     $CclWebApp = Get-AzResource -Id $NmeCclWebApp.id 
     # check if endpoint integration enabled
     if ($CclWebApp.Properties.virtualNetworkSubnetId -eq $AppServiceSubnet.id) {
-        Write-Output "CCL App service VNet integration enabled"
+        Write-Output "CCL App service VNet integration already enabled"
     } 
     else {
         Write-Output "Enabling CCL app service VNet integration"
@@ -1006,7 +1009,7 @@ $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
 
 if ($AppServiceSubnet.PrivateEndpointNetworkPolicies -eq 'Enabled') {
-    Write-Output "Network policies enabled"
+    Write-Output "Network policies already enabled"
 } else {
     Write-Output "Enabling network policies"
     #$Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -AddressPrefix $AppServiceSubnet.addressprefix -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
@@ -1079,7 +1082,7 @@ function New-NmeHybridWorkerVm {
         # Check if VM already exists
         $vm = Get-AzVM -Name $VMName -ResourceGroupName $ResourceGroupName -ErrorAction SilentlyContinue
         if ($vm) {
-            Write-Output "Hybrid Worker VM $VMName created"
+            Write-Output "Hybrid Worker VM already $VMName created"
             $VM = $vm
         }
         else {
@@ -1110,7 +1113,7 @@ function New-NmeHybridWorkerVm {
             Throw $_
         }
         if ($HybridWorkerGroup) {
-            Write-Output "Hybrid worker group $HybridWorkerGroupName created"
+            Write-Output "Hybrid worker group already $HybridWorkerGroupName created"
         }
         else {
             Write-Output "Creating hybrid worker group"
@@ -1121,7 +1124,7 @@ function New-NmeHybridWorkerVm {
         $HybridWorker = Get-AzAutomationHybridRunbookWorker -ResourceGroupName $ResourceGroupName -AutomationAccountName $AA.AutomationAccountName -HybridRunbookWorkerGroupName $HybridWorkerGroupName -ErrorAction silentlycontinue
 
         if ($HybridWorker) {
-            Write-Output "Hybrid worker created"
+            Write-Output "Hybrid worker already created"
         }
         else {
             Write-Output "Creating hybrid worker"
@@ -1327,7 +1330,7 @@ Write-Output "Check network deny rules for key vault and sql"
 $NmeKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -VaultName $KeyVaultName
 # check if deny rule for key vault exists
 if (($NmeKeyVault.NetworkAcls.DefaultAction -eq 'Deny') -and ($NmeKeyVault.PublicNetworkAccess -eq 'Disabled')) {
-    Write-Output "Key vault public access disabled"
+    Write-Output "Key vault public access already disabled"
 }
 else {
     Write-Output "Disabling key vault public access"
@@ -1340,7 +1343,7 @@ if ($NmeCclKeyVaultName) {
     $NmeCclKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -VaultName $NmeCclKeyVaultName
     # check if deny rule for key vault exists
     if (($NmeCclKeyVault.NetworkAcls.DefaultAction -eq 'Deny') -and ($NmeCclKeyVault.PublicNetworkAccess -eq 'Disabled')) {
-        Write-Output "CCL Key vault public access disabled"
+        Write-Output "CCL Key vault public access already disabled"
     }
     else {
         Write-Output "Disabling CCL key vault public access"
@@ -1355,7 +1358,7 @@ if ($NmeCclKeyVaultName) {
 $SqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeSqlServerName
 $ServerRules = Get-AzSqlServerVirtualNetworkRule -ServerName $NmeSqlServerName -ResourceGroupName $NmeRg 
 if (($ServerRules.VirtualNetworkSubnetId -contains $PrivateEndpointSubnet.id) -and ($SqlServer.PublicNetworkAccess -eq 'Disabled')) {
-    Write-Output "SQL public access disabled"
+    Write-Output "SQL public access already disabled"
 }
 else {
     Write-Output "Disabling SQL public access"
@@ -1372,7 +1375,7 @@ if ($MakeSaStoragePrivate -eq 'True') {
     # check if deny rule for storage exists
     $StorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg | Where-Object StorageAccountName -Match 'cssa'
     if ($StorageAccount.PublicNetworkAccess -eq 'Disabled') {
-        Write-Output "Storage public access is disabled"
+        Write-Output "Storage public access is already disabled"
     }
     else {
         Write-Output "Disabling storage public access"
@@ -1384,7 +1387,7 @@ if ($MakeSaStoragePrivate -eq 'True') {
 if ($NmeCclStorageAccountName) {
     $NmeCclStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeCclStorageAccountName
     if ($NmeCclStorageAccount.PublicNetworkAccess -eq 'Disabled') {
-        Write-Output "CCL Storage public access is disabled"
+        Write-Output "CCL Storage public access is already disabled"
     }
     else {
         Write-Output "Disabling CCL storage public access"
@@ -1396,7 +1399,7 @@ if ($NmeCclStorageAccountName) {
 if ($NmeDpsStorageAccountName) {
     $NmeDpsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeDpsStorageAccountName
     if ($NmeDpsStorageAccount.PublicNetworkAccess -eq 'Disabled') {
-        Write-Output "DPS Storage public access is disabled"
+        Write-Output "DPS Storage public access is already disabled"
     }
     else {
         Write-Output "Disabling DPS storage public access"
