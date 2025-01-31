@@ -119,6 +119,8 @@ function Set-NmeVars {
         $script:NmeCclKeyVaultName = Get-AzKeyVault -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'} | Select-Object -ExpandProperty VaultName
         write-verbose "Getting CCL Storage Account"
         $script:NmeCclStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'FILE_STORAGE_ACCOUNT'} | Select-Object -ExpandProperty StorageAccountName
+        Write-Verbose "Getting DPS Storage Account"
+        $script:NmeDpsStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.StorageAccountName -match "^dps" } | Select-Object -ExpandProperty StorageAccountName
     }
     Write-Verbose "Getting Nerdio Manager web app"
     $webapps = Get-AzWebApp -ResourceGroupName $NmeRg 
@@ -184,6 +186,7 @@ $AppServicePrivateEndpointName = "$Prefix-app-appservice-privateendpoint"
 $CclKvPrivateEndpointName = "$Prefix-ccl-kv-privateendpoint"
 $CclAppServicePrivateEndpointName = "$Prefix-ccl-appservice-privateendpoint"
 $CclStoragePrivateEndpointName = "$Prefix-ccl-storage-privateendpoint"
+$DpsStoragePrivateEndpointName = "$Prefix-dps-storage-privateendpoint"
 
 # define variables for DNS zone group names 
 $KvDnsZoneGroupName = "$Prefix-app-kv-dnszonegroup"
@@ -195,6 +198,7 @@ $MonitorPrivateDnsZoneGroupName = "$Prefix-app-monitor-dnszonegroup"
 $AppServicePrivateDnsZoneGroupName = "$Prefix-app-appservice-dnszonegroup"
 $CclKvDnsZoneGroupName = "$Prefix-ccl-kv-dnszonegroup"
 $CclStoragePrivateDnsZoneGroupName = "$Prefix-ccl-storage-dnszonegroup"
+$DpsStoragePrivateDnsZoneGroupName = "$Prefix-dps-storage-dnszonegroup"
 
 # define variables for private link service connection names
 $KvServiceConnectionName = "$Prefix-app-kv-serviceconnection"
@@ -207,6 +211,7 @@ $AppServiceServiceConnectionName = "$Prefix-app-appservice-serviceconnection"
 $CclKvServiceConnectionName = "$Prefix-ccl-kv-serviceconnection"
 $CclAppServiceServiceConnectionName = "$Prefix-ccl-appservice-serviceconnection"
 $CclStorageServiceConnectionName = "$Prefix-ccl-storage-serviceconnection"
+$DpsStorageServiceConnectionName = "$Prefix-dps-storage-serviceconnection"
 
 # web app subnet delegation
 $WebAppSubnetDelegationName = "$Prefix-app-webapp-subnetdelegation"
@@ -648,6 +653,36 @@ if ($NmeCclStorageAccountName) {
     }
 
 }
+
+if ($NmeDpsStorageAccountName) {
+    # Get dps storage account
+    $NmeDpsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeDpsStorageAccountName
+    # check if dps storage account private endpoint is created
+    $DpsStoragePrivateEndpoint = Get-AzPrivateEndpoint -Name "$DpsStoragePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+    if ($DpsStoragePrivateEndpoint) {
+        Write-Output "DPS storage private endpoint created"
+    } 
+    else {
+        Write-Output "Configuring DPS storage service connection and private endpoint"
+        $DpsStorageAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Storage/storageAccounts/$($NmeDpsStorageAccount.StorageAccountName)"
+        $DpsStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $DpsStorageServiceConnectionName -PrivateLinkServiceId $DpsStorageAccountResourceId -GroupId blob 
+        $DpsStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$DpsStoragePrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $DpsStorageServiceConnection 
+    }
+    # check if dps storage account dns zone group created
+    $DpsStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$DpsStoragePrivateEndpointName" -ErrorAction SilentlyContinue
+    if ($DpsStorageDnsZoneGroup) {
+        Write-Output "DPS storage DNS zone group created"
+    } else {
+        Write-Output "Configuring DPS storage DNS zone group"
+        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.blob.core.windows.net -PrivateDnsZoneId $StorageDnsZone.ResourceId
+        $DpsStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$DpsStoragePrivateEndpointName" -Name $DpsStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
+
+    }
+}
+else {
+    Write-Warning "Unable to find DPS storage account. Skipping private endpoint creation. You will need to manually create the private endpoint for the storage account."
+}
+
 
 $AppService = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
 # check if app service private endpoint is created
@@ -1270,7 +1305,7 @@ if ($MakeSaStoragePrivate -eq 'True') {
     # check if deny rule for storage exists
     $StorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg | Where-Object StorageAccountName -Match 'cssa'
     if ($StorageAccount.PublicNetworkAccess -eq 'Disabled') {
-        Write-Output "Storage public access disabled"
+        Write-Output "Storage public access is disabled"
     }
     else {
         Write-Output "Disabling storage public access"
@@ -1282,11 +1317,23 @@ if ($MakeSaStoragePrivate -eq 'True') {
 if ($NmeCclStorageAccountName) {
     $NmeCclStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeCclStorageAccountName
     if ($NmeCclStorageAccount.PublicNetworkAccess -eq 'Disabled') {
-        Write-Output "CCL Storage public access disabled"
+        Write-Output "CCL Storage public access is disabled"
     }
     else {
         Write-Output "Disabling CCL storage public access"
         Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $NmeCclStorageAccount.StorageAccountName | Out-Null
+    }
+}
+
+# make dps storage account private
+if ($NmeDpsStorageAccountName) {
+    $NmeDpsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeDpsStorageAccountName
+    if ($NmeDpsStorageAccount.PublicNetworkAccess -eq 'Disabled') {
+        Write-Output "DPS Storage public access is disabled"
+    }
+    else {
+        Write-Output "Disabling DPS storage public access"
+        Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $NmeDpsStorageAccount.StorageAccountName | Out-Null
     }
 }
 
