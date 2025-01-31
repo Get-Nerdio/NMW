@@ -28,7 +28,7 @@ endpoint vnet.
 <# Variables:
 {
   "PrivateLinkVnetName": {
-    "Description": "VNet for private endpoints. If the vnet does not exist, it will be created. If specifying an exising vnet, the vnet or its resource group must be linked to Nerdio Manager in Settings->Azure environment",
+    "Description": "VNet for private endpoints. If the vnet does not exist, it will be created. If specifying an existing vnet, the vnet or its resource group must be linked to Nerdio Manager in Settings->Azure environment",
     "IsRequired": true,
     "DefaultValue": "nme-private-vnet"
   },
@@ -58,7 +58,7 @@ endpoint vnet.
     "DefaultValue": "10.250.251.0/28"
   },
   "ExistingDNSZonesRG": {
-    "Description": "If you have private DNS zones already configured for use with the new private endpoints, specify their resource group here. This script will retrieve the existing DNS Zones and link them to the private network. Nerdio Manager needs to be linked to this RG in Settings, but can be unlinked after running this script.",
+    "Description": "If you have private DNS zones already configured for use with the new private endpoints, specify their resource group here. This script will retrieve the existing DNS Zones and link them to the private network. Nerdio Manager needs to be linked to this RG in Settings, but can be unlinked after running this script. No changes will be made to the private DNS zones apart from linking them to the private VNet if necessary.",
     "IsRequired": false,
     "DefaultValue": ""
   },
@@ -68,12 +68,12 @@ endpoint vnet.
     "DefaultValue": ""
   },
   "MakeSaStoragePrivate": {
-    "Description": "Make the scripted actions storage account private. Will create a hybrid worker VM, if one does not already exist. This will result in increased cost for Nerdio Manager Azure resources",
+    "Description": "Make the scripted actions storage account private. Will create a hybrid worker VM, if one does not already exist. This will result in increased cost for Nerdio Manager Azure resources. NOTE: After this script completes, you must update Nerdio Manager to use the new hybrid worker. (Settings->Nerdio Environment->Azure runbooks scripted actions. Click `"Enabled`" and select the new hybrid worker.)",
     "IsRequired": false,
     "DefaultValue": "false"
   },
   "PeerVnetIds": {
-    "Description": "Optional. Values are 'All' or comma-separated list of Azure resource IDs of vnets to peer to private endpoint vnet. If 'All' then all vnets NME manages will be peered. The Vnets or their resource groups must be linked to Nerdio Manager in Settings->Azure environment",
+    "Description": "Optional. Values are 'All' or comma-separated list of Azure resource IDs of VNets to peer to private endpoint VNet. If 'All' then all VNets NME manages will be peered. The VNEts or their resource groups must be linked to Nerdio Manager in Settings->Azure environment",
     "IsRequired": false,
     "DefaultValue": ""
   },
@@ -83,7 +83,7 @@ endpoint vnet.
     "DefaultValue": "false"
   },
   "MakeAppServicePrivate": {
-    "Description": "Limit access to the Nerdio Manager application. If set to true, only hosts on the vnet created by this script, or on peered vnets, will be able to access the app service URL.",
+    "Description": "WARNING: If set to true, only hosts on the VNet created by this script, or on peered VNets, will be able to access the app service URL.",
     "IsRequired": false,
     "DefaultValue": "false"
   }
@@ -250,7 +250,7 @@ Function Check-LastRunResults {
             if ($JobHash.hash -eq $ThisScriptHash.hash){
                 Write-Output "Output of previous script run:"
                 Get-AzAutomationJobOutput -Id $details.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName | select summary -ExpandProperty summary
-                Write-Output "App Service restarted after successfully running this script. If you need to re-run the script, please wait $($minutesago - ((get-date -AsUTC) - $app.LastModifiedTimeUtc).minutes) minutes and try again."
+                Write-Output "App Service restarted after successfully running this script. If you need to re-run the script, please wait $($minutesago - ((get-date).AddMinutes(-$MinutesAgo).ToUniversalTime() - $app.LastModifiedTimeUtc).minutes) minutes and try again."
                 Exit
             }
         }
@@ -315,13 +315,13 @@ else {
 # Check if vnet created
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue
 if ($VNet) {
-    Write-Output ("VNet {0} created in resource group {1}." -f $vnet.Name, $vnet.ResourceGroupName)
+    Write-Output ("VNet {0} found in resource group {1}." -f $vnet.Name, $vnet.ResourceGroupName)
  
     $vnetUpdated = $false
     # Check if subnet created
     $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet -ErrorAction SilentlyContinue
     if ($PrivateEndpointSubnet) {
-        Write-Output ("Subnet {0} created in VNet {1}." -f $PrivateEndpointSubnet.Name, $VNet.Name)
+        Write-Output ("Subnet {0} found in VNet {1}." -f $PrivateEndpointSubnet.Name, $VNet.Name)
     } else {
         Write-Output "Creating private endpoint subnet"
         $PrivateEndpointSubnet = New-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnetRange -PrivateEndpointNetworkPoliciesFlag Disabled 
@@ -332,7 +332,7 @@ if ($VNet) {
     # Check if subnet created
     $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet -ErrorAction SilentlyContinue
     if ($AppServiceSubnet) {
-        Write-Output ("Subnet {0} created in VNet {1}." -f $AppServiceSubnet.Name, $VNet.Name)
+        Write-Output ("Subnet {0} found in VNet {1}." -f $AppServiceSubnet.Name, $VNet.Name)
     } else {
         Write-Output "Creating app service subnet"
         $AppServiceSubnet = New-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -AddressPrefix $AppServiceSubnetRange 
@@ -343,7 +343,7 @@ if ($VNet) {
     If ($vnetUpdated){$VNet | Set-AzVirtualNetwork}
  
 } else {
-    Write-Output "Creating VNet"
+    Write-Output "Creating VNet and subnets"
     $PrivateEndpointSubnet = New-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnetRange -PrivateEndpointNetworkPoliciesFlag Disabled 
     $AppServiceSubnet = New-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -AddressPrefix $AppServiceSubnetRange 
     $VNet = New-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NmeRg -Location $NmeRegion -AddressPrefix $VnetAddressRange -Subnet $PrivateEndpointSubnet,$AppServiceSubnet
@@ -360,7 +360,7 @@ if ($KeyVaultDnsZone) {
     #check for linked zone
     $KeyVaultZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.vaultcore.azure.net -Name $KeyVaultZoneLinkName -ErrorAction SilentlyContinue
     if ($KeyVaultZoneLink.VirtualNetworkId -eq $vnet.id) {
-        Write-Output "Private DNS Zone for Key Vault linked to vnet"
+        Write-Output "Private DNS Zone for Key Vault already linked to vnet"
     }
     else {
         Write-Output "Linking Private DNS Zone for Key Vault to vnet"
@@ -368,18 +368,18 @@ if ($KeyVaultDnsZone) {
     }
 }
 else {
-    Write-Output "Creating Private DNS Zones for Key Vault"
+    Write-Output "Creating Private DNS Zones and VNet link for Key Vault"
     $KeyVaultDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name privatelink.vaultcore.azure.net
     $KeyVaultZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName privatelink.vaultcore.azure.net -Name $KeyVaultZoneLinkName -VirtualNetworkId $vnet.Id
 }
 
 # Create and link private dns zone for sql 
 if ($SqlDnsZone) {
-    Write-Output "Private DNS Zone for SQL created"
+    Write-Output "Found Private DNS Zone for SQL"
     # check for linked zone
     $SqlZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.database.windows.net -Name $SqlZoneLinkName -ErrorAction SilentlyContinue
     if ($SqlZoneLink.VirtualNetworkId -eq $vnet.id) {
-        Write-Output "Private DNS Zone for SQL linked to vnet"
+        Write-Output "Private DNS Zone for SQL already linked to vnet"
     }
     else {
         Write-Output "Linking Private DNS Zone for SQL to vnet"
@@ -387,7 +387,7 @@ if ($SqlDnsZone) {
     }
 }
 else {
-    Write-Output "Creating Private DNS Zones for SQL"
+    Write-Output "Creating Private DNS Zones and VNet link for SQL"
     $SqlDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name privatelink.database.windows.net
     $SqlZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName privatelink.database.windows.net -Name $SqlZoneLinkName -VirtualNetworkId $vnet.Id
 }
@@ -1440,11 +1440,12 @@ if ($PeerVnetIds) {
     }
 }
 
-# restart the app service
-Write-Output "Restarting app service"
-Restart-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
-
 if ($NewHybridWorker) {
     Write-Output "Hybrid worker group '$HybridWorkerGroupName' has been created. Please update Nerdio Manager to use the new hybrid worker. (Settings->Nerdio Environment->Azure runbooks scripted actions. Click `"Enabled`" and select the new hybrid worker.)"
     Write-Warning "Hybrid worker group '$HybridWorkerGroupName' has been created. Please update Nerdio Manager to use the new hybrid worker. (Settings->Nerdio Environment->Azure runbooks scripted actions. Click `"Enabled`" and select the new hybrid worker.)"
 }
+
+# restart the app service
+Write-Output "Restarting app service"
+Restart-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
+
