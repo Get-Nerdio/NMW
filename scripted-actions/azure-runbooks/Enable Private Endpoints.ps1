@@ -68,12 +68,12 @@ endpoint vnet.
     "DefaultValue": ""
   },
   "MakeSaStoragePrivate": {
-    "Description": "Make the scripted actions storage account private. Will create a hybrid worker VM, if one does not already exist. This will result in increased cost for Nerdio Manager Azure resources. NOTE: After this script completes, you must update Nerdio Manager to use the new hybrid worker. (Settings->Nerdio Environment->Azure runbooks scripted actions. Click `"Enabled`" and select the new hybrid worker.)",
+    "Description": "Make the scripted actions storage account private. Will create a hybrid worker VM, if one does not already exist. This will result in increased cost for Nerdio Manager Azure resources. NOTE: After this script completes, you must update Nerdio Manager to use the new hybrid worker. (Settings->Nerdio Environment->Azure runbooks scripted actions. Click Enabled and select the new hybrid worker.)",
     "IsRequired": false,
     "DefaultValue": "false"
   },
   "PeerVnetIds": {
-    "Description": "Optional. Values are 'All' or comma-separated list of Azure resource IDs of VNets to peer to private endpoint VNet. If 'All' then all VNets NME manages will be peered. The VNEts or their resource groups must be linked to Nerdio Manager in Settings->Azure environment",
+    "Description": "Optional. Values are 'All' or comma-separated list of Azure resource IDs of VNets to peer to private endpoint VNet. If 'All' then all VNets NME manages will be peered. The VNEts or their resource groups must be linked to Nerdio Manager in Settings->Azure environment. All VNets must be in the same subscription as Nerdio Manager. External VNets must be peered manually.",
     "IsRequired": false,
     "DefaultValue": ""
   },
