@@ -230,6 +230,35 @@ $HybridWorkerVMName = "$Prefix-hybridworker-vm"
 $HybridWorkerVMSize = 'Standard_D2s_v3'
 $HybridWorkerGroupName = "$Prefix-hybridworker-group"
 
+# Check if the web app has been restarted recently and if the script has been run before
+Function Check-LastRunResults {
+    # this function depends on the Set-NmeVars function, which must be run before this function
+    Param()
+    $MinutesAgo = 10
+    $app = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
+    if ($app.LastModifiedTimeUtc -gt (get-date).AddMinutes(-$MinutesAgo).ToUniversalTime()) {
+        Write-Output "Web job has been restarted recently. Checking for previous script run"
+        $ThisJob = Get-AzAutomationJob -id $PSPrivateMetadata['JobId'].Guid -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName 
+        Invoke-WebRequest -UseBasicParsing -Uri $ThisJob.JobParameters.scriptUri -OutFile .\ThisScript.ps1
+        $ThisScriptHash = Get-FileHash .\ThisScript.ps1
+
+        $jobs = Get-AzAutomationJob -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName | ? status -eq completed | ? {$_.EndTime.datetime -gt (get-date).AddMinutes(-$MinutesAgo)}
+        foreach ($job in $jobs){
+            $details = Get-AzAutomationJob -id $job.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName 
+            Invoke-WebRequest -UseBasicParsing -Uri $details.JobParameters.scriptUri -OutFile .\JobScript.ps1 
+            $JobHash = Get-FileHash .\JobScript.ps1 
+            if ($JobHash.hash -eq $ThisScriptHash.hash){
+                Write-Output "Output of previous script run:"
+                Get-AzAutomationJobOutput -Id $details.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName | select summary -ExpandProperty summary
+                Write-Output "App Service restarted after successfully running this script. If you need to re-run the script, please wait $($minutesago - ((get-date -AsUTC) - $app.LastModifiedTimeUtc).minutes) minutes and try again."
+                Exit
+            }
+        }
+    }
+}
+    
+Check-LastRunResults
+
 # set resource group for dns zones
 if ($ExistingDNSZonesRG) {
     $DnsRg = $ExistingDNSZonesRG
@@ -282,33 +311,7 @@ else {
 
 #### main script ####
 
-Function Check-LastRunResults {
-    # this function depends on the Set-NmeVars function, which must be run before this function
-    Param()
-    $MinutesAgo = 10
-    $app = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
-    if ($app.LastModifiedTimeUtc -gt (get-date).AddMinutes(-$MinutesAgo).ToUniversalTime()) {
-        Write-Output "Web job has been restarted recently. Checking for previous script run"
-        $ThisJob = Get-AzAutomationJob -id $PSPrivateMetadata['JobId'].Guid -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName 
-        Invoke-WebRequest -UseBasicParsing -Uri $ThisJob.JobParameters.scriptUri -OutFile .\ThisScript.ps1
-        $ThisScriptHash = Get-FileHash .\ThisScript.ps1
 
-        $jobs = Get-AzAutomationJob -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName | ? status -eq completed | ? {$_.EndTime.datetime -gt (get-date).AddMinutes(-$MinutesAgo)}
-        foreach ($job in $jobs){
-            $details = Get-AzAutomationJob -id $job.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName 
-            Invoke-WebRequest -UseBasicParsing -Uri $details.JobParameters.scriptUri -OutFile .\JobScript.ps1 
-            $JobHash = Get-FileHash .\JobScript.ps1 
-            if ($JobHash.hash -eq $ThisScriptHash.hash){
-                Write-Output "Output of previous script run:"
-                Get-AzAutomationJobOutput -Id $details.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName | select summary -ExpandProperty summary
-                Write-Output "App Service restarted after successfully running this script. If you need to re-run the script, please wait $($minutesago - ((get-date -AsUTC) - $app.LastModifiedTimeUtc).minutes) minutes and try again."
-                Exit
-            }
-        }
-    }
-}
-    
-Check-LastRunResults
 
 # Check if vnet created
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue
