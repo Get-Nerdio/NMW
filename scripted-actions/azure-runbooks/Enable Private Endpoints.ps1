@@ -58,7 +58,7 @@ endpoint vnet.
     "DefaultValue": "10.250.251.0/28"
   },
   "ExistingDNSZonesRG": {
-    "Description": "If you have private DNS zones already configured for use with the new private endpoints, specify their resource group here. This script will retrieve the existing DNS Zones and link them to the private network. Nerdio Manager needs to be linked to this RG in Settings, but can be unlinked after running this script. No changes will be made to the private DNS zones apart from linking them to the private VNet if necessary.",
+    "Description": "If you have private DNS zones already configured for use with the new private endpoints, specify their resource group here. This script will retrieve the existing DNS Zones and link them to the private network. Nerdio Manager needs to be temporarily linked to this RG in Settings->Azure Environment, or temporarily assigned the Private DNS Zone Contributor role for these zones. No changes will be made to the private DNS zones apart from linking them to the private VNet if necessary.",
     "IsRequired": false,
     "DefaultValue": ""
   },
@@ -267,6 +267,13 @@ Function Check-LastRunResults {
 }
     
 Check-LastRunResults
+
+if ($PeerVnetIds -eq 'All') {
+    $VnetIds = Get-AzVirtualNetwork | ? {if ($_.tag){$True}}| Where-Object {$_.tag["$Prefix`_OBJECT_TYPE"] -eq 'LINKED_NETWORK'} -ErrorAction SilentlyContinue | Where-Object id -ne $vnet.id | Select-Object -ExpandProperty Id
+}
+else {
+    $VnetIds = $PeerVnetIds -split ','
+}
 
 # set resource group for dns zones
 if ($ExistingDNSZonesRG) {
@@ -535,7 +542,7 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
 
 if ($PeerVnetIds) {
     $FileStoragePrivateDnsZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.file.core.windows.net -ErrorAction SilentlyContinue
-    $MissingLinks = $PeerVnetIds | Where-Object { $FileStoragePrivateDnsZoneLink.VirtualNetworkId -notcontains $_ }
+    $MissingLinks = $VnetIds | Where-Object { $FileStoragePrivateDnsZoneLink.VirtualNetworkId -notcontains $_ }
     if ($MissingLinks) {
         Write-Output "Linking Private DNS Zone for File Storage to peer vnets"
         $i = 0
