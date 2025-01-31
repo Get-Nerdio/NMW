@@ -119,7 +119,7 @@ function Set-NmeVars {
         Write-Verbose "NmeCclAppInsightsName is $NmeCclAppInsightsName"
         Write-Verbose "Getting CCL Log Analytics Workspace"
         $script:NmeCclLawName = Get-AzOperationalInsightsWorkspace -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'} | Select-Object -ExpandProperty Name
-        Write-Output "NmeCclLawName is $NmeCclLawName"
+        Write-Verbose "NmeCclLawName is $NmeCclLawName"
         write-verbose "Getting CCL Key Vault"
         $script:NmeCclKeyVaultName = Get-AzKeyVault -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'} | Select-Object -ExpandProperty VaultName
         write-verbose "Getting CCL Storage Account"
