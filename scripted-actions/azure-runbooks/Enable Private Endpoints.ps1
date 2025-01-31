@@ -255,7 +255,10 @@ Function Check-LastRunResults {
                 $JobOutput = Get-AzAutomationJobOutput -Id $details.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
                 $JobOutput | select summary -ExpandProperty summary
                 
-                Write-Output "App Service restarted after successfully running this script. If you need to re-run the script, please wait $($minutesago - ((get-date).AddMinutes(-$MinutesAgo).ToUniversalTime() - $app.LastModifiedTimeUtc).minutes) minutes and try again."
+                Write-Output "App Service restarted after successfully running this script."
+                if (($minutesago - ((get-date).AddMinutes(-$MinutesAgo).ToUniversalTime() - $app.LastModifiedTimeUtc).minutes) -lt $MinutesAgo){
+                    write-output "If you need to re-run the script, please wait $($minutesago - ((get-date).AddMinutes(-$MinutesAgo).ToUniversalTime() - $app.LastModifiedTimeUtc).minutes) minutes and try again."
+                }
                 $joboutput| Where-Object type -eq warning | select summary -ExpandProperty summary | write-warning
                 Exit
             }
