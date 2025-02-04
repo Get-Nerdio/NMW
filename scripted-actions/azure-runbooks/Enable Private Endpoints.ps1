@@ -1489,4 +1489,4 @@ if ($NewHybridWorker) {
 
 # restart the app service
 Write-Output "Restarting app service"
-Restart-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
+$restart = Restart-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
