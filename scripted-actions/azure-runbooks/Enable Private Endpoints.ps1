@@ -1302,6 +1302,7 @@ if ($PeerVnetIds) {
 
 
 #region app service vnet integration
+<#
 Write-Output "Add VNet service endpoints"
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
 $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
@@ -1333,7 +1334,7 @@ if ($PrivateEndpointSubnet.PrivateEndpointNetworkPolicies -eq 'Enabled') {
     Write-Output "Enabling network policies"
     $Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
 }
-
+#>
 
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
 $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet
