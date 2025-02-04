@@ -232,6 +232,8 @@ $OdsZoneLinkName = "$Prefix-ods-privatelink"
 $MonitorAgentZoneLinkName = "$Prefix-monitoragent-privatelink"
 $AppServiceZoneLinkName = "$Prefix-app-appservice-privatelink"
 $FileStoragePrivateDnsZoneLinkName = "$Prefix-filestorage-privatelink"
+$BlobStoragePrivateDnsZoneLinkName = "$Prefix-blobstorage-privatelink"
+
 
 # Check if the web app has been restarted recently and if the script has been run before
 Function Check-LastRunResults {
@@ -245,7 +247,7 @@ Function Check-LastRunResults {
         Invoke-WebRequest -UseBasicParsing -Uri $ThisJob.JobParameters.scriptUri -OutFile .\ThisScript.ps1
         $ThisScriptHash = Get-FileHash .\ThisScript.ps1
 
-        $jobs = Get-AzAutomationJob -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName | ? status -eq completed | ? {$_.EndTime.datetime -gt (get-date).AddMinutes(-$MinutesAgo)}
+        $jobs = Get-AzAutomationJob -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName | ? status -match 'completed|Failed' | ? {$_.EndTime.datetime -gt (get-date).AddMinutes(-$MinutesAgo)}
         foreach ($job in $jobs){
             $details = Get-AzAutomationJob -id $job.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName 
             Invoke-WebRequest -UseBasicParsing -Uri $details.JobParameters.scriptUri -OutFile .\JobScript.ps1 
@@ -255,7 +257,7 @@ Function Check-LastRunResults {
                 $JobOutput = Get-AzAutomationJobOutput -Id $details.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
                 $JobOutput | select summary -ExpandProperty summary
                 
-                Write-Output "App Service restarted after successfully running this script."
+                Write-Output "App Service restarted after running this script."
                 if (($minutesago - ((get-date).AddMinutes(-$MinutesAgo).ToUniversalTime() - $app.LastModifiedTimeUtc).minutes) -lt $MinutesAgo){
                     write-output "If you need to re-run the script, please wait $($minutesago - ((get-date).AddMinutes(-$MinutesAgo).ToUniversalTime() - $app.LastModifiedTimeUtc).minutes) minutes and try again."
                 }
@@ -471,11 +473,11 @@ else {
 if ($MakeAzureMonitorPrivate -eq 'True') {
     # Create and link private dns zone for monitor, ops, oms, and monitor agent
     if ($MonitorDnsZone) {
-        Write-Output "Private DNS Zone for Monitor created"
+        Write-Output "Found Private DNS Zone for Monitor "
         # check for linked zone
         $MonitorZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.monitor.azure.com -ErrorAction SilentlyContinue
         if ($MonitorZoneLink.VirtualNetworkId -contains $vnet.id) {
-            Write-Output "Private DNS Zone for Monitor linked to vnet"
+            Write-Output "Private DNS Zone for Monitor already linked to vnet"
         }
         else {
             Write-Output "Linking Private DNS Zone for Monitor to vnet"
@@ -488,11 +490,11 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
         $MonitorZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.monitor.azure.com -Name $MonitorZoneLinkName -VirtualNetworkId $vnet.Id
     }
     if ($OpsDnsZone) {
-        Write-Output "Private DNS Zone for Ops created"
+        Write-Output "Found Private DNS Zone for Ops"
         # check for linked zone
         $OpsZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.oms.opinsights.azure.com -ErrorAction SilentlyContinue
         if ($OpsZoneLink.VirtualNetworkId -contains $vnet.id) {
-            Write-Output "Private DNS Zone for Ops linked to vnet"
+            Write-Output "Private DNS Zone for Ops already linked to vnet"
         }
         else {
             Write-Output "Linking Private DNS Zone for Ops to vnet"
@@ -505,11 +507,11 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
         $OpsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName privatelink.oms.opinsights.azure.com -Name $OpsZoneLinkName -VirtualNetworkId $vnet.Id
     }
     if ($OdsDnsZone) {
-        Write-Output "Private DNS Zone for ODS created"
+        Write-Output "Found Private DNS Zone for ODS"
         # check for linked zone
         $OdsZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.ods.opinsights.azure.com -ErrorAction SilentlyContinue
         if ($OdsZoneLink.VirtualNetworkId -contains $vnet.id) {
-            Write-Output "Private DNS Zone for ODS linked to vnet"
+            Write-Output "Private DNS Zone for ODS already linked to vnet"
         }
         else {
             Write-Output "Linking Private DNS Zone for ODS to vnet"
@@ -522,11 +524,11 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
         $OdsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName privatelink.ods.opinsights.azure.com -Name $OdsZoneLinkName -VirtualNetworkId $vnet.Id
     }
     if ($MonitorAgentDnsZone) {
-        Write-Output "Private DNS Zone for Monitor Agent created"
+        Write-Output "Found Private DNS Zone for Monitor Agent"
         # check for linked zone
         $MonitorAgentZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.agentsvc.azure-automation.net -ErrorAction SilentlyContinue
         if ($MonitorAgentZoneLink.VirtualNetworkId -contains $vnet.id) {
-            Write-Output "Private DNS Zone for Monitor Agent linked to vnet"
+            Write-Output "Private DNS Zone for Monitor Agent already linked to vnet"
         }
         else {
             Write-Output "Linking Private DNS Zone for Monitor Agent to vnet"
@@ -541,14 +543,26 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
 }
 
 if ($PeerVnetIds) {
-    $FileStoragePrivateDnsZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.file.core.windows.net -ErrorAction SilentlyContinue
+    $FileStoragePrivateDnsZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.blob.core.windows.net -ErrorAction SilentlyContinue
     $MissingLinks = $VnetIds | Where-Object { $FileStoragePrivateDnsZoneLink.VirtualNetworkId -notcontains $_ }
     if ($MissingLinks) {
-        Write-Output "Linking Private DNS Zone for File Storage to peer vnets"
+        Write-Output "Linking Private DNS Zone for Blob Storage to peer vnets"
         $i = 0
         foreach ($vnetId in $MissingLinks) {
-            $FileStoragePrivateDnsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.file.core.windows.net -Name ($FileStoragePrivateDnsZoneLinkName + $i) -VirtualNetworkId $vnetId
+            $FileStoragePrivateDnsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.blob.core.windows.net -Name ($BlobStoragePrivateDnsZoneLinkName + $i) -VirtualNetworkId $vnetId
             $i ++   
+        }
+    }
+    if ($MakeAppServicePrivate -eq 'true'){
+        $AppServicePrviateDnsZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.azurewebsites.net -ErrorAction SilentlyContinue
+        $AppServiceMissingLinks = $VnetIds | Where-Object { $AppServicePrviateDnsZoneLink.VirtualNetworkId -notcontains $_ }
+        if ($AppServiceMissingLinks) {
+            Write-Output "Linking Private DNS Zone for App Service to peer vnets"
+            $i = 0
+            foreach ($vnetId in $AppServiceMissingLinks) {
+                $AppServicePrviateDnsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.azurewebsites.net -Name ($AppServiceZoneLinkName + $i) -VirtualNetworkId $vnetId
+                $i ++   
+            }
         }
     }
 }
@@ -789,15 +803,6 @@ if ($AppServiceDnsZoneGroup) {
     $AppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AppServicePrivateEndpointName" -Name $AppServicePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
 }
 
-$webApp = Get-AzResource -Id $NmeWebApp.id 
-if ($MakeAppServicePrivate -eq 'True') {
-    $webApp.Properties.publicNetworkAccess = "Disabled"
-    $webApp | Set-AzResource -Force | Out-Null
-}
-else {
-    $webApp.Properties.publicNetworkAccess = "Enabled"
-    $webApp | Set-AzResource -Force | Out-Null
-}
 
 if ($NmeCclWebAppName) {
     $CclAppService = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeCclWebAppName
@@ -940,92 +945,7 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
 }
 #endregion
 
-#region app service vnet integration
-Write-Output "Add VNet service endpoints"
-$VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
-$PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
-$AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
-
-$ServiceEndpoints = @('Microsoft.KeyVault', 'Microsoft.Sql', 'Microsoft.Web')
-if ($MakeSaStoragePrivate -eq 'True') {
-    $ServiceEndpoints += 'Microsoft.Storage'
-}
-
-
-if ($privateendpointsubnet.ServiceEndpoints.service){
-    if (!(Compare-Object $privateendpointsubnet.ServiceEndpoints.service -DifferenceObject $serviceEndpoints -ErrorAction SilentlyContinue)) {
-        Write-Output "Found service endpoints"
-    } else {
-        Write-Output "Adding service endpoints"
-        $Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
-    }
-}
-else {
-    Write-Output "Adding service endpoints"
-    $Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
-}
-# enable network policy
-$PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
-if ($PrivateEndpointSubnet.PrivateEndpointNetworkPolicies -eq 'Enabled') {
-    Write-Output "Network policies already enabled"
-} else {
-    Write-Output "Enabling network policies"
-    $Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
-}
-
-
-$VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
-$AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet
-
-# Check if subnet delegation created
-$AppSubnetDelegation = Get-AzDelegation -Subnet $AppServiceSubnet -ErrorAction SilentlyContinue
-if ($AppSubnetDelegation.ServiceName -eq 'Microsoft.Web/serverFarms') {
-    Write-Output "App service subnet delegation already created"
-} 
-else {
-    Write-Output "Delegate app service subnet to webfarms"
-    $AppServiceSubnet | Add-AzDelegation -Name $WebAppSubnetDelegationName -ServiceName "Microsoft.Web/serverFarms" | Out-Null
-    $vnet = Set-AzVirtualNetwork -VirtualNetwork $VNet
-}
-
-$webApp = Get-AzResource -Id $NmeWebApp.id 
-# check if endpoint integration enabled
-if ($webApp.Properties.virtualNetworkSubnetId -eq $AppServiceSubnet.id) {
-    Write-Output "App service VNet integration already enabled"
-} 
-else {
-    Write-Output "Enabling app service VNet integration"
-    $webApp.Properties.virtualNetworkSubnetId = $AppServiceSubnet.id
-    $webApp.Properties.vnetRouteAllEnabled = 'true'
-    $WebApp = $webApp | Set-AzResource -Force
-}
-
-if ($NmeCclWebAppName) {
-    $NmeCclWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeCclWebAppName
-    $CclWebApp = Get-AzResource -Id $NmeCclWebApp.id 
-    # check if endpoint integration enabled
-    if ($CclWebApp.Properties.virtualNetworkSubnetId -eq $AppServiceSubnet.id) {
-        Write-Output "CCL App service VNet integration already enabled"
-    } 
-    else {
-        Write-Output "Enabling CCL app service VNet integration"
-        $CclWebApp.Properties.virtualNetworkSubnetId = $AppServiceSubnet.id
-        $CclWebApp.Properties.vnetRouteAllEnabled = 'true'
-        $CclWebApp = $CclWebApp | Set-AzResource -Force
-    }
-}
-# enable network policy
-$AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet
-$VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
-
-if ($AppServiceSubnet.PrivateEndpointNetworkPolicies -eq 'Enabled') {
-    Write-Output "Network policies already enabled"
-} else {
-    Write-Output "Enabling network policies"
-    #$Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -AddressPrefix $AppServiceSubnet.addressprefix -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
-    
-}
-#endregion
+# region create hybrid worker vm
 function New-NmeHybridWorkerVm {
     [CmdletBinding()]
     Param(
@@ -1279,7 +1199,12 @@ function New-NmeHybridWorkerVm {
     }
     catch {
         $ErrorActionPreference = 'Continue'
-        write-output "Encountered error. $_"
+        Write-Error "Script to join hybrid worker:" -ErrorAction Continue
+        Get-Content .\Ensure-CertAndModulesAreImported.ps1 | Write-Error -ErrorAction Continue
+        write-output "Encountered error. Hybrid Worker VM $HybridWorkerVMName has been created but is not configured. Original error:"
+        write-output $_
+        Write-Warning "Encountered error. Hybrid Worker VM $HybridWorkerVMName has been created but is not configured."
+        <#
         write-output "Rolling back hybrid worker changes"
         $HybridWorker = Get-AzAutomationHybridRunbookWorker -ResourceGroupName $ResourceGroupName -AutomationAccountName $AA.AutomationAccountName -HybridRunbookWorkerGroupName $HybridWorkerGroupName -ErrorAction silentlycontinue
         Remove-AzAutomationRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $aa.AutomationAccountName -Name "Import-CertAndModulesToHybridRunbookWorker" -Force -ErrorAction SilentlyContinue
@@ -1309,32 +1234,161 @@ function New-NmeHybridWorkerVm {
             write-output "Removing disk"
             Remove-AzDisk -ResourceGroupName $ResourceGroupName -DiskName $azureVmOsDiskName -Force -ErrorAction Continue
         }
+        
         Write-Output "Unable to create hybrid worker vm. May need to create manually. See exception for details"
         Throw $_ 
+        #>
+        Throw $_ 
     }
+
 
 }
 
 if ($MakeSaStoragePrivate -eq 'True') {
     # check if scripted action automation account has hybrid worker group
-    $HybridWorkerGroup = Get-AzAutomationHybridWorkerGroup -ResourceGroupName $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName 
-    if ($HybridWorkerGroup) {
-        Write-Output "Scripted actions automation account has hybrid worker group. Skipping creation of hybrid worker group and VM."
+    #$HybridWorkerGroup = Get-AzAutomationHybridWorkerGroup -ResourceGroupName $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName 
+
+    
+    Write-Output "Checking for hybrid worker VM for scripted actions automation account"
+    Try {
+        New-NmeHybridWorkerVm -VnetName $PrivateLinkVnetName -SubnetName $PrivateEndpointSubnetName -VMName $HybridWorkerVMName -VMSize $HybridWorkerVMSize -ResourceGroupName $NmeRg -HybridWorkerGroupName $HybridWorkerGroupName -AutomationAccountName $NmeScriptedActionsAccountName -Prefix $Prefix -ErrorAction Stop
+        $NewHybridWorker = $true
+
+    }
+    catch {
+        Write-Output "Unable to create hybrid worker VM for scripted actions automation account. See exception for details"
+        Throw $_
+    }
+    
+}
+#endregion
+
+# region create private link peering
+if ($PeerVnetIds) {
+    Write-Output "Peering vnets" 
+    $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
+    if ($PeerVnetIds -eq 'All') {
+        $VnetIds = Get-AzVirtualNetwork | ? {if ($_.tag){$True}}| Where-Object {$_.tag["$Prefix`_OBJECT_TYPE"] -eq 'LINKED_NETWORK'} -ErrorAction SilentlyContinue | Where-Object id -ne $vnet.id | Select-Object -ExpandProperty Id
     }
     else {
-        Write-Output "Creating hybrid worker VM for scripted actions automation account"
-        Try {
-            New-NmeHybridWorkerVm -VnetName $PrivateLinkVnetName -SubnetName $PrivateEndpointSubnetName -VMName $HybridWorkerVMName -VMSize $HybridWorkerVMSize -ResourceGroupName $NmeRg -HybridWorkerGroupName $HybridWorkerGroupName -AutomationAccountName $NmeScriptedActionsAccountName -Prefix $Prefix -ErrorAction Stop
-            $NewHybridWorker = $true
-
+        $VnetIds = $PeerVnetIds -split ','
+    }
+    foreach ($id in $VnetIds) {
+        Write-Output "Peering with vnet $id"
+        $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue 
+        $Resource = Get-AzResource -ResourceId $id
+        $PeerVnet = Get-AzVirtualNetwork -Name $Resource.Name -ResourceGroupName $Resource.ResourceGroupName
+        # check if inbound peering exists
+        $InboundPeering = Get-AzVirtualNetworkPeering -Name "$($PeerVnet.name)-$PrivateLinkVnetName" -VirtualNetworkName $PeerVnet.Name -ResourceGroupName $Resource.ResourceGroupName -ErrorAction SilentlyContinue
+        if ($InboundPeering) {
+            Write-Output "Inbound peering exists"
         }
-        catch {
-            Write-Output "Unable to create hybrid worker VM for scripted actions automation account. See exception for details"
-            Throw $_
+        else {
+            Write-Output "Creating inbound peering"
+            $InboundPeering = Add-AzVirtualNetworkPeering -Name "$($PeerVnet.name)-$PrivateLinkVnetName" -VirtualNetwork $PeerVnet -RemoteVirtualNetworkId $vnet.id 
+        }
+        # check if outbound peering exists
+        $OutboundPeering = Get-AzVirtualNetworkPeering -Name "$PrivateLinkVnetName-$($PeerVnet.name)" -VirtualNetworkName $vnet.Name -ResourceGroupName $Vnet.ResourceGroupName -ErrorAction SilentlyContinue
+        if ($OutboundPeering) {
+            Write-Output "Outbound peering exists"
+        }
+        else {
+            Write-Output "Creating outbound peering"
+            $OutboundPeering = Add-AzVirtualNetworkPeering -Name "$PrivateLinkVnetName-$($PeerVnet.name)" -VirtualNetwork $vnet -RemoteVirtualNetworkId $id
         }
     }
 }
+#endregion
 
+
+#region app service vnet integration
+Write-Output "Add VNet service endpoints"
+$VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
+$PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
+$AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
+
+$ServiceEndpoints = @('Microsoft.KeyVault', 'Microsoft.Sql', 'Microsoft.Web')
+if ($MakeSaStoragePrivate -eq 'True') {
+    $ServiceEndpoints += 'Microsoft.Storage'
+}
+
+
+if ($privateendpointsubnet.ServiceEndpoints.service){
+    if (!(Compare-Object $privateendpointsubnet.ServiceEndpoints.service -DifferenceObject $serviceEndpoints -ErrorAction SilentlyContinue)) {
+        Write-Output "Found service endpoints"
+    } else {
+        Write-Output "Adding service endpoints"
+        $Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
+    }
+}
+else {
+    Write-Output "Adding service endpoints"
+    $Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
+}
+# enable network policy
+$PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
+if ($PrivateEndpointSubnet.PrivateEndpointNetworkPolicies -eq 'Enabled') {
+    Write-Output "Network policies already enabled"
+} else {
+    Write-Output "Enabling network policies"
+    $Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
+}
+
+
+$VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
+$AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet
+
+# Check if subnet delegation created
+$AppSubnetDelegation = Get-AzDelegation -Subnet $AppServiceSubnet -ErrorAction SilentlyContinue
+if ($AppSubnetDelegation.ServiceName -eq 'Microsoft.Web/serverFarms') {
+    Write-Output "App service subnet delegation already created"
+} 
+else {
+    Write-Output "Delegate app service subnet to webfarms"
+    $AppServiceSubnet | Add-AzDelegation -Name $WebAppSubnetDelegationName -ServiceName "Microsoft.Web/serverFarms" | Out-Null
+    $vnet = Set-AzVirtualNetwork -VirtualNetwork $VNet
+}
+
+$webApp = Get-AzResource -Id $NmeWebApp.id 
+# check if endpoint integration enabled
+if ($webApp.Properties.virtualNetworkSubnetId -eq $AppServiceSubnet.id) {
+    Write-Output "App service VNet integration already enabled"
+} 
+else {
+    Write-Output "Enabling app service VNet integration"
+    $webApp.Properties.virtualNetworkSubnetId = $AppServiceSubnet.id
+    $webApp.Properties.vnetRouteAllEnabled = 'true'
+    $WebApp = $webApp | Set-AzResource -Force
+}
+
+if ($NmeCclWebAppName) {
+    $NmeCclWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeCclWebAppName
+    $CclWebApp = Get-AzResource -Id $NmeCclWebApp.id 
+    # check if endpoint integration enabled
+    if ($CclWebApp.Properties.virtualNetworkSubnetId -eq $AppServiceSubnet.id) {
+        Write-Output "CCL App service VNet integration already enabled"
+    } 
+    else {
+        Write-Output "Enabling CCL app service VNet integration"
+        $CclWebApp.Properties.virtualNetworkSubnetId = $AppServiceSubnet.id
+        $CclWebApp.Properties.vnetRouteAllEnabled = 'true'
+        $CclWebApp = $CclWebApp | Set-AzResource -Force
+    }
+}
+# enable network policy
+$AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet
+$VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
+
+if ($AppServiceSubnet.PrivateEndpointNetworkPolicies -eq 'Enabled') {
+    Write-Output "Network policies already enabled"
+} else {
+    Write-Output "Enabling network policies"
+    #$Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -AddressPrefix $AppServiceSubnet.addressprefix -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
+    
+}
+#endregion
+
+# region make resources private
 
 Write-Output "Check network deny rules for key vault and sql"
 $NmeKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -VaultName $KeyVaultName
@@ -1417,60 +1471,16 @@ if ($NmeDpsStorageAccountName) {
     }
 }
 
-if ($PeerVnetIds) {
-    Write-Output "Peering vnets" 
-    $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
-    if ($PeerVnetIds -eq 'All') {
-        $VnetIds = Get-AzVirtualNetwork | ? {if ($_.tag){$True}}| Where-Object {$_.tag["$Prefix`_OBJECT_TYPE"] -eq 'LINKED_NETWORK'} -ErrorAction SilentlyContinue | Where-Object id -ne $vnet.id | Select-Object -ExpandProperty Id
-    }
-    else {
-        $VnetIds = $PeerVnetIds -split ','
-    }
-    foreach ($id in $VnetIds) {
-        $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue 
-        $Resource = Get-AzResource -ResourceId $id
-        $PeerVnet = Get-AzVirtualNetwork -Name $Resource.Name -ResourceGroupName $Resource.ResourceGroupName
-        # check if inbound peering exists
-        $InboundPeering = Get-AzVirtualNetworkPeering -Name "$($PeerVnet.name)-$PrivateLinkVnetName" -VirtualNetworkName $PeerVnet.Name -ResourceGroupName $Resource.ResourceGroupName -ErrorAction SilentlyContinue
-        if ($InboundPeering) {
-            Write-Output "Inbound peering exists"
-        }
-        else {
-            Write-Output "Creating inbound peering"
-            $InboundPeering = Add-AzVirtualNetworkPeering -Name "$($PeerVnet.name)-$PrivateLinkVnetName" -VirtualNetwork $PeerVnet -RemoteVirtualNetworkId $vnet.id 
-        }
-        # check if outbound peering exists
-        $OutboundPeering = Get-AzVirtualNetworkPeering -Name "$PrivateLinkVnetName-$($PeerVnet.name)" -VirtualNetworkName $vnet.Name -ResourceGroupName $Vnet.ResourceGroupName -ErrorAction SilentlyContinue
-        if ($OutboundPeering) {
-            Write-Output "Outbound peering exists"
-        }
-        else {
-            Write-Output "Creating outbound peering"
-            $OutboundPeering = Add-AzVirtualNetworkPeering -Name "$PrivateLinkVnetName-$($PeerVnet.name)" -VirtualNetwork $vnet -RemoteVirtualNetworkId $id
-        }
-        # allow peer vnet to access storage account
-        # check if file private link exists
-        if ($FilePrivateLink) {
-            Write-Output "File private link exists"
-        }
-        else {
-            Write-Output "Creating file private link"
-            $FilePrivateLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRG -ZoneName privatelink.blob.core.windows.net -Name $($PeerVnet.name +  '-blob-privatelink') -VirtualNetworkId $id
-        }
-        if ($MakeAppServicePrivate -eq 'True') {
-            # allow peer vnet to access app service
-            # check if app service private link exists
-            $AppServicePrivateLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRG -ZoneName privatelink.azurewebsites.net -Name $($PeerVnet.name + '-appservice-privatelink') -ErrorAction SilentlyContinue
-            if ($AppServicePrivateLink) {
-                Write-Output "App service private link exists"
-            }
-            else {
-                Write-Output "Creating app service private link"
-                $AppServicePrivateLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRG -ZoneName privatelink.azurewebsites.net -Name $($PeerVnet.name + '-appservice-privatelink') -VirtualNetworkId $id
-            }
-        }
-    }
+$webApp = Get-AzResource -Id $NmeWebApp.id 
+if ($MakeAppServicePrivate -eq 'True') {
+    $webApp.Properties.publicNetworkAccess = "Disabled"
+    $webApp | Set-AzResource -Force | Out-Null
 }
+else {
+    $webApp.Properties.publicNetworkAccess = "Enabled"
+    $webApp | Set-AzResource -Force | Out-Null
+}
+
 
 if ($NewHybridWorker) {
     Write-Output "Hybrid worker group '$HybridWorkerGroupName' has been created. Please update Nerdio Manager to use the new hybrid worker. (Settings->Nerdio Environment->Azure runbooks scripted actions. Click `"Enabled`" and select the new hybrid worker.)"
@@ -1480,4 +1490,3 @@ if ($NewHybridWorker) {
 # restart the app service
 Write-Output "Restarting app service"
 Restart-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
-
