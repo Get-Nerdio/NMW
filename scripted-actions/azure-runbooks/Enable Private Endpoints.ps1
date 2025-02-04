@@ -985,7 +985,7 @@ function New-NmeHybridWorkerVm {
     $azureVmSkus = "2022-datacenter"
     $LicenseType = 'Windows_Client'
 
-    $Vnet = Get-AzVirtualNetwork -Name $VnetName 
+    $Vnet = Get-AzVirtualNetwork -Name $VnetName -ResourceGroupName $ResourceGroupName
 
     $azureLocation = $Vnet.Location
 
@@ -1094,7 +1094,8 @@ function New-NmeHybridWorkerVm {
                             -Publisher "Microsoft.Azure.Automation.HybridWorker" `
                             -ExtensionType HybridWorkerForWindows `
                             -TypeHandlerVersion 0.1 `
-                            -Settings $settings
+                            -Settings $settings `
+                            -EnableAutomaticUpgrade $true
         
             if ($SetExtension.StatusCode -eq 'OK') {
             write-output "VM successfully added to hybrid worker group"
