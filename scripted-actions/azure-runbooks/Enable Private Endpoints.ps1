@@ -1002,7 +1002,7 @@ function New-NmeHybridWorkerVm {
         # Check if NIC already exists
         $azureNIC = Get-AzNetworkInterface -Name $azureNicName -ResourceGroupName $ResourceGroupName -ErrorAction SilentlyContinue
         if ($azureNIC) {
-            Write-Output "NIC $azureNicName created"
+            Write-Output "NIC $azureNicName already created"
         }
         else {
             Write-Output "Creating hybrid worker NIC"
@@ -1012,7 +1012,7 @@ function New-NmeHybridWorkerVm {
         # Check if VM already exists
         $vm = Get-AzVM -Name $VMName -ResourceGroupName $ResourceGroupName -ErrorAction SilentlyContinue
         if ($vm) {
-            Write-Output "Hybrid Worker VM already $VMName created"
+            Write-Output "Hybrid Worker VM $VMName already created"
             $VM = $vm
         }
         else {
@@ -1043,7 +1043,7 @@ function New-NmeHybridWorkerVm {
             Throw $_
         }
         if ($HybridWorkerGroup) {
-            Write-Output "Hybrid worker group already $HybridWorkerGroupName created"
+            Write-Output "Hybrid worker group $HybridWorkerGroupName already created"
         }
         else {
             Write-Output "Creating hybrid worker group"
