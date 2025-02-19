@@ -109,21 +109,21 @@ function Set-NmeVars {
         if ($cclwebapp) {
             Write-Verbose "Found CCL web app"
             $script:NmeCclWebAppName = $cclwebapp.Name
+            Write-Verbose "Getting CCL App Insights"
+            $script:NmeCclAppInsightsName = Get-AzApplicationInsights -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object  { $_.Tag.Keys -contains $key } | Where-Object {$_.tag[$key] -eq 'CC_DEPLOYMENT_RESOURCE'}| Select-Object -ExpandProperty Name
+            if ($NmeCclAppInsightsName.count -ne 1) {
+                # bug in some Az.ApplicationInsights versions
+                throw "Unable to find CCL App Insights. Az.ApplicationInsights module may need to be updated to greater than v2.0.0 in the NME scripted action automation account."
+            }
+            Write-Verbose "NmeCclAppInsightsName is $NmeCclAppInsightsName"
+            Write-Verbose "Getting CCL Log Analytics Workspace"
+            $script:NmeCclLawName = Get-AzOperationalInsightsWorkspace -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'} | Select-Object -ExpandProperty Name
+            Write-Verbose "NmeCclLawName is $NmeCclLawName"
+            write-verbose "Getting CCL Key Vault"
+            $script:NmeCclKeyVaultName = Get-AzKeyVault -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'} | Select-Object -ExpandProperty VaultName
+            write-verbose "Getting CCL Storage Account"
+            $script:NmeCclStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'FILE_STORAGE_ACCOUNT'} | Select-Object -ExpandProperty StorageAccountName
         }
-        Write-Verbose "Getting CCL App Insights"
-        $script:NmeCclAppInsightsName = Get-AzApplicationInsights -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object  { $_.Tag.Keys -contains $key } | Where-Object {$_.tag[$key] -eq 'CC_DEPLOYMENT_RESOURCE'}| Select-Object -ExpandProperty Name
-        if ($NmeCclAppInsightsName.count -ne 1) {
-            # bug in some Az.ApplicationInsights versions
-            throw "Unable to find CCL App Insights. Az.ApplicationInsights module may need to be updated to greater than v2.0.0 in the NME scripted action automation account."
-        }
-        Write-Verbose "NmeCclAppInsightsName is $NmeCclAppInsightsName"
-        Write-Verbose "Getting CCL Log Analytics Workspace"
-        $script:NmeCclLawName = Get-AzOperationalInsightsWorkspace -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'} | Select-Object -ExpandProperty Name
-        Write-Verbose "NmeCclLawName is $NmeCclLawName"
-        write-verbose "Getting CCL Key Vault"
-        $script:NmeCclKeyVaultName = Get-AzKeyVault -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'} | Select-Object -ExpandProperty VaultName
-        write-verbose "Getting CCL Storage Account"
-        $script:NmeCclStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'FILE_STORAGE_ACCOUNT'} | Select-Object -ExpandProperty StorageAccountName
         Write-Verbose "Getting DPS Storage Account"
         $script:NmeDpsStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.StorageAccountName -match "^dps" } | Select-Object -ExpandProperty StorageAccountName
     }
@@ -1302,7 +1302,7 @@ if ($PeerVnetIds) {
 
 
 #region app service vnet integration
-<#
+
 Write-Output "Add VNet service endpoints"
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
 $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
@@ -1334,7 +1334,7 @@ if ($PrivateEndpointSubnet.PrivateEndpointNetworkPolicies -eq 'Enabled') {
     Write-Output "Enabling network policies"
     $Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
 }
-#>
+
 
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
 $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet
