@@ -302,8 +302,8 @@ if ($ExistingDNSZonesRG) {
         Write-Output "Found existing DNS zones in resource group $DnsRg"
     }
     catch {
-        Write-Output "Unable to find one or more of the DNS zones in resource group $DnsRg. Required DNS zones for your configuration are: $RequiredDnsZones"
-        Write-Error "Unable to find one or more of the DNS zones in resource group $DnsRg. Required DNS zones for your configuration are: $RequiredDnsZones"
+        Write-Output "Unable to find one or more of the Private DNS zones in resource group $DnsRg. Required DNS zones for your configuration are: $RequiredDnsZones"
+        Write-Error "Unable to find one or more of the Private DNS zones in resource group $DnsRg. Required DNS zones for your configuration are: $RequiredDnsZones"
         Throw $_
     }
     if ($existingDNSZonesSubId) {
