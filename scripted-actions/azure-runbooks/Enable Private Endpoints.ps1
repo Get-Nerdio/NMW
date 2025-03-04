@@ -627,6 +627,38 @@ else {
     Write-Warning "Unable to find DPS storage account. Skipping private endpoint creation. You will need to manually create the private endpoint for the storage account."
 }
 
+# other storage accounts
+$StorageAccounts = Get-AzStorageAccount -ResourceGroupName $NmeRg | Where-Object {$_.tags["$Prefix`_OBJECT_TYPE"] -eq 'STORAGE_ACCOUNT'}
+foreach ($StorageAccount in $StorageAccounts) {
+    $StorageAccountName = $StorageAccount.StorageAccountName
+    $StorageAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Storage/storageAccounts/$StorageAccountName"
+    $StorageAccountPrivateEndpointName = "$StorageAccountName-PrivateEndpoint"
+    $StorageAccountServiceConnectionName = "$StorageAccountName-ServiceConnection"
+    $StorageAccountDnsZoneGroupName = "$StorageAccountName-DnsZoneGroup"
+    $StorageAccountPrivateDnsZoneLinkName = "$StorageAccountName-PrivateDnsZoneLink"
+    $StorageAccountPrivateDnsZoneName = "privatelink.blob.core.windows.net"
+    $StorageAccountPrivateDnsZone = $RetrievedZones | Where-Object { $_.Name -eq $StorageAccountPrivateDnsZoneName }
+    # check if storage account private endpoint created
+    $StorageAccountPrivateEndpoint = Get-AzPrivateEndpoint -Name "$StorageAccountPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+    if ($StorageAccountPrivateEndpoint) {
+        Write-Output "Found $StorageAccountName storage private endpoint"
+    } 
+    else {
+        Write-Output "Configuring $StorageAccountName storage service connection and private endpoint"
+        $StorageAccountServiceConnection = New-AzPrivateLinkServiceConnection -Name $StorageAccountServiceConnectionName -PrivateLinkServiceId $StorageAccountResourceId -GroupId blob 
+        $StorageAccountPrivateEndpoint = New-AzPrivateEndpoint -Name "$StorageAccountPrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $StorageAccountServiceConnection 
+    }
+    # check if storage account dns zone group created
+    $StorageAccountDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$StorageAccountPrivateEndpointName" -ErrorAction SilentlyContinue
+    if ($StorageAccountDnsZoneGroup) {
+        Write-Output "Found $StorageAccountName storage DNS zone group"
+    } else {
+        Write-Output "Configuring $StorageAccountName storage DNS zone group"
+        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.blob.core.windows.net -PrivateDnsZoneId $StorageAccountPrivateDnsZone.ResourceId
+        $StorageAccountDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$StorageAccountPrivateEndpointName" -Name $StorageAccountDnsZoneGroupName -PrivateDnsZoneConfig $config
+    }
+}
+
 # App service
 $AppService = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
 # check if app service private endpoint is created
