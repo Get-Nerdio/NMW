@@ -545,7 +545,7 @@ if ($NmeScriptedActionsAccountName) {
 
     if ($MakeSaStoragePrivate -eq 'True') {
         # Get scripted actions storage account
-        $ScriptedActionsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeScriptedActionsStorageAccountName
+        $ScriptedActionsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeCssaStorageAccountName
         # check if scripted action storage account private endpoint is created
         $ScriptedActionsStoragePrivateEndpoint = Get-AzPrivateEndpoint -Name "$ScriptedActionsStoragePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
         if ($ScriptedActionsStoragePrivateEndpoint) {
@@ -635,7 +635,6 @@ foreach ($StorageAccount in $StorageAccounts) {
     $StorageAccountPrivateEndpointName = "$StorageAccountName-PrivateEndpoint"
     $StorageAccountServiceConnectionName = "$StorageAccountName-ServiceConnection"
     $StorageAccountDnsZoneGroupName = "$StorageAccountName-DnsZoneGroup"
-    $StorageAccountPrivateDnsZoneLinkName = "$StorageAccountName-PrivateDnsZoneLink"
     $StorageAccountPrivateDnsZoneName = "privatelink.blob.core.windows.net"
     $StorageAccountPrivateDnsZone = $RetrievedZones | Where-Object { $_.Name -eq $StorageAccountPrivateDnsZoneName }
     # check if storage account private endpoint created
