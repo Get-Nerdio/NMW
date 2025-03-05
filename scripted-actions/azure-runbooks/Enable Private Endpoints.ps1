@@ -307,7 +307,13 @@ if ($ExistingDNSZonesRG) {
     }
     # get DNS zones
     $RetrievedZones = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -ErrorAction Stop
-    if (Compare-Object $RetrievedZones.name -DifferenceObject $RequiredDnsZones) {
+    $MissingZones = @()
+    foreach ($ZoneName in $RetrievedZones.name) {
+        if ($ZoneName -notin $RequiredDnsZones) {
+            $MissingZones += $ZoneName
+        }
+    }
+    if ($MissingZones) {
         Write-Output "Unable to find one or more of the Private DNS zones in resource group $DnsRg. Required DNS zones for your configuration are: $RequiredDnsZones"
         Write-Error "Unable to find one or more of the Private DNS zones in resource group $DnsRg. Required DNS zones for your configuration are: $RequiredDnsZones"
         Throw "Unable to find one or more of the Private DNS zones in resource group $DnsRg. Required DNS zones for your configuration are: $RequiredDnsZones"
