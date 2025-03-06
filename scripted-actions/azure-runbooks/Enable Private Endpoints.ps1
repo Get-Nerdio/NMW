@@ -252,7 +252,7 @@ $ZoneLinkDict = @{
 
 $RequiredDnsZones = @('privatelink.vaultcore.azure.net', 'privatelink.database.windows.net', 'privatelink.azure-automation.net', 'privatelink.blob.core.windows.net', 'privatelink.azurewebsites.net')
 if ($MakeAzureMonitorPrivate -eq 'True') {
-    $RequiredDnsZones += 'privatelink.monitor.azure.com', 'privatelink.oms.opinsights.azure.com', 'privatelink.ods.opinsights.azure.com', 'privatelink.agentsvc.azure-automation.net'
+    $RequiredDnsZones += @('privatelink.monitor.azure.com', 'privatelink.oms.opinsights.azure.com', 'privatelink.ods.opinsights.azure.com', 'privatelink.agentsvc.azure-automation.net')
 }
 
 # Check if the web app has been restarted recently and if the script has been run before
@@ -308,15 +308,15 @@ if ($ExistingDNSZonesRG) {
     # get DNS zones
     $RetrievedZones = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -ErrorAction Stop
     $MissingZones = @()
-    foreach ($ZoneName in $RetrievedZones.name) {
-        if ($ZoneName -notin $RequiredDnsZones) {
+    foreach ($ZoneName in $RequiredDnsZones) {
+        if ($ZoneName -notin $RetrievedZones.name) {
             $MissingZones += $ZoneName
         }
     }
     if ($MissingZones) {
-        Write-Output "Unable to find one or more of the Private DNS zones in resource group $DnsRg. Required DNS zones for your configuration are: $RequiredDnsZones"
-        Write-Error "Unable to find one or more of the Private DNS zones in resource group $DnsRg. Required DNS zones for your configuration are: $RequiredDnsZones"
-        Throw "Unable to find one or more of the Private DNS zones in resource group $DnsRg. Required DNS zones for your configuration are: $RequiredDnsZones"
+        Write-Output "Unable to find the following zones in resource group $dnsrg`:`r`n$($MissingZones -join "`r`n")"
+        Write-Error "Unable to find the following zones in resource group $dnsrg`:`r`n$($MissingZones -join "`r`n")"
+        Throw "Unable to find the following zones in resource group $dnsrg`:`r`n$($MissingZones -join "`r`n")"
     }
     Write-Output "Found existing DNS zones in resource group $DnsRg"
     if ($existingDNSZonesSubId) {
@@ -329,6 +329,8 @@ else {
     # get DNS zones
     $RetrievedZones = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -ErrorAction SilentlyContinue
 }
+
+$StorageDnsZone = $RetrievedZones | Where-Object name -eq privatelink.blob.core.windows.net
 
 #### main script ####
 
@@ -385,14 +387,14 @@ foreach ($PrivateDnsZone in $RequiredDnsZones){
         }
         else {
             Write-Output "Linking Private DNS Zone for $PrivateDnsZone to vnet"
-            $ZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $PrivateDnsZone -Name $ZoneLinkDict[$PrivateDnsZone] -VirtualNetworkId $vnet.Id
+            $ZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $PrivateDnsZone -Name $ZoneLinkDict[$PrivateDnsZone] -VirtualNetworkId $vnet.Id -ResolutionPolicy 'NxDomainRedirect'
         }
     }
     else {
         Write-Output "Creating Private DNS Zones and VNet link for $PrivateDnsZone"
         # this will only happen if using the nme resource group for dns zones. We will not create DNS zones in other resource groups/subscriptions
         $Zone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name $PrivateDnsZone
-        $ZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $PrivateDnsZone -Name $ZoneLinkDict[$PrivateDnsZone] -VirtualNetworkId $vnet.Id
+        $ZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $PrivateDnsZone -Name $ZoneLinkDict[$PrivateDnsZone] -VirtualNetworkId $vnet.Id -ResolutionPolicy 'NxDomainRedirect'
     }
 }
 
