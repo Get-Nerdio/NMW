@@ -124,6 +124,8 @@ function Set-NmeVars {
             write-verbose "Getting CCL Storage Account"
             $script:NmeCclStorageAccountName = $script:NmeCclStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'} | Select-Object -ExpandProperty StorageAccountName
         }
+        Write-Verbose "Getting DPS Storage Account"
+        $script:NmeDpsStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.StorageAccountName -match "^dps" } | Select-Object -ExpandProperty StorageAccountName
     }
     Write-Verbose "Getting Nerdio Manager web app"
     $webapps = Get-AzWebApp -ResourceGroupName $NmeRg 
@@ -147,11 +149,6 @@ function Set-NmeVars {
     $script:NmeAutomationAccountName = ($NmeWebApp.siteconfig.appsettings | Where-Object name -eq 'Deployment:AutomationAccountName').value
     $script:NmeScriptedActionsAccountName = (($NmeWebApp.siteconfig.appsettings | Where-Object name -eq 'Deployment:ScriptedActionAccount').value).Split("/")[-1]
     $script:NmeRegion = $NmeKeyVault.Location
-    Write-Verbose "Getting CSSA Storage Account"
-    $script:NmeCssaStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object {$_.tags["$NmeTagPrefix`_OBJECT_TYPE"] -EQ 'CUSTOM_SCRIPTS_STORAGE_ACCOUNT'} | Select-Object -ExpandProperty StorageAccountName
-    Write-Verbose "Getting DPS Storage Account"
-    $script:NmeDpsStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.StorageAccountName -match "^dps" } | Select-Object -ExpandProperty StorageAccountName
-
     Write-Verbose "Getting Nerdio Manager sql server"
     $SqlServer = Get-AzSqlServer -ResourceGroupName $nmerg | ? ServerName -NotMatch '-secondary'
     if ($SqlServer.count -ne 1) {
@@ -237,23 +234,6 @@ $AppServiceZoneLinkName = "$Prefix-app-appservice-privatelink"
 $FileStoragePrivateDnsZoneLinkName = "$Prefix-filestorage-privatelink"
 $BlobStoragePrivateDnsZoneLinkName = "$Prefix-blobstorage-privatelink"
 
-$ZoneLinkDict = @{
-    'privatelink.vaultcore.azure.net' = $KeyVaultZoneLinkName
-    'privatelink.database.windows.net' = $SqlZoneLinkName
-    'privatelink.blob.core.windows.net' = $BlobZoneLinkName
-    'privatelink.azure-automation.net' = $AutomationZoneLinkName
-    'privatelink.monitor.azure.com' = $MonitorZoneLinkName
-    'privatelink.oms.opinsights.azure.com' = $OpsZoneLinkName
-    'privatelink.ods.opinsights.azure.com' = $OdsZoneLinkName
-    'privatelink.agentsvc.azure-automation.net' = $MonitorAgentZoneLinkName
-    'privatelink.azurewebsites.net' = $AppServiceZoneLinkName
-    'privatelink.file.core.windows.net' = $FileStoragePrivateDnsZoneLinkName
-}
-
-$RequiredDnsZones = @('privatelink.vaultcore.azure.net', 'privatelink.database.windows.net', 'privatelink.azure-automation.net', 'privatelink.blob.core.windows.net', 'privatelink.azurewebsites.net')
-if ($MakeAzureMonitorPrivate -eq 'True') {
-    $RequiredDnsZones += @('privatelink.monitor.azure.com', 'privatelink.oms.opinsights.azure.com', 'privatelink.ods.opinsights.azure.com', 'privatelink.agentsvc.azure-automation.net')
-}
 
 # Check if the web app has been restarted recently and if the script has been run before
 Function Check-LastRunResults {
@@ -290,7 +270,6 @@ Function Check-LastRunResults {
     
 Check-LastRunResults
 
-# get list of vnet ids from PeerVnetIds parameter
 if ($PeerVnetIds -eq 'All') {
     $VnetIds = Get-AzVirtualNetwork | ? {if ($_.tag){$True}}| Where-Object {$_.tag["$Prefix`_OBJECT_TYPE"] -eq 'LINKED_NETWORK'} -ErrorAction SilentlyContinue | Where-Object id -ne $vnet.id | Select-Object -ExpandProperty Id
 }
@@ -305,44 +284,53 @@ if ($ExistingDNSZonesRG) {
         Write-Output "Setting context to subscription $existingDNSZonesSubId to retrieve existing DNS zones"
         $context = Set-AzContext -Subscription $existingDNSZonesSubId
     }
+    try {
     # get DNS zones
-    $RetrievedZones = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -ErrorAction Stop
-    $MissingZones = @()
-    foreach ($ZoneName in $RequiredDnsZones) {
-        if ($ZoneName -notin $RetrievedZones.name) {
-            $MissingZones += $ZoneName
+        $RequiredDnsZones = @('privatelink.vaultcore.azure.net', 'privatelink.database.windows.net', 'privatelink.azure-automation.net', 'privatelink.blob.core.windows.net', 'privatelink.azurewebsites.net')
+        $KeyVaultDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.vaultcore.azure.net -ErrorAction Stop
+        $SqlDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.database.windows.net -ErrorAction Stop
+        $AutomationDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.azure-automation.net -ErrorAction Stop
+        $StorageDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.blob.core.windows.net -ErrorAction Stop
+        if ($MakeAzureMonitorPrivate -eq 'True') {
+            $RequiredDnsZones += 'privatelink.monitor.azure.com', 'privatelink.oms.opinsights.azure.com', 'privatelink.ods.opinsights.azure.com', 'privatelink.agentsvc.azure-automation.net'
+            $MonitorDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.monitor.azure.com -ErrorAction Stop
+            $OpsDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.oms.opinsights.azure.com -ErrorAction Stop
+            $OdsDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.ods.opinsights.azure.com -ErrorAction Stop
+            $MonitorAgentDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.agentsvc.azure-automation.net -ErrorAction Stop
         }
+        $AppServiceDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.azurewebsites.net -ErrorAction Stop
+        Write-Output "Found existing DNS zones in resource group $DnsRg"
     }
-    if ($MissingZones) {
-        Write-Output "Unable to find the following zones in resource group $dnsrg`:`r`n$($MissingZones -join "`r`n")"
-        Write-Error "Unable to find the following zones in resource group $dnsrg`:`r`n$($MissingZones -join "`r`n")"
-        Throw "Unable to find the following zones in resource group $dnsrg`:`r`n$($MissingZones -join "`r`n")"
+    catch {
+        Write-Output "Unable to find one or more of the DNS zones in resource group $DnsRg. Required DNS zones for your configuration are: $RequiredDnsZones"
+        Write-Error "Unable to find one or more of the DNS zones in resource group $DnsRg. Required DNS zones for your configuration are: $RequiredDnsZones"
+        Throw $_
     }
-    Write-Output "Found existing DNS zones in resource group $DnsRg"
     if ($existingDNSZonesSubId) {
         Write-Output "Setting context to subscription $NmeSubscriptionId"
         $context = Set-AzContext -Subscription $NmeSubscriptionId
     }
+
 }
 else {
     $DnsRg = $NmeRg
     # get DNS zones
-    $RetrievedZones = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -ErrorAction SilentlyContinue
+    $KeyVaultDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.vaultcore.azure.net -ErrorAction SilentlyContinue
+    $SqlDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.database.windows.net -ErrorAction SilentlyContinue
+    $AutomationDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.azure-automation.net -ErrorAction SilentlyContinue
+    $StorageDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.blob.core.windows.net -ErrorAction SilentlyContinue
+    $MonitorDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.monitor.azure.com -ErrorAction SilentlyContinue
+    $OpsDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.oms.opinsights.azure.com -ErrorAction SilentlyContinue
+    $OdsDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.ods.opinsights.azure.com -ErrorAction SilentlyContinue
+    $MonitorAgentDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.agentsvc.azure-automation.net -ErrorAction SilentlyContinue
+    $AppServiceDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.azurewebsites.net -ErrorAction SilentlyContinue
 }
-
-$StorageDnsZone = $RetrievedZones | Where-Object name -eq privatelink.blob.core.windows.net
-$KeyVaultDnsZone = $RetrievedZones | Where-Object name -eq privatelink.vaultcore.azure.net
-$AppServiceDnsZone = $RetrievedZones | Where-Object name -eq privatelink.azurewebsites.net
-$SqlDnsZone = $RetrievedZones | Where-Object name -eq privatelink.database.windows.net
-$AutomationDnsZone = $RetrievedZones | Where-Object name -eq privatelink.azure-automation.net
-$MonitorDnsZone = $RetrievedZones | Where-Object name -eq privatelink.monitor.azure.com
-$OpsDnsZone = $RetrievedZones | Where-Object name -eq privatelink.oms.opinsights.azure.com
-$OdsDnsZone = $RetrievedZones | Where-Object name -eq privatelink.ods.opinsights.azure.com
-$MonitorAgentDnsZone = $RetrievedZones | Where-Object name -eq privatelink.agentsvc.azure-automation.net
 
 
 
 #### main script ####
+
+
 
 # Check if vnet created
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue
@@ -381,30 +369,175 @@ if ($VNet) {
     $VNet = New-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NmeRg -Location $NmeRegion -AddressPrefix $VnetAddressRange -Subnet $PrivateEndpointSubnet,$AppServiceSubnet
 }
 
-# region create DNS zones (if not present) and link them to vnet. Will only create zones in the nme rg
+#region create DNS zones and links
 # Create and link private dns zone for key vault
 if ($existingDNSZonesSubId) {
     Write-Output "Setting context to subscription $existingDNSZonesSubId to create network links in DNS zones"
     $context = Set-AzContext -Subscription $existingDNSZonesSubId
 }
+if ($KeyVaultDnsZone) { 
+    Write-Output "Found Private DNS Zone for Key Vault"
+    #check for linked zone
+    $KeyVaultZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.vaultcore.azure.net -ErrorAction SilentlyContinue
+    if ($KeyVaultZoneLink.VirtualNetworkId -contains $vnet.id) {
+        Write-Output "Private DNS Zone for Key Vault already linked to vnet"
+    }
+    else {
+        Write-Output "Linking Private DNS Zone for Key Vault to vnet"
+        $KeyVaultZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.vaultcore.azure.net -Name $KeyVaultZoneLinkName -VirtualNetworkId $vnet.Id
+    }
+}
+else {
+    Write-Output "Creating Private DNS Zones and VNet link for Key Vault"
+    $KeyVaultDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name privatelink.vaultcore.azure.net
+    $KeyVaultZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName privatelink.vaultcore.azure.net -Name $KeyVaultZoneLinkName -VirtualNetworkId $vnet.Id
+}
 
-foreach ($PrivateDnsZone in $RequiredDnsZones){
-    $Zone = $RetrievedZones | Where-Object { $_.Name -eq $PrivateDnsZone }
-    if ($zone ){Write-Output "Found Private DNS Zone for $PrivateDnsZone"
-        $ZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $PrivateDnsZone -ErrorAction SilentlyContinue
-        if ($ZoneLink.VirtualNetworkId -contains $vnet.id) {
-            Write-Output "Private DNS Zone for $PrivateDnsZone already linked to vnet"
+# Create and link private dns zone for sql 
+if ($SqlDnsZone) {
+    Write-Output "Found Private DNS Zone for SQL"
+    # check for linked zone
+    $SqlZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.database.windows.net -ErrorAction SilentlyContinue
+    if ($SqlZoneLink.VirtualNetworkId -contains $vnet.id) {
+        Write-Output "Private DNS Zone for SQL already linked to vnet"
+    }
+    else {
+        Write-Output "Linking Private DNS Zone for SQL to vnet"
+        $SqlZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.database.windows.net -Name $SqlZoneLinkName -VirtualNetworkId $vnet.Id
+    }
+}
+else {
+    Write-Output "Creating Private DNS Zones and VNet link for SQL"
+    $SqlDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name privatelink.database.windows.net
+    $SqlZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName privatelink.database.windows.net -Name $SqlZoneLinkName -VirtualNetworkId $vnet.Id
+}
+
+if ($StorageDnsZone) {
+    Write-Output "Found Private DNS Zone for Storage"
+    # check for linked zone
+    $StorageZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.blob.core.windows.net -ErrorAction SilentlyContinue
+    if ($StorageZoneLink.VirtualNetworkId -contains $vnet.id) {
+        Write-Output "Private DNS Zone for Storage already linked to vnet"
+    }
+    else {
+        Write-Output "Linking Private DNS Zone for Storage to vnet"
+        $StorageZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.blob.core.windows.net -Name $blobzonelinkname -VirtualNetworkId $vnet.Id
+    }
+}
+else {
+    Write-Output "Creating Private DNS Zones and VNet link for Storage"
+    $StorageDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name privatelink.blob.core.windows.net
+    $StorageZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName privatelink.blob.core.windows.net -Name $blobzonelinkname -VirtualNetworkId $vnet.Id
+}
+
+# Create and link private dns zone for automation account
+if ($AutomationDnsZone) {
+    Write-Output "Found Private DNS Zone for Automation"
+    # check for linked zone
+    $AutomationZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.azure-automation.net -ErrorAction SilentlyContinue
+    if ($AutomationZoneLink.VirtualNetworkId -contains $vnet.id) {
+        Write-Output "Private DNS Zone for Automation already linked to vnet"
+    }
+    else {
+        Write-Output "Linking Private DNS Zone for Automation to VNet"
+        $AutomationZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.azure-automation.net -Name $automationzonelinkname -VirtualNetworkId $vnet.Id
+    }
+}
+else {
+    Write-Output "Creating Private DNS Zones and VNet link for Automation"
+    $AutomationDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name privatelink.azure-automation.net
+    $AutomationZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName privatelink.azure-automation.net -Name $automationzonelinkname -VirtualNetworkId $vnet.Id
+}
+
+
+# Create and link private dns zone for app service
+if ($AppServiceDnsZone) {
+    Write-Output "Found Private DNS Zone for App Service"
+    # check for linked zone
+    $AppServiceZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.azurewebsites.net -ErrorAction SilentlyContinue
+    if ($AppServiceZoneLink.VirtualNetworkId -contains $vnet.id) {
+        Write-Output "Private DNS Zone for App Service already linked to vnet"
+    }
+    else {
+        Write-Output "Linking Private DNS Zone for App Service to vnet"
+        $AppServiceZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.azurewebsites.net -Name $AppServiceZoneLinkName -VirtualNetworkId $vnet.Id
+    }
+}
+else {
+    Write-Output "Creating Private DNS Zones for App Service"
+    $AppServiceDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name privatelink.azurewebsites.net
+    $AppServiceZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName privatelink.azurewebsites.net -Name $AppServiceZoneLinkName -VirtualNetworkId $vnet.Id
+}
+
+if ($MakeAzureMonitorPrivate -eq 'True') {
+    # Create and link private dns zone for monitor, ops, oms, and monitor agent
+    if ($MonitorDnsZone) {
+        Write-Output "Found Private DNS Zone for Monitor "
+        # check for linked zone
+        $MonitorZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.monitor.azure.com -ErrorAction SilentlyContinue
+        if ($MonitorZoneLink.VirtualNetworkId -contains $vnet.id) {
+            Write-Output "Private DNS Zone for Monitor already linked to vnet"
         }
         else {
-            Write-Output "Linking Private DNS Zone for $PrivateDnsZone to vnet"
-            $ZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $PrivateDnsZone -Name $ZoneLinkDict[$PrivateDnsZone] -VirtualNetworkId $vnet.Id # -ResolutionPolicy 'NxDomainRedirect' (add when default Automation Account Az.PrivateDns module version supports)
+            Write-Output "Linking Private DNS Zone for Monitor to vnet"
+            $MonitorZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.monitor.azure.com -Name $MonitorZoneLinkName -VirtualNetworkId $vnet.Id
         }
     }
     else {
-        Write-Output "Creating Private DNS Zones and VNet link for $PrivateDnsZone"
-        # this will only happen if using the nme resource group for dns zones. We will not create DNS zones in other resource groups/subscriptions
-        $Zone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name $PrivateDnsZone
-        $ZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $PrivateDnsZone -Name $ZoneLinkDict[$PrivateDnsZone] -VirtualNetworkId $vnet.Id #-ResolutionPolicy 'NxDomainRedirect'
+        Write-Output "Creating Private DNS Zones for Monitor"
+        $MonitorDnsZone = New-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name privatelink.monitor.azure.com
+        $MonitorZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.monitor.azure.com -Name $MonitorZoneLinkName -VirtualNetworkId $vnet.Id
+    }
+    if ($OpsDnsZone) {
+        Write-Output "Found Private DNS Zone for Ops"
+        # check for linked zone
+        $OpsZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.oms.opinsights.azure.com -ErrorAction SilentlyContinue
+        if ($OpsZoneLink.VirtualNetworkId -contains $vnet.id) {
+            Write-Output "Private DNS Zone for Ops already linked to vnet"
+        }
+        else {
+            Write-Output "Linking Private DNS Zone for Ops to vnet"
+            $OpsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.oms.opinsights.azure.com -Name $OpsZoneLinkName -VirtualNetworkId $vnet.Id
+        }
+    }
+    else {
+        Write-Output "Creating Private DNS Zones for Ops"
+        $OpsDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name privatelink.oms.opinsights.azure.com
+        $OpsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName privatelink.oms.opinsights.azure.com -Name $OpsZoneLinkName -VirtualNetworkId $vnet.Id
+    }
+    if ($OdsDnsZone) {
+        Write-Output "Found Private DNS Zone for ODS"
+        # check for linked zone
+        $OdsZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.ods.opinsights.azure.com -ErrorAction SilentlyContinue
+        if ($OdsZoneLink.VirtualNetworkId -contains $vnet.id) {
+            Write-Output "Private DNS Zone for ODS already linked to vnet"
+        }
+        else {
+            Write-Output "Linking Private DNS Zone for ODS to vnet"
+            $OdsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.ods.opinsights.azure.com -Name $OdsZoneLinkName -VirtualNetworkId $vnet.Id
+        }
+    }
+    else {
+        Write-Output "Creating Private DNS Zones for ODS"
+        $OdsDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name privatelink.ods.opinsights.azure.com
+        $OdsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName privatelink.ods.opinsights.azure.com -Name $OdsZoneLinkName -VirtualNetworkId $vnet.Id
+    }
+    if ($MonitorAgentDnsZone) {
+        Write-Output "Found Private DNS Zone for Monitor Agent"
+        # check for linked zone
+        $MonitorAgentZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.agentsvc.azure-automation.net -ErrorAction SilentlyContinue
+        if ($MonitorAgentZoneLink.VirtualNetworkId -contains $vnet.id) {
+            Write-Output "Private DNS Zone for Monitor Agent already linked to vnet"
+        }
+        else {
+            Write-Output "Linking Private DNS Zone for Monitor Agent to vnet"
+            $MonitorAgentZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.agentsvc.azure-automation.net -Name $MonitorAgentZoneLinkName -VirtualNetworkId $vnet.Id
+        }
+    }
+    else {
+        Write-Output "Creating Private DNS Zones for Monitor Agent"
+        $MonitorAgentDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name privatelink.agentsvc.azure-automation.net
+        $MonitorAgentZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName privatelink.agentsvc.azure-automation.net -Name $MonitorAgentZoneLinkName -VirtualNetworkId $vnet.Id
     }
 }
 
@@ -413,9 +546,10 @@ if ($PeerVnetIds) {
     $MissingLinks = $VnetIds | Where-Object { $BlobStoragePrivateDnsZoneLink.VirtualNetworkId -notcontains $_ }
     if ($MissingLinks) {
         Write-Output "Linking Private DNS Zone for Blob Storage to peer vnets"
+        $i = 0
         foreach ($vnetId in $MissingLinks) {
-            $VNetName = $vnetid -split '/' | Select-Object -Last 1
-            $BlobStoragePrivateDnsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.blob.core.windows.net -Name ($BlobStoragePrivateDnsZoneLinkName + '-' + $VNetName) -VirtualNetworkId $vnetId
+            $BlobStoragePrivateDnsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName privatelink.blob.core.windows.net -Name ($BlobStoragePrivateDnsZoneLinkName + $i) -VirtualNetworkId $vnetId
+            $i ++   
         }
     }
     if ($MakeAppServicePrivate -eq 'true'){
@@ -437,6 +571,8 @@ if ($existingDNSZonesSubId) {
     $context = Set-AzContext -Subscription $NmeSubscriptionId
 }
 #endregion
+
+
 
 #region create private endpoints
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue
@@ -537,7 +673,7 @@ if ($AutomationDnsZoneGroup) {
 }
 
 
-# scripted action automation account
+# Get scripted action automation account
 if ($NmeScriptedActionsAccountName) {
     # check if scripted action automation account private endpoint is created
     $ScriptedActionsPrivateEndpoint = Get-AzPrivateEndpoint -Name $ScriptedActionsPrivateEndpointName -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
@@ -562,7 +698,7 @@ if ($NmeScriptedActionsAccountName) {
 
     if ($MakeSaStoragePrivate -eq 'True') {
         # Get scripted actions storage account
-        $ScriptedActionsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeCssaStorageAccountName
+        $ScriptedActionsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg | Where-Object StorageAccountName -Match 'cssa'
         # check if scripted action storage account private endpoint is created
         $ScriptedActionsStoragePrivateEndpoint = Get-AzPrivateEndpoint -Name "$ScriptedActionsStoragePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
         if ($ScriptedActionsStoragePrivateEndpoint) {
@@ -587,7 +723,6 @@ if ($NmeScriptedActionsAccountName) {
     }
 }
 
-# CCL Storage Account
 if ($NmeCclStorageAccountName) {
     # Get ccl storage account
     $NmeCclStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeCclStorageAccountName
@@ -614,7 +749,6 @@ if ($NmeCclStorageAccountName) {
 
 }
 
-# DPS Storage Account
 if ($NmeDpsStorageAccountName) {
     # Get dps storage account
     $NmeDpsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeDpsStorageAccountName
@@ -644,38 +778,7 @@ else {
     Write-Warning "Unable to find DPS storage account. Skipping private endpoint creation. You will need to manually create the private endpoint for the storage account."
 }
 
-# other storage accounts
-$StorageAccounts = Get-AzStorageAccount -ResourceGroupName $NmeRg | Where-Object {$_.tags["$Prefix`_OBJECT_TYPE"] -eq 'STORAGE_ACCOUNT'}
-foreach ($StorageAccount in $StorageAccounts) {
-    $StorageAccountName = $StorageAccount.StorageAccountName
-    $StorageAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Storage/storageAccounts/$StorageAccountName"
-    $StorageAccountPrivateEndpointName = "$StorageAccountName-PrivateEndpoint"
-    $StorageAccountServiceConnectionName = "$StorageAccountName-ServiceConnection"
-    $StorageAccountDnsZoneGroupName = "$StorageAccountName-DnsZoneGroup"
-    $StorageAccountPrivateDnsZoneName = "privatelink.blob.core.windows.net"
-    $StorageAccountPrivateDnsZone = $RetrievedZones | Where-Object { $_.Name -eq $StorageAccountPrivateDnsZoneName }
-    # check if storage account private endpoint created
-    $StorageAccountPrivateEndpoint = Get-AzPrivateEndpoint -Name "$StorageAccountPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
-    if ($StorageAccountPrivateEndpoint) {
-        Write-Output "Found $StorageAccountName storage private endpoint"
-    } 
-    else {
-        Write-Output "Configuring $StorageAccountName storage service connection and private endpoint"
-        $StorageAccountServiceConnection = New-AzPrivateLinkServiceConnection -Name $StorageAccountServiceConnectionName -PrivateLinkServiceId $StorageAccountResourceId -GroupId blob 
-        $StorageAccountPrivateEndpoint = New-AzPrivateEndpoint -Name "$StorageAccountPrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $StorageAccountServiceConnection 
-    }
-    # check if storage account dns zone group created
-    $StorageAccountDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$StorageAccountPrivateEndpointName" -ErrorAction SilentlyContinue
-    if ($StorageAccountDnsZoneGroup) {
-        Write-Output "Found $StorageAccountName storage DNS zone group"
-    } else {
-        Write-Output "Configuring $StorageAccountName storage DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.blob.core.windows.net -PrivateDnsZoneId $StorageAccountPrivateDnsZone.ResourceId
-        $StorageAccountDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$StorageAccountPrivateEndpointName" -Name $StorageAccountDnsZoneGroupName -PrivateDnsZoneConfig $config
-    }
-}
 
-# App service
 $AppService = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
 # check if app service private endpoint is created
 $AppServicePrivateEndpoint = Get-AzPrivateEndpoint -Name "$AppServicePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
@@ -687,7 +790,7 @@ else {
     $AppServiceResourceId = $AppService.id
     $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
     $AppServiceServiceConnection = New-AzPrivateLinkServiceConnection -Name $AppServiceServiceConnectionName -PrivateLinkServiceId $AppServiceResourceId -GroupId sites 
-    $AppServicePrivateEndpoint = New-AzPrivateEndpoint -Name "$AppServicePrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $AppServiceServiceConnection  
+    $AppServicePrivateEndpoint = New-AzPrivateEndpoint -Name "$AppServicePrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $AppServiceServiceConnection 
 }
 # check if app service dns zone group created
 $AppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AppServicePrivateEndpointName" -ErrorAction SilentlyContinue
@@ -699,7 +802,7 @@ if ($AppServiceDnsZoneGroup) {
     $AppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AppServicePrivateEndpointName" -Name $AppServicePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
 }
 
-# CCL App Service
+
 if ($NmeCclWebAppName) {
     $CclAppService = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeCclWebAppName
     # check if ccl app service private endpoint is created
@@ -1164,6 +1267,12 @@ if ($MakeSaStoragePrivate -eq 'True') {
 if ($PeerVnetIds) {
     Write-Output "Peering vnets" 
     $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
+    if ($PeerVnetIds -eq 'All') {
+        $VnetIds = Get-AzVirtualNetwork | ? {if ($_.tag){$True}}| Where-Object {$_.tag["$Prefix`_OBJECT_TYPE"] -eq 'LINKED_NETWORK'} -ErrorAction SilentlyContinue | Where-Object id -ne $vnet.id | Select-Object -ExpandProperty Id
+    }
+    else {
+        $VnetIds = $PeerVnetIds -split ','
+    }
     foreach ($id in $VnetIds) {
         Write-Output "Peering with vnet $id"
         $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue 
@@ -1199,7 +1308,11 @@ $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName
 $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
 $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
 
-$ServiceEndpoints = @('Microsoft.KeyVault', 'Microsoft.Sql', 'Microsoft.Web', 'Microsoft.Storage')
+$ServiceEndpoints = @('Microsoft.KeyVault', 'Microsoft.Sql', 'Microsoft.Web')
+if ($MakeSaStoragePrivate -eq 'True') {
+    $ServiceEndpoints += 'Microsoft.Storage'
+}
+
 
 if ($privateendpointsubnet.ServiceEndpoints.service){
     if (!(Compare-Object $privateendpointsubnet.ServiceEndpoints.service -DifferenceObject $serviceEndpoints -ErrorAction SilentlyContinue)) {
@@ -1278,7 +1391,7 @@ if ($AppServiceSubnet.PrivateEndpointNetworkPolicies -eq 'Enabled') {
 
 # region make resources private
 
-Write-Output "Check network deny rules for key vaults"
+Write-Output "Check network deny rules for key vault and sql"
 $NmeKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -VaultName $KeyVaultName
 # check if deny rule for key vault exists
 if (($NmeKeyVault.NetworkAcls.DefaultAction -eq 'Deny') -and ($NmeKeyVault.PublicNetworkAccess -eq 'Disabled')) {
@@ -1307,7 +1420,6 @@ if ($NmeCclKeyVaultName) {
 }
 
 # check if deny rule for sql exists
-Write-Output "Check network deny rules for SQL server"
 $SqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeSqlServerName
 $ServerRules = Get-AzSqlServerVirtualNetworkRule -ServerName $NmeSqlServerName -ResourceGroupName $NmeRg 
 if (($ServerRules.VirtualNetworkSubnetId -contains $PrivateEndpointSubnet.id) -and ($SqlServer.PublicNetworkAccess -eq 'Disabled')) {
