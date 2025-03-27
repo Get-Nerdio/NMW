@@ -984,7 +984,7 @@ function New-NmeHybridWorkerVm {
     $azureVmSkus = "2022-datacenter"
     $LicenseType = 'Windows_Client'
 
-    $Vnet = Get-AzVirtualNetwork -Name $VnetName -ResourceGroupName $ResourceGroupName
+    $Vnet = Get-AzVirtualNetwork -Name $VnetName 
 
     $azureLocation = $Vnet.Location
 
