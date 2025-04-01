@@ -88,7 +88,7 @@ Invoke-WebRequest -Uri $DLink -OutFile "C:\Windows\Temp\msteams_sa\install\teams
  
 # use installer to install Machine-Wide
 Write-Host "INFO: Installing MS Teams"
-Start-Process C:\Windows\Temp\msteams_sa\install\teamsbootstrapper.exe -ArgumentList '-p'
+Start-Process C:\Windows\Temp\msteams_sa\install\teamsbootstrapper.exe -ArgumentList '-p' -Wait 2>&1
  
 # use MS shortcut to WebRTC install
 $dlink2 = "https://aka.ms/msrdcwebrtcsvc/msi"
@@ -107,7 +107,7 @@ Write-Host "INFO: All Commands Executed; script is now finished. Allow 5 minutes
 $TeamsVersion = (Get-AppxPackage -Name MSTeams).Version
 $TMAPath = "{0}\WINDOWSAPPS\MSTEAMS_{1}_X64__8WEKYB3D8BBWE\MICROSOFTTEAMSMEETINGADDININSTALLER.MSI" -f $env:programfiles,$TeamsVersion
 $TMAVersion = (Get-AppLockerFileInformation -Path $TMAPath | Select-Object -ExpandProperty Publisher).BinaryVersion
-$TargetDir = "{0}\Microsoft\TeamsMeetingAddin\{1}\" -f ${env:ProgramFiles(x86)},$TMAVersion
+$TargetDir = "{0}\Microsoft\TeamsMeetingAdd-in\{1}\" -f ${env:ProgramFiles(x86)},$TMAVersion
 $params = '/i "{0}" TARGETDIR="{1}" /qn ALLUSERS=1' -f $TMAPath, $TargetDir
 Write-Host "INFO: Installing Teams Meeting add-in"
 Start-Process msiexec.exe -ArgumentList $params
