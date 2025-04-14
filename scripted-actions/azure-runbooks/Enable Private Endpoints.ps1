@@ -124,8 +124,11 @@ function Set-NmeVars {
             write-verbose "Getting CCL Storage Account"
             $script:NmeCclStorageAccountName = $script:NmeCclStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'} | Select-Object -ExpandProperty StorageAccountName
         }
-        Write-Verbose "Getting DPS Storage Account"
-        $script:NmeDpsStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.StorageAccountName -match "^dps" } | Select-Object -ExpandProperty StorageAccountName
+    }
+    Write-Verbose "Getting DPS Storage Account"
+    $script:NmeDpsStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.StorageAccountName -match "^dps" } | Select-Object -ExpandProperty StorageAccountName
+    if ($script:NmeDpsStorageAccountName.count -ne 1) {
+        Write-Error "Unable to find DPS storage account"
     }
     Write-Verbose "Getting Nerdio Manager web app"
     $webapps = Get-AzWebApp -ResourceGroupName $NmeRg 
@@ -150,7 +153,12 @@ function Set-NmeVars {
     $script:NmeScriptedActionsAccountName = (($NmeWebApp.siteconfig.appsettings | Where-Object name -eq 'Deployment:ScriptedActionAccount').value).Split("/")[-1]
     $script:NmeRegion = $NmeKeyVault.Location
     Write-Verbose "Getting Nerdio Manager sql server"
-    $SqlServer = Get-AzSqlServer -ResourceGroupName $nmerg | ? ServerName -NotMatch '-secondary' | Where-Object {$_.tags[$key] -ne 'INTUNE_INSIGHTS_DEPLOYMENT_RESOURCE'}
+    if ($key){
+        $SqlServer = Get-AzSqlServer -ResourceGroupName $nmerg | ? ServerName -NotMatch '-secondary' | Where-Object {$_.tags[$key] -ne 'INTUNE_INSIGHTS_DEPLOYMENT_RESOURCE'}
+    }
+    else {
+        $SqlServer = Get-AzSqlServer -ResourceGroupName $nmerg | ? ServerName -NotMatch '-secondary'
+    }
     if ($SqlServer.count -ne 1) {
         Throw "Unable to find NME sql server"
     }
