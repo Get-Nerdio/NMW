@@ -242,6 +242,29 @@ $AppServiceZoneLinkName = "$Prefix-app-appservice-privatelink"
 $FileStoragePrivateDnsZoneLinkName = "$Prefix-filestorage-privatelink"
 $BlobStoragePrivateDnsZoneLinkName = "$Prefix-blobstorage-privatelink"
 
+# Define variables for all DNS zone names
+if ($NmeWebApp.DefaultHostName -match "azurewebsites.us") {
+    $KeyVaultDnsZoneName = "privatelink.vaultcore.usgovcloudapi.net"
+    $SqlDnsZoneName = "privatelink.database.usgovcloudapi.net"
+    $AutomationDnsZoneName = "privatelink.azure-automation.us"
+    $StorageDnsZoneName = "privatelink.blob.core.usgovcloudapi.net"
+    $AppServiceDnsZoneName = "privatelink.azurewebsites.us"
+    $MonitorDnsZoneName = "privatelink.monitor.azure.us"
+    $OpsDnsZoneName = "privatelink.oms.opinsights.azure.us"
+    $OdsDnsZoneName = "privatelink.ods.opinsights.azure.us"
+    $MonitorAgentDnsZoneName = "privatelink.agentsvc.azure-automation.us"
+} else {
+    $KeyVaultDnsZoneName = "privatelink.vaultcore.azure.net"
+    $SqlDnsZoneName = "privatelink.database.windows.net"
+    $AutomationDnsZoneName = "privatelink.azure-automation.net"
+    $StorageDnsZoneName = "privatelink.blob.core.windows.net"
+    $AppServiceDnsZoneName = "privatelink.azurewebsites.net"
+    $MonitorDnsZoneName = "privatelink.monitor.azure.com"
+    $OpsDnsZoneName = "privatelink.oms.opinsights.azure.com"
+    $OdsDnsZoneName = "privatelink.ods.opinsights.azure.com"
+    $MonitorAgentDnsZoneName = "privatelink.agentsvc.azure-automation.net"
+}
+
 
 # Check if the web app has been restarted recently and if the script has been run before
 Function Check-LastRunResults {
