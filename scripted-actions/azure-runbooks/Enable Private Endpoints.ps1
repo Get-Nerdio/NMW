@@ -1385,6 +1385,7 @@ else {
     Write-Output "Enabling app service VNet integration"
     $webApp.Properties.virtualNetworkSubnetId = $AppServiceSubnet.id
     $webApp.Properties.vnetRouteAllEnabled = 'true'
+    $webApp.Properties.publicNetworkAccess = "Enabled"
     $WebApp = $webApp | Set-AzResource -Force
 }
 
