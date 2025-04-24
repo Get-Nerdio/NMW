@@ -1353,12 +1353,13 @@ if ($privateendpointsubnet.ServiceEndpoints.service){
         Write-Output "Found service endpoints"
     } else {
         Write-Output "Adding service endpoints"
-        $Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
+        $VNet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Disabled | Set-AzVirtualNetwork
     }
 }
 else {
     Write-Output "Adding service endpoints"
-    $Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
+    $VNet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Disabled | Set-AzVirtualNetwork 
+
 }
 # enable network policy
 $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
@@ -1366,7 +1367,14 @@ if ($PrivateEndpointSubnet.PrivateEndpointNetworkPolicies -eq 'Enabled') {
     Write-Output "Network policies already enabled"
 } else {
     Write-Output "Enabling network policies"
-    $Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
+    try {
+        $Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
+    }
+    catch {
+        # sometimes can't enable network policies on subnet with private endpoints, e.g. in gov cloud
+        Write-Output "Enabling network policies failed, setting to disabled"
+        $Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnet.AddressPrefix -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Disabled | Set-AzVirtualNetwork 
+    }
 }
 
 
