@@ -226,6 +226,9 @@ $AppServicePrivateDnsZoneGroupName = "$Prefix-app-appservice-dnszonegroup"
 $CclKvDnsZoneGroupName = "$Prefix-ccl-kv-dnszonegroup"
 $CclStoragePrivateDnsZoneGroupName = "$Prefix-ccl-storage-dnszonegroup"
 $DpsStoragePrivateDnsZoneGroupName = "$Prefix-dps-storage-dnszonegroup"
+$IiKvDnsZoneGroupName = "$Prefix-ii-kv-dnszonegroup"
+$IiSqlDnsZoneGroupName = "$Prefix-ii-sql-dnszonegroup"
+$IiAppServiceDnsZoneGroupName = "$Prefix-ii-appservice-dnszonegroup"
 
 # define variables for private link service connection names
 $KvServiceConnectionName = "$Prefix-app-kv-serviceconnection"
@@ -683,7 +686,7 @@ if ($NmeCclKeyVaultName) {
 }
 
 # check if intune insights key vault exists
-if ($NmeIiSqlServerName) {
+if ($NmeIiKeyVaultName) {
     # get intune insights key vault
     $NmeIiKeyVault = Get-AzKeyVault -VaultName $NmeIiKeyVaultName
     # create if intune insights key vault private endpoint created
@@ -1520,10 +1523,10 @@ if ($NmeCclWebAppName) {
     }
 }
 
-# check if $NmeIiwWebAppName exists
+# check if $NmeIiWebAppName exists
 if ($NmeIiWebAppName) {
     $NmeIiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeIiWebAppName
-    $IiwWebApp = Get-AzResource -Id $NmeIiwWebApp.id 
+    $IiwWebApp = Get-AzResource -Id $NmeIiWebApp.id 
     # check if endpoint integration enabled
     if ($IiwWebApp.Properties.virtualNetworkSubnetId -eq $AppServiceSubnet.id) {
         Write-Output "Intune Insights App service VNet integration already enabled"
