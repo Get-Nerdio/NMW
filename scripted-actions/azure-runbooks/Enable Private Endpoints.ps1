@@ -103,7 +103,13 @@ function Set-NmeVars {
     $script:NmeRg = $NmeKeyVault.ResourceGroupName
     $keyvaultTags = $NmeKeyVault.Tags
     $key = $keyvaultTags.GetEnumerator() | Where-Object { $_.Value -eq "PAAS" } | Select-Object -ExpandProperty Name
-    Write-Verbose "got key $key"
+    if (!$Key) {
+        $ScriptedActionsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg | Where-Object StorageAccountName -Match 'cssa'
+        $key = $ScriptedActionsStorageAccount.Tags.GetEnumerator() | Where-Object { $_.Value -eq "CUSTOM_SCRIPTS_STORAGE_ACCOUNT" } | Select-Object -ExpandProperty Key
+    }
+    else {
+        $key = 'NMW'
+    }
     if ($key) {
         $cclwebapp = Get-AzWebApp -ResourceGroupName $NmeRg | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'}
         if ($cclwebapp) {
@@ -253,6 +259,7 @@ if ($NmeWebApp.DefaultHostName -match "azurewebsites.us") {
     $OpsDnsZoneName = "privatelink.oms.opinsights.azure.us"
     $OdsDnsZoneName = "privatelink.ods.opinsights.azure.us"
     $MonitorAgentDnsZoneName = "privatelink.agentsvc.azure-automation.us"
+    $AzureManagementApi = "management.usgovcloudapi.net"
 } else {
     $KeyVaultDnsZoneName = "privatelink.vaultcore.azure.net"
     $SqlDnsZoneName = "privatelink.database.windows.net"
@@ -263,6 +270,7 @@ if ($NmeWebApp.DefaultHostName -match "azurewebsites.us") {
     $OpsDnsZoneName = "privatelink.oms.opinsights.azure.com"
     $OdsDnsZoneName = "privatelink.ods.opinsights.azure.com"
     $MonitorAgentDnsZoneName = "privatelink.agentsvc.azure-automation.net"
+    $AzureManagementApi = 'management.azure.com'
 }
 
 
@@ -959,10 +967,10 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
         Write-Output "Configuring monitor DNS zone group"
         $Configs = @()
         # create private dns zone configs for monitor, ops, oms, and monitor agent
-        $Configs += New-AzPrivateDnsZoneConfig -Name privatelink.monitor.azure.com -PrivateDnsZoneId $MonitorDnsZone.ResourceId
-        $Configs += New-AzPrivateDnsZoneConfig -Name privatelink.oms.opinsights.azure.com -PrivateDnsZoneId $OpsDnsZone.ResourceId
-        $Configs += New-AzPrivateDnsZoneConfig -Name privatelink.ods.opinsights.azure.com -PrivateDnsZoneId $OdsDnsZone.ResourceId
-        $Configs += New-AzPrivateDnsZoneConfig -Name privatelink.agentsvc.azure-automation.net -PrivateDnsZoneId $MonitorAgentDnsZone.ResourceId
+        $Configs += New-AzPrivateDnsZoneConfig -Name $MonitorDnsZoneName -PrivateDnsZoneId $MonitorDnsZone.ResourceId
+        $Configs += New-AzPrivateDnsZoneConfig -Name $OpsDnsZoneName -PrivateDnsZoneId $OpsDnsZone.ResourceId
+        $Configs += New-AzPrivateDnsZoneConfig -Name $OdsDnsZoneName -PrivateDnsZoneId $OdsDnsZone.ResourceId
+        $Configs += New-AzPrivateDnsZoneConfig -Name $MonitorAgentDnsZoneName -PrivateDnsZoneId $MonitorAgentDnsZone.ResourceId
         $MonitorDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$MonitorPrivateEndpointName" -Name $MonitorPrivateDnsZoneGroupName -PrivateDnsZoneConfig $Configs
     }
 
@@ -1100,7 +1108,7 @@ function New-NmeHybridWorkerVm {
             'Authorization'='Bearer ' + $token.AccessToken
             }
             $Response = Invoke-WebRequest `
-                        -uri "https://$azureLocation.management.azure.com/subscriptions/$($context.subscription.id)/resourceGroups/$ResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)?api-version=2021-06-22" `
+                        -uri "https://$azureLocation.$AzureManagementApi/subscriptions/$($context.subscription.id)/resourceGroups/$ResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)?api-version=2021-06-22" `
                         -Headers $authHeader `
                         -UseBasicParsing
         
