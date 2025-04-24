@@ -130,6 +130,22 @@ function Set-NmeVars {
             write-verbose "Getting CCL Storage Account"
             $script:NmeCclStorageAccountName = $script:NmeCclStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'} | Select-Object -ExpandProperty StorageAccountName
         }
+        # get intune insights web app. tag value is INTUNE_INSIGHTS_DEPLOYMENT_RESOURCE
+        $iiwebapp = Get-AzWebApp -ResourceGroupName $NmeRg | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'INTUNE_INSIGHTS_DEPLOYMENT_RESOURCE'}
+        # make sure there's only one web app in $iiwebapp
+        if ($iiwebapp.count -gt 1) {
+            Throw "Found more than one Intune Insights web app. Please remove any Intune Insights web apps no longer in use."
+        }
+        if ($iiwebapp) {
+            # get key vault and sql server with tag INTUNE_INSIGHTS_DEPLOYMENT_RESOURCE
+            Write-Verbose "Found Intune Insights web app"
+            $script:NmeIiWebAppName = $iiwebapp.Name
+            Write-Verbose "Getting Intune Insights Key Vault"
+            $script:NmeIiKeyVaultName = Get-AzKeyVault -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'INTUNE_INSIGHTS_DEPLOYMENT_RESOURCE'} | Select-Object -ExpandProperty VaultName
+            Write-Verbose "Getting Intune Insights Sql Server"
+            $script:NmeIiSqlServerName = Get-AzSqlServer -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'INTUNE_INSIGHTS_DEPLOYMENT_RESOURCE'} | Select-Object -ExpandProperty ServerName
+        }
+
     }
     Write-Verbose "Getting DPS Storage Account"
     $script:NmeDpsStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.StorageAccountName -match "^dps" } | Select-Object -ExpandProperty StorageAccountName
@@ -195,6 +211,9 @@ $CclKvPrivateEndpointName = "$Prefix-ccl-kv-privateendpoint"
 $CclAppServicePrivateEndpointName = "$Prefix-ccl-appservice-privateendpoint"
 $CclStoragePrivateEndpointName = "$Prefix-ccl-storage-privateendpoint"
 $DpsStoragePrivateEndpointName = "$Prefix-dps-storage-privateendpoint"
+$IiKvPrivateEndpointName = "$Prefix-ii-kv-privateendpoint"
+$IiAppServicePrivateEndpointName = "$Prefix-ii-appservice-privateendpoint"
+$IiSqlPrivateEndpointName = "$Prefix-ii-sql-privateendpoint"
 
 # define variables for DNS zone group names 
 $KvDnsZoneGroupName = "$Prefix-app-kv-dnszonegroup"
@@ -220,6 +239,9 @@ $CclKvServiceConnectionName = "$Prefix-ccl-kv-serviceconnection"
 $CclAppServiceServiceConnectionName = "$Prefix-ccl-appservice-serviceconnection"
 $CclStorageServiceConnectionName = "$Prefix-ccl-storage-serviceconnection"
 $DpsStorageServiceConnectionName = "$Prefix-dps-storage-serviceconnection"
+$IiKvServiceConnectionName = "$Prefix-ii-kv-serviceconnection"
+$IiAppServiceServiceConnectionName = "$Prefix-ii-appservice-serviceconnection"
+$IiSqlServiceConnectionName = "$Prefix-ii-sql-serviceconnection"
 
 # web app subnet delegation
 $WebAppSubnetDelegationName = "$Prefix-app-webapp-subnetdelegation"
@@ -631,7 +653,7 @@ if ($KvDnsZoneGroup) {
     Write-Output "Found Key Vault DNS zone group"
 } else {
     Write-Output "Configuring keyvault DNS zone group"
-    $Config = New-AzPrivateDnsZoneConfig -Name privatelink.vaultcore.azure.net -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
+    $Config = New-AzPrivateDnsZoneConfig -Name $KeyVaultDnsZoneName  -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
     $KvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$KvPrivateEndpointName" -Name "$KvDnsZoneGroupName" -PrivateDnsZoneConfig $config
 }
 
@@ -655,8 +677,33 @@ if ($NmeCclKeyVaultName) {
         Write-Output "Found CCL Key Vault DNS zone group"
     } else {
         Write-Output "Configuring CCL keyvault DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.vaultcore.azure.net -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name $KeyVaultDnsZoneName  -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
         $CclKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclKvPrivateEndpointName" -Name "$CclKvDnsZoneGroupName" -PrivateDnsZoneConfig $config
+    }
+}
+
+# check if intune insights key vault exists
+if ($NmeIiSqlServerName) {
+    # get intune insights key vault
+    $NmeIiKeyVault = Get-AzKeyVault -VaultName $NmeIiKeyVaultName
+    # create if intune insights key vault private endpoint created
+    $IiKvPrivateEndpoint = Get-AzPrivateEndpoint -Name "$IiKvPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+    if ($IiKvPrivateEndpoint) {
+        Write-Output "Found Intune Insights Key Vault private endpoint"
+    } 
+    else {
+        Write-Output "Configuring Intune Insights keyvault service connection and private endpoint"
+        $IiKvServiceConnection = New-AzPrivateLinkServiceConnection -Name $IiKvServiceConnectionName -PrivateLinkServiceId $NmeIiKeyVault.ResourceId -GroupId vault 
+        $IiKvPrivateEndpoint = New-AzPrivateEndpoint -Name "$IiKvPrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $IiKvServiceConnection
+    }
+    # check if intune insights keyvault dns zone group created
+    $IiKvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$IiKvPrivateEndpointName" -ErrorAction SilentlyContinue
+    if ($IiKvDnsZoneGroup) {
+        Write-Output "Found Intune Insights Key Vault DNS zone group"
+    } else {
+        Write-Output "Configuring Intune Insights keyvault DNS zone group"
+        $Config = New-AzPrivateDnsZoneConfig -Name $KeyVaultDnsZoneName  -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
+        $IiKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$IiKvPrivateEndpointName" -Name "$IiKvDnsZoneGroupName" -PrivateDnsZoneConfig $Config
     }
 }
 
@@ -681,6 +728,30 @@ if ($SqlDnsZoneGroup) {
     Write-Output "Configuring sql DNS zone group"
     $Config = New-AzPrivateDnsZoneConfig -Name privatelink.database.windows.net -PrivateDnsZoneId $SqlDnsZone.ResourceId
     $SqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$SqlPrivateEndpointName" -Name "$SqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
+}
+
+# if $nmeIisqlServerName is set, create private endpoint for intune insights sql server
+if ($NmeIiSqlServerName) {
+    $IiSqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeIiSqlServerName
+    # check if intune insights sql private endpoint created
+    $IiSqlPrivateEndpoint = Get-AzPrivateEndpoint -Name "$IiSqlPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+    if ($IiSqlPrivateEndpoint) {
+        Write-Output "Found Intune Insights SQL private endpoint"
+    } 
+    else {
+        Write-Output "Configuring Intune Insights sql service connection and private endpoint"
+        $IiSqlServiceConnection = New-AzPrivateLinkServiceConnection -Name $IiSqlServiceConnectionName -PrivateLinkServiceId $IiSqlServer.ResourceId -GroupId sqlserver 
+        $IiSqlPrivateEndpoint = New-AzPrivateEndpoint -Name "$IiSqlPrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $IiSqlServiceConnection 
+    }
+    # check if intune insights sql dns zone group created
+    $IiSqlDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$IiSqlPrivateEndpointName" -ErrorAction SilentlyContinue
+    if ($IiSqlDnsZoneGroup) {
+        Write-Output "Found Intune Insights SQL DNS zone group"
+    } else {
+        Write-Output "Configuring Intune Insights sql DNS zone group"
+        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.database.windows.net -PrivateDnsZoneId $SqlDnsZone.ResourceId
+        $IiSqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$IiSqlPrivateEndpointName" -Name "$IiSqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
+    }
 }
 
 
