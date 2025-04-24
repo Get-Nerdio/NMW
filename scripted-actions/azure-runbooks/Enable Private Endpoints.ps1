@@ -936,6 +936,35 @@ if ($NmeCclWebAppName) {
     $cclwebapp.Properties.publicNetworkAccess = "Disabled"
     $cclwebapp | Set-AzResource -Force | Out-Null
 }
+# add section for NmeiiWebApp 
+if ($NmeIiWebAppName) {
+    $IiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeIiWebAppName
+    # check if intune insights app service private endpoint is created
+    $IiAppServicePrivateEndpoint = Get-AzPrivateEndpoint -Name "$IiAppServicePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+    if ($IiAppServicePrivateEndpoint) {
+        Write-Output "Found Intune Insights App Service private endpoint"
+    } 
+    else {
+        Write-Output "Configuring Intune Insights app service service connection and private endpoint"
+        $IiAppServiceResourceId = $IiWebApp.id
+        $IiAppServiceServiceConnection = New-AzPrivateLinkServiceConnection -Name $IiAppServiceServiceConnectionName -PrivateLinkServiceId $IiAppServiceResourceId -GroupId sites 
+        $IiAppServicePrivateEndpoint = New-AzPrivateEndpoint -Name "$IiAppServicePrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $IiAppServiceServiceConnection 
+    }
+    # check if intune insights app service dns zone group created
+    $IiAppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$IiAppServicePrivateEndpointName" -ErrorAction SilentlyContinue
+    if ($IiAppServiceDnsZoneGroup) {
+        Write-Output "Found Intune Insights App Service DNS zone group"
+    } else {
+        Write-Output "Configuring Intune Insights app service DNS zone group"
+        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azurewebsites.net -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
+        $IiAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$IiAppServicePrivateEndpointName" -Name $IiAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
+    }
+    # disable public network access for Intune Insights web app
+    $IiWebAppResource = Get-AzResource -Id $IiWebApp.id
+    $IiWebAppResource.Properties.publicNetworkAccess = "Disabled"
+    $IiWebAppResource | Set-AzResource -Force | Out-Null
+}
+
 #endregion
 
 #region create azure monitor private link scope
@@ -1488,6 +1517,22 @@ if ($NmeCclWebAppName) {
         $CclWebApp.Properties.virtualNetworkSubnetId = $AppServiceSubnet.id
         $CclWebApp.Properties.vnetRouteAllEnabled = 'true'
         $CclWebApp = $CclWebApp | Set-AzResource -Force
+    }
+}
+
+# check if $NmeIiwWebAppName exists
+if ($NmeIiWebAppName) {
+    $NmeIiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeIiWebAppName
+    $IiwWebApp = Get-AzResource -Id $NmeIiwWebApp.id 
+    # check if endpoint integration enabled
+    if ($IiwWebApp.Properties.virtualNetworkSubnetId -eq $AppServiceSubnet.id) {
+        Write-Output "Intune Insights App service VNet integration already enabled"
+    } 
+    else {
+        Write-Output "Enabling Intune Insights app service VNet integration"
+        $IiwWebApp.Properties.virtualNetworkSubnetId = $AppServiceSubnet.id
+        $IiwWebApp.Properties.vnetRouteAllEnabled = 'true'
+        $IiwWebApp = $IiwWebApp | Set-AzResource -Force
     }
 }
 # enable network policy
