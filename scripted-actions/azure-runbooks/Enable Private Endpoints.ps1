@@ -1311,11 +1311,11 @@ function New-NmeHybridWorkerVm {
         Ensure-RequiredAzModulesInstalled
 "@
 
-        write-output "Creating runbook to import automation certificate to hybrid worker vm"
+        write-output "Creating runbook to import automation certificate to hybrid worker vm and install Az modules"
         $Script > .\Ensure-CertAndModulesAreImported.ps1 
         $ImportRunbook = Import-AzAutomationRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $aa.AutomationAccountName -Path .\Ensure-CertAndModulesAreImported.ps1 -Type PowerShell -Name "Import-CertAndModulesToHybridRunbookWorker" -Force
         $PublishRunbook = Publish-AzAutomationRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $aa.AutomationAccountName -Name "Import-CertAndModulesToHybridRunbookWorker" 
-        write-output "Importing certificate to hybrid worker vm"
+        write-output "Importing certificate and installing Az modules on hybrid worker vm"
         $Job = Start-AzAutomationRunbook -Name "Import-CertAndModulesToHybridRunbookWorker" -ResourceGroupName $ResourceGroupName -AutomationAccountName $aa.AutomationAccountName -RunOn $HybridWorkerGroupName
 
         Do {
@@ -1326,7 +1326,7 @@ function New-NmeHybridWorkerVm {
             if ($job.Status -eq 'Stopped') {
             write-output "Job to import certificate to hybrid worker was stopped in Azure. Please import the Nerdio manager certificate and az modules to hybrid worker vm manually"
             }
-            write-output "Waiting for certificate import job to complete"
+            write-output "Waiting for certificate import/module install job to complete"
             Start-Sleep 30
             $job = Get-AzAutomationJob -Id $job.JobId -ResourceGroupName $ResourceGroupName -AutomationAccountName $aa.AutomationAccountName
         }
