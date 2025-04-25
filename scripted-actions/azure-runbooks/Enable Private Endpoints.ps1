@@ -1213,8 +1213,9 @@ function New-NmeHybridWorkerVm {
             'Content-Type'='application/json'
             'Authorization'='Bearer ' + $token.AccessToken
             }
+            
             $Response = Invoke-WebRequest `
-                        -uri "https://$azureLocation.$AzureManagementApi/subscriptions/$($context.subscription.id)/resourceGroups/$ResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)?api-version=2021-06-22" `
+                        -uri "https://$AzureManagementApi/subscriptions/$($context.subscription.id)/resourceGroups/$ResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)?api-version=2021-06-22" `
                         -Headers $authHeader `
                         -UseBasicParsing
         
