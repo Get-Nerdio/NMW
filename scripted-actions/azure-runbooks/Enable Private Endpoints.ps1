@@ -68,7 +68,7 @@ endpoint vnet.
     "DefaultValue": ""
   },
   "MakeSaStoragePrivate": {
-    "Description": "Make the scripted actions storage account private. Will create a hybrid worker VM, if one does not already exist. This will result in increased cost for Nerdio Manager Azure resources. NOTE: After this script completes, you must update Nerdio Manager to use the new hybrid worker. (Settings->Nerdio Environment->Azure runbooks scripted actions. Click Enabled and select the new hybrid worker.)",
+    "Description": "Make the scripted actions storage account private. Will create a hybrid worker VM, if one does not already exist. This will result in increased cost for Nerdio Manager Azure resources. WARNING: The hybrid worker VM is not a PaaS service. As such, you will be responsible for patching the VM. The hybrid worker VM will be created with a random local admin password. This can be reset using Reset Password fuction in the Azure Portal. NOTE: After this script completes, you must update Nerdio Manager to use the new hybrid worker. (Settings->Nerdio Environment->Azure runbooks scripted actions. Click Enabled and select the new hybrid worker.)",
     "IsRequired": false,
     "DefaultValue": "false"
   },
@@ -729,7 +729,7 @@ if ($SqlDnsZoneGroup) {
     Write-Output "Found SQL DNS zone group"
 } else {
     Write-Output "Configuring sql DNS zone group"
-    $Config = New-AzPrivateDnsZoneConfig -Name privatelink.database.windows.net -PrivateDnsZoneId $SqlDnsZone.ResourceId
+    $Config = New-AzPrivateDnsZoneConfig -Name $SqlDnsZoneName -PrivateDnsZoneId $SqlDnsZone.ResourceId
     $SqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$SqlPrivateEndpointName" -Name "$SqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
 }
 
@@ -752,7 +752,7 @@ if ($NmeIiSqlServerName) {
         Write-Output "Found Intune Insights SQL DNS zone group"
     } else {
         Write-Output "Configuring Intune Insights sql DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.database.windows.net -PrivateDnsZoneId $SqlDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name $SqlDnsZoneName -PrivateDnsZoneId $SqlDnsZone.ResourceId
         $IiSqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$IiSqlPrivateEndpointName" -Name "$IiSqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
     }
 }
@@ -776,7 +776,7 @@ if ($AutomationDnsZoneGroup) {
     Write-Output "Found Automation DNS zone group"
 } else {
     Write-Output "Configuring automation DNS zone group"
-    $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azure-automation.net -PrivateDnsZoneId $AutomationDnsZone.ResourceId
+    $Config = New-AzPrivateDnsZoneConfig -Name $AutomationDnsZoneName -PrivateDnsZoneId $AutomationDnsZone.ResourceId
     $AutomationDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AutomationPrivateEndpointName" -Name "$K$AutomationDnsZoneGroupName" -PrivateDnsZoneConfig $config
 }
 
@@ -800,7 +800,7 @@ if ($NmeScriptedActionsAccountName) {
         Write-Output "Found scripted actions DNS zone group"
     } else {
         Write-Output "Configuring scripted actions DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azure-automation.net -PrivateDnsZoneId $AutomationDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name $AutomationDnsZoneName-PrivateDnsZoneId $AutomationDnsZone.ResourceId
         $ScriptedActionsDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsPrivateEndpointName -Name "$ScriptedActionsDnsZoneGroupName" -PrivateDnsZoneConfig $config
     }
 
@@ -824,7 +824,7 @@ if ($NmeScriptedActionsAccountName) {
             Write-Output "Found scripted actions storage DNS zone group"
         } else {
             Write-Output "Configuring scripted actions storage DNS zone group"
-            $Config = New-AzPrivateDnsZoneConfig -Name privatelink.blob.core.windows.net -PrivateDnsZoneId $StorageDnsZone.ResourceId
+            $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
             $ScriptedActionsStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$ScriptedActionsStoragePrivateEndpointName" -Name $SaStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
         }
 
@@ -851,7 +851,7 @@ if ($NmeCclStorageAccountName) {
         Write-Output "Found CCL storage DNS zone group"
     } else {
         Write-Output "Configuring CCL storage DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.blob.core.windows.net -PrivateDnsZoneId $StorageDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
         $CclStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclStoragePrivateEndpointName" -Name $CclStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
     }
 
@@ -877,7 +877,7 @@ if ($NmeDpsStorageAccountName) {
         Write-Output "Found DPS storage DNS zone group"
     } else {
         Write-Output "Configuring DPS storage DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.blob.core.windows.net -PrivateDnsZoneId $StorageDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
         $DpsStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$DpsStoragePrivateEndpointName" -Name $DpsStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
 
     }
@@ -906,7 +906,7 @@ if ($AppServiceDnsZoneGroup) {
     Write-Output "Found App Service DNS zone group"
 } else {
     Write-Output "Configuring app service DNS zone group"
-    $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azurewebsites.net -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
+    $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
     $AppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AppServicePrivateEndpointName" -Name $AppServicePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
 }
 
@@ -931,7 +931,7 @@ if ($NmeCclWebAppName) {
         Write-Output "Found CCL App Service DNS zone group"
     } else {
         Write-Output "Configuring CCL app service DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azurewebsites.net -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
         $CclAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclAppServicePrivateEndpointName" -Name $AppServicePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
     }
     $NmeCclWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeCclWebAppName
@@ -959,7 +959,7 @@ if ($NmeIiWebAppName) {
         Write-Output "Found Intune Insights App Service DNS zone group"
     } else {
         Write-Output "Configuring Intune Insights app service DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azurewebsites.net -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
         $IiAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$IiAppServicePrivateEndpointName" -Name $IiAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
     }
     # disable public network access for Intune Insights web app
@@ -1099,6 +1099,9 @@ function New-NmeHybridWorkerVm {
 
     $Context = Get-AzContext
 
+    Write-Warning "The hybrid worker VM is not a PaaS service. As such, you will be responsible for patching the VM $VMName."
+    Write-Warning "The hybrid worker VM $VMName will be created with a random local admin password. This password can be reset using the Azure Portal."
+
     ##### Optional Variables #####
 
     $AzureAutomationCertificateName = 'ScriptedActionRunAsCert'
@@ -1210,8 +1213,9 @@ function New-NmeHybridWorkerVm {
             'Content-Type'='application/json'
             'Authorization'='Bearer ' + $token.AccessToken
             }
+            
             $Response = Invoke-WebRequest `
-                        -uri "https://$azureLocation.$AzureManagementApi/subscriptions/$($context.subscription.id)/resourceGroups/$ResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)?api-version=2021-06-22" `
+                        -uri "https://$AzureManagementApi/subscriptions/$($context.subscription.id)/resourceGroups/$ResourceGroupName/providers/Microsoft.Automation/automationAccounts/$($AA.AutomationAccountName)?api-version=2021-06-22" `
                         -Headers $authHeader `
                         -UseBasicParsing
         
@@ -1307,11 +1311,11 @@ function New-NmeHybridWorkerVm {
         Ensure-RequiredAzModulesInstalled
 "@
 
-        write-output "Creating runbook to import automation certificate to hybrid worker vm"
+        write-output "Creating runbook to import automation certificate to hybrid worker vm and install Az modules"
         $Script > .\Ensure-CertAndModulesAreImported.ps1 
         $ImportRunbook = Import-AzAutomationRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $aa.AutomationAccountName -Path .\Ensure-CertAndModulesAreImported.ps1 -Type PowerShell -Name "Import-CertAndModulesToHybridRunbookWorker" -Force
         $PublishRunbook = Publish-AzAutomationRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $aa.AutomationAccountName -Name "Import-CertAndModulesToHybridRunbookWorker" 
-        write-output "Importing certificate to hybrid worker vm"
+        write-output "Importing certificate and installing Az modules on hybrid worker vm"
         $Job = Start-AzAutomationRunbook -Name "Import-CertAndModulesToHybridRunbookWorker" -ResourceGroupName $ResourceGroupName -AutomationAccountName $aa.AutomationAccountName -RunOn $HybridWorkerGroupName
 
         Do {
@@ -1322,7 +1326,7 @@ function New-NmeHybridWorkerVm {
             if ($job.Status -eq 'Stopped') {
             write-output "Job to import certificate to hybrid worker was stopped in Azure. Please import the Nerdio manager certificate and az modules to hybrid worker vm manually"
             }
-            write-output "Waiting for certificate import job to complete"
+            write-output "Waiting for certificate import/module install job to complete"
             Start-Sleep 30
             $job = Get-AzAutomationJob -Id $job.JobId -ResourceGroupName $ResourceGroupName -AutomationAccountName $aa.AutomationAccountName
         }
