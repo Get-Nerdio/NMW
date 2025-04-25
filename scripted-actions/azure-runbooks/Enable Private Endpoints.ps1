@@ -68,7 +68,7 @@ endpoint vnet.
     "DefaultValue": ""
   },
   "MakeSaStoragePrivate": {
-    "Description": "Make the scripted actions storage account private. Will create a hybrid worker VM, if one does not already exist. This will result in increased cost for Nerdio Manager Azure resources. NOTE: After this script completes, you must update Nerdio Manager to use the new hybrid worker. (Settings->Nerdio Environment->Azure runbooks scripted actions. Click Enabled and select the new hybrid worker.)",
+    "Description": "Make the scripted actions storage account private. Will create a hybrid worker VM, if one does not already exist. This will result in increased cost for Nerdio Manager Azure resources. WARNING: The hybrid worker VM is not a PaaS service. As such, you will be responsible for patching the VM. The hybrid worker VM will be created with a random local admin password. This can be reset using Reset Password fuction in the Azure Portal. NOTE: After this script completes, you must update Nerdio Manager to use the new hybrid worker. (Settings->Nerdio Environment->Azure runbooks scripted actions. Click Enabled and select the new hybrid worker.)",
     "IsRequired": false,
     "DefaultValue": "false"
   },
@@ -1098,6 +1098,9 @@ function New-NmeHybridWorkerVm {
     $ErrorActionPreference = 'Stop'
 
     $Context = Get-AzContext
+
+    Write-Warning "The hybrid worker VM is not a PaaS service. As such, you will be responsible for patching the VM $VMName."
+    Write-Warning "The hybrid worker VM $VMName will be created with a random local admin password. This password can be reset using the Azure Portal."
 
     ##### Optional Variables #####
 
