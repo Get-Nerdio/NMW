@@ -729,7 +729,7 @@ if ($SqlDnsZoneGroup) {
     Write-Output "Found SQL DNS zone group"
 } else {
     Write-Output "Configuring sql DNS zone group"
-    $Config = New-AzPrivateDnsZoneConfig -Name privatelink.database.windows.net -PrivateDnsZoneId $SqlDnsZone.ResourceId
+    $Config = New-AzPrivateDnsZoneConfig -Name $SqlDnsZoneName -PrivateDnsZoneId $SqlDnsZone.ResourceId
     $SqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$SqlPrivateEndpointName" -Name "$SqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
 }
 
@@ -752,7 +752,7 @@ if ($NmeIiSqlServerName) {
         Write-Output "Found Intune Insights SQL DNS zone group"
     } else {
         Write-Output "Configuring Intune Insights sql DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.database.windows.net -PrivateDnsZoneId $SqlDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name $SqlDnsZoneName -PrivateDnsZoneId $SqlDnsZone.ResourceId
         $IiSqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$IiSqlPrivateEndpointName" -Name "$IiSqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
     }
 }
@@ -776,7 +776,7 @@ if ($AutomationDnsZoneGroup) {
     Write-Output "Found Automation DNS zone group"
 } else {
     Write-Output "Configuring automation DNS zone group"
-    $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azure-automation.net -PrivateDnsZoneId $AutomationDnsZone.ResourceId
+    $Config = New-AzPrivateDnsZoneConfig -Name $AutomationDnsZoneName -PrivateDnsZoneId $AutomationDnsZone.ResourceId
     $AutomationDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AutomationPrivateEndpointName" -Name "$K$AutomationDnsZoneGroupName" -PrivateDnsZoneConfig $config
 }
 
@@ -800,7 +800,7 @@ if ($NmeScriptedActionsAccountName) {
         Write-Output "Found scripted actions DNS zone group"
     } else {
         Write-Output "Configuring scripted actions DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azure-automation.net -PrivateDnsZoneId $AutomationDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name $AutomationDnsZoneName-PrivateDnsZoneId $AutomationDnsZone.ResourceId
         $ScriptedActionsDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsPrivateEndpointName -Name "$ScriptedActionsDnsZoneGroupName" -PrivateDnsZoneConfig $config
     }
 
@@ -824,7 +824,7 @@ if ($NmeScriptedActionsAccountName) {
             Write-Output "Found scripted actions storage DNS zone group"
         } else {
             Write-Output "Configuring scripted actions storage DNS zone group"
-            $Config = New-AzPrivateDnsZoneConfig -Name privatelink.blob.core.windows.net -PrivateDnsZoneId $StorageDnsZone.ResourceId
+            $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
             $ScriptedActionsStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$ScriptedActionsStoragePrivateEndpointName" -Name $SaStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
         }
 
@@ -851,7 +851,7 @@ if ($NmeCclStorageAccountName) {
         Write-Output "Found CCL storage DNS zone group"
     } else {
         Write-Output "Configuring CCL storage DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.blob.core.windows.net -PrivateDnsZoneId $StorageDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
         $CclStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclStoragePrivateEndpointName" -Name $CclStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
     }
 
@@ -877,7 +877,7 @@ if ($NmeDpsStorageAccountName) {
         Write-Output "Found DPS storage DNS zone group"
     } else {
         Write-Output "Configuring DPS storage DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.blob.core.windows.net -PrivateDnsZoneId $StorageDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
         $DpsStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$DpsStoragePrivateEndpointName" -Name $DpsStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
 
     }
@@ -906,7 +906,7 @@ if ($AppServiceDnsZoneGroup) {
     Write-Output "Found App Service DNS zone group"
 } else {
     Write-Output "Configuring app service DNS zone group"
-    $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azurewebsites.net -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
+    $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
     $AppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AppServicePrivateEndpointName" -Name $AppServicePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
 }
 
@@ -931,7 +931,7 @@ if ($NmeCclWebAppName) {
         Write-Output "Found CCL App Service DNS zone group"
     } else {
         Write-Output "Configuring CCL app service DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azurewebsites.net -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
         $CclAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclAppServicePrivateEndpointName" -Name $AppServicePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
     }
     $NmeCclWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeCclWebAppName
@@ -959,7 +959,7 @@ if ($NmeIiWebAppName) {
         Write-Output "Found Intune Insights App Service DNS zone group"
     } else {
         Write-Output "Configuring Intune Insights app service DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name privatelink.azurewebsites.net -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
         $IiAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$IiAppServicePrivateEndpointName" -Name $IiAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
     }
     # disable public network access for Intune Insights web app
