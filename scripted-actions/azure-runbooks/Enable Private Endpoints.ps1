@@ -800,7 +800,7 @@ if ($NmeScriptedActionsAccountName) {
         Write-Output "Found scripted actions DNS zone group"
     } else {
         Write-Output "Configuring scripted actions DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name $AutomationDnsZoneName-PrivateDnsZoneId $AutomationDnsZone.ResourceId
+        $Config = New-AzPrivateDnsZoneConfig -Name $AutomationDnsZoneName -PrivateDnsZoneId $AutomationDnsZone.ResourceId
         $ScriptedActionsDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsPrivateEndpointName -Name "$ScriptedActionsDnsZoneGroupName" -PrivateDnsZoneConfig $config
     }
 
