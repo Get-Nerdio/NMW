@@ -1,5 +1,11 @@
 #description: Checks if BitLocker is enabled and disables it prior to sysprep
-#tags: ChatGPT
+#execution mode: Combined
+#tags: Nerdio
+<#
+Notes:
+This script checks if BitLocker is enabled on the OS drive and disables it if necessary.
+This is a prerequisite for running Sysprep on the VM.
+#>
 
 # Define the log folder path and create it if it doesn't exist
 $logFolder = Join-Path $env:TEMP "NMEScriptLogs"
