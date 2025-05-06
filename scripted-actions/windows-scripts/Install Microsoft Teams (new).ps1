@@ -102,7 +102,7 @@ Start-Process C:\Windows\System32\msiexec.exe `
 -ArgumentList '/i C:\Windows\Temp\msteams_sa\install\MsRdcWebRTCSvc_x64.msi /l*v C:\Windows\temp\NerdioManagerLogs\ScriptedActions\msteams\WebRTC_install_log.txt /qn /norestart' -Wait 2>&1
 
 # install Teams Meeting add-in
-$TeamsVersion = (Get-AppxPackage -Name MSTeams).Version
+$TeamsVersion = (Get-AppxPackage -Name MSTeams -AllUsers).Version
 $TMAPath = "{0}\WINDOWSAPPS\MSTEAMS_{1}_X64__8WEKYB3D8BBWE\MICROSOFTTEAMSMEETINGADDININSTALLER.MSI" -f $env:programfiles,$TeamsVersion
 $TMAVersion = (Get-AppLockerFileInformation -Path $TMAPath | Select-Object -ExpandProperty Publisher).BinaryVersion
 $TargetDir = "{0}\Microsoft\TeamsMeetingAdd-in\{1}\" -f ${env:ProgramFiles(x86)},$TMAVersion
