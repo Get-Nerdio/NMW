@@ -108,7 +108,7 @@ function Set-NmeVars {
         $key = $ScriptedActionsStorageAccount.Tags.GetEnumerator() | Where-Object { $_.Value -eq "CUSTOM_SCRIPTS_STORAGE_ACCOUNT" } | Select-Object -ExpandProperty Key
     }
     else {
-        $key = 'NMW'
+        $key = 'NMW_DEPLOYMENT_RESOURCE'
     }
     if ($key) {
         $cclwebapp = Get-AzWebApp -ResourceGroupName $NmeRg | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'}
@@ -777,7 +777,7 @@ if ($AutomationDnsZoneGroup) {
 } else {
     Write-Output "Configuring automation DNS zone group"
     $Config = New-AzPrivateDnsZoneConfig -Name $AutomationDnsZoneName -PrivateDnsZoneId $AutomationDnsZone.ResourceId
-    $AutomationDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AutomationPrivateEndpointName" -Name "$K$AutomationDnsZoneGroupName" -PrivateDnsZoneConfig $config
+    $AutomationDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AutomationPrivateEndpointName" -Name "$AutomationDnsZoneGroupName" -PrivateDnsZoneConfig $config
 }
 
 
