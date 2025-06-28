@@ -10,13 +10,13 @@ This Scripted Action will update the AZ.DesktopVirtualization module to the late
 <# Variables:
 {
     "AutomationAccountName": {
-    "Description": "Name of Automation Account",
-    "IsRequired": true,
-    }
+        "Description": "Name of Automation Account",
+        "IsRequired": true
+    },
     "AutomationAccountResourceGroup": {
-    "Description": "Resource Group of Automation Account",
-    "IsRequired": true,
-  }
+        "Description": "Resource Group of Automation Account",
+        "IsRequired": true
+    }
 }
 #>
 
