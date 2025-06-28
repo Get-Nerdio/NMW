@@ -9,12 +9,12 @@ This Scripted Action will update the AZ.DesktopVirtualization module to the late
 <# Variables:
 {
   "AutomationAccountName": {
-    "Description": "VNet in which to create the temp VM. Must be able to access the fslogix fileshare.",
+    "Description": "Name of Automation Account.",
     "IsRequired": true,
     "DefaultValue": ""
   },
   "AutomationAccountResourceGroup": {
-    "Description": "Subnet in which to create the temp VM.",
+    "Description": "Resource Group of Automation Account.",
     "IsRequired": true,
     "DefaultValue": ""
   }
