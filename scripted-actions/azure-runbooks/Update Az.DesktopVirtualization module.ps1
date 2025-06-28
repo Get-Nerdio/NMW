@@ -1,22 +1,23 @@
 #description: Update AZ.DesktopVirtualization to the latest version.
 #tags: Nerdio, Preview
 
-<# Notes:
-
+<#
+Notes:
 This Scripted Action will update the AZ.DesktopVirtualization module to the latest version for selected Automation Account. 
-
 #>
 
 <# Variables:
 {
-    "AutomationAccountName": {
-        "Description": "Name of Automation Account",
-        "IsRequired": true
-    },
-    "AutomationAccountResourceGroup": {
-        "Description": "Resource Group of Automation Account",
-        "IsRequired": true
-    }
+  "AutomationAccountName": {
+    "Description": "VNet in which to create the temp VM. Must be able to access the fslogix fileshare.",
+    "IsRequired": true,
+    "DefaultValue": ""
+  },
+  "AutomationAccountResourceGroup": {
+    "Description": "Subnet in which to create the temp VM.",
+    "IsRequired": true,
+    "DefaultValue": ""
+  }
 }
 #>
 
