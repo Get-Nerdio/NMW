@@ -51,11 +51,11 @@ if ($SearchResult.Length -and $SearchResult.Length -gt 1) {
 
 $PackageDetails = Invoke-RestMethod -Method Get -UseBasicParsing -Uri $SearchResult.id
 $Dependencies = $PackageDetails.entry.properties.dependencies
-$RequeredModules = $Dependencies.Split("|")
+$RequiredModules = $Dependencies.Split("|")
 
-foreach ($RequeredModule in $RequeredModules) {
-    $RequeredModuleName = ($RequeredModule.Split(":"))[0]
-    Install-AutomationModule $RequeredModuleName
+foreach ($RequiredModule in $RequiredModules) {
+    $RequiredModuleName = ($RequiredModule.Split(":"))[0]
+    Install-AutomationModule $RequiredModuleName
 }
 
 Install-AutomationModule $ModuleToUpdate
