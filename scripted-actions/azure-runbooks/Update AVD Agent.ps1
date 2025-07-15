@@ -27,27 +27,35 @@ $HostPoolName = $Hostpool.Name
 $AvdAgentUrl = 'https://query.prod.cms.rt.microsoft.com/cms/api/am/binary/RWrmXv'
 $BootLoaderUrl = 'https://query.prod.cms.rt.microsoft.com/cms/api/am/binary/RWrxrH'
 
+$AvdAgentFilename = "Microsoft.RDInfra.RDAgent.Installer.msi"
+$AgentBootLoaderFilename = "Microsoft.RDInfra.RDAgentBootLoader.Installer.msi"
+
 $Script = @"
 `$ErrorActionPreference = 'Stop'
+`$tempFolder = [environment]::GetEnvironmentVariable('TEMP', 'Machine')
 `$TLS12Protocol = [System.Net.SecurityProtocolType] 'Ssl3 , Tls12'
 [System.Net.ServicePointManager]::SecurityProtocol = `$TLS12Protocol
 
+`$AvdAgentInstallerPath = "`$tempFolder\$AvdAgentFilename"
+`$AgentBootLoaderInstallerPath = "`$tempFolder\$AgentBootLoaderFilename"
+
+if (Test-Path `$AvdAgentInstallerPath) {
+    Remove-Item `$AvdAgentInstallerPath
+}
+
+if (Test-Path `$AgentBootLoaderInstallerPath) {
+    Remove-Item `$AgentBootLoaderInstallerPath
+}
+
 Try {
-    `$AvdAgentRequest = Invoke-WebRequest $AvdAgentUrl -UseBasicParsing
-    `$AvdAgentFilename = (`$AvdAgentRequest.headers['content-disposition'] -split 'filename=')[1]
-    Invoke-WebRequest -uri $AvdAgentUrl -UseBasicParsing -outfile "C:\Program Files\Microsoft RDInfra\`$AvdAgentFilename"
+    Invoke-WebRequest -uri $AvdAgentUrl -UseBasicParsing -outfile `$AvdAgentInstallerPath
 }
 Catch {
     Throw "Unable to download new agent from $AvdAgentUrl. `$_"
 }
 
-Try {
-    `$AgentBootLoaderRequest = Invoke-WebRequest $BootLoaderUrl -UseBasicParsing
-    `$AgentBootLoaderFilename = (`$AgentBootLoaderRequest.headers['content-disposition'] -split 'filename=')[1]
-    if (`$AgentBootLoaderFilename -match '\(' ) {
-        `$AgentBootLoaderFilename = "Microsoft.RDInfra.RDAgentBootLoader.Installer-x64.msi"
-    } 
-    Invoke-WebRequest -uri $BootLoaderUrl -UseBasicParsing -outfile "C:\Program Files\Microsoft RDInfra\`$AgentBootLoaderFilename"
+Try { 
+    Invoke-WebRequest -uri $BootLoaderUrl -UseBasicParsing -outfile `$AgentBootLoaderInstallerPath
 }
 Catch {
     Throw "Unable to download new bootloader from $BootLoaderUrl. `$_"
@@ -59,7 +67,7 @@ $VM = get-azvm -VMName $azureVMName
 
 $Script | Out-File ".\Download-Installers-$($vm.Name).ps1"
 
-    # Execute local script on remote VM
+# Execute local script on remote VM
 write-output "Execute download script on remote VM"
 $RunCommand = Invoke-AzVMRunCommand -ResourceGroupName $vm.ResourceGroupName -VMName "$AzureVMName" -CommandId 'RunPowerShellScript' -ScriptPath ".\Download-Installers-$($vm.Name).ps1"
 
@@ -98,11 +106,11 @@ Foreach (`$RDProgram in `$RDPrograms) {
 
 $Script | Out-File ".\Uninstall-AVDAgent-$($vm.Name).ps1"
 
-    # Execute local script on remote VM
+# Execute local script on remote VM
 write-output "Execute uninstall script on remote VM"
 $RunCommand = Invoke-AzVMRunCommand -ResourceGroupName $vm.ResourceGroupName -VMName "$AzureVMName" -CommandId 'RunPowerShellScript' -ScriptPath ".\Uninstall-AVDAgent-$($vm.Name).ps1"
 
-#Check runcommand output for errors
+# Check runcommand output for errors
 $errors = $RunCommand.Value | ? Code -eq 'ComponentStatus/StdErr/succeeded'
 if ($errors.message) {
     Throw "Error when uninstalling software. $($errors.message)"
@@ -142,7 +150,7 @@ if (-not (Test-Path -Path `$wvdAppsLogsPath)) {
     New-Item -Path `$logsPath -Name `$wvdAppsLogsFolderName -ItemType Directory -Force | Out-Null
 }
 
-`$BootLoaderInstaller = (Get-ChildItem 'C:\Program Files\Microsoft RDInfra\' | ? name -Match 'Microsoft.RDInfra.RDAgentBootLoader.*\.msi' | sort lastwritetime -Descending | select -First 1).fullname
+`$BootLoaderInstaller = "`$tempFolder\$AgentBootLoaderFilename"
 `$BlInstallerPath = '"' + `$BootLoaderInstaller + '"'
 
 Write-Output "Installing RDAgent BootLoader on VM `$BlInstallerPath"
@@ -152,7 +160,7 @@ Write-Output "Installing RDAgent BootLoader on VM `$BlInstallerPath"
 Write-Output "Installing RDAgentBootLoader on VM Complete. Exit code=`$sts"
 
 
-`$AgentInstaller = (Get-ChildItem 'C:\Program Files\Microsoft RDInfra\' | ? name -Match 'Microsoft.RDInfra.RDAgent.Installer.*\.msi' | sort lastwritetime -Descending | select -First 1).fullname
+`$AgentInstaller = "`$tempFolder\$AvdAgentFilename"
 `$InstallerPath = '"' + `$AgentInstaller + '"'
 
 Write-Output "Installing RD Infra Agent on VM `$InstallerPath"
@@ -166,11 +174,11 @@ $VM = get-azvm -VMName $azureVMName
 
 $Script | Out-File ".\Upgrade-AVDAgent-$($vm.Name).ps1"
 
-    # Execute local script on remote VM
+# Execute local script on remote VM
 write-output "Execute reinstall script on remote VM"
 $RunCommand = Invoke-AzVMRunCommand -ResourceGroupName $vm.ResourceGroupName -VMName "$AzureVMName" -CommandId 'RunPowerShellScript' -ScriptPath ".\Upgrade-AVDAgent-$($vm.Name).ps1"
 
-#Check runcommand output for errors
+# Check runcommand output for errors
 $errors = $RunCommand.Value | ? Code -eq 'ComponentStatus/StdErr/succeeded'
 if ($errors.message) {
     Throw "Error when reinstalling RD components. $($errors.message)"
