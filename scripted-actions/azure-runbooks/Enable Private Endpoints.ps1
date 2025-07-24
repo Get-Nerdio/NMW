@@ -30,7 +30,7 @@ endpoint vnet.
   "PrivateLinkVnetName": {
     "Description": "VNet for private endpoints. If the vnet does not exist, it will be created. If specifying an existing vnet, the vnet or its resource group must be linked to Nerdio Manager in Settings->Azure environment",
     "IsRequired": true,
-    "DefaultValue": "nme-private-vnet"
+    "DefaultValue": "nmw-private-vnet"
   },
   "VnetAddressRange": {
     "Description": "Address range for private endpoint vnet. Not used if vnet already exists.",
@@ -40,7 +40,7 @@ endpoint vnet.
   "PrivateEndpointSubnetName": {
     "Description": "Name of private endpoint subnet. If the subnet does not exist, it will be created.",
     "IsRequired": true,
-    "DefaultValue": "nme-endpoints-subnet"
+    "DefaultValue": "nmw-privateendpoints-subnet"
   },
   "PrivateEndpointSubnetRange": {
     "Description": "Address range for private endpoint subnet. Not used if subnet already exists.",
@@ -50,7 +50,7 @@ endpoint vnet.
   "AppServiceSubnetName": {
     "Description": "App service subnet name. If the subnet does not exist, it will be created.",
     "IsRequired": true,
-    "DefaultValue": "nme-app-subnet"
+    "DefaultValue": "nmw-app-subnet"
   },
   "AppServiceSubnetRange": {
     "Description": "Address range for app service subnet. Not used if subnet already exists.",
@@ -390,11 +390,15 @@ else {
 
 #### main script ####
 
-
+# Get all existing private endpoints
+$ExistingPrivateEndpoints = Get-AzPrivateEndpoint -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
 
 # Check if vnet created
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue
 if ($VNet) {
+    if ($VNet.Count -gt 1) {
+        Throw "Found more than one VNet with name $PrivateLinkVnetName. Please remove any VNets no longer in use or use a unique name."
+    }
     Write-Output ("VNet {0} found in resource group {1}." -f $vnet.Name, $vnet.ResourceGroupName)
  
     $vnetUpdated = $false
@@ -639,19 +643,20 @@ $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpoint
 $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
  
 # check if keyvault private endpoint created
-$KvPrivateEndpoint = Get-AzPrivateEndpoint -Name "$KvPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
-if ($KvPrivateEndpoint) {
+$KeyVault = Get-AzKeyVault -VaultName $KeyVaultName -ErrorAction SilentlyContinue
+if ($ExistingPrivateEndpoints.PrivateLinkServiceConnections.PrivateLinkServiceId -contains $KeyVault.ResourceId) {
     Write-Output "Found Key Vault private endpoint"
-    
+    $KvPrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $KeyVault.ResourceId }
 } 
 else {
     Write-Output "Configuring keyvault service connection and private endpoint"
-    $KvServiceConnection = New-AzPrivateLinkServiceConnection -Name $KvServiceConnectionName -PrivateLinkServiceId $NmeKeyVault.ResourceId -GroupId vault 
+    $KvServiceConnection = New-AzPrivateLinkServiceConnection -Name $KvServiceConnectionName -PrivateLinkServiceId $KeyVault.ResourceId -GroupId vault 
     $KvPrivateEndpoint = New-AzPrivateEndpoint -Name "$KvPrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $KvServiceConnection
 }
 
+
 # check if keyvault dns zone group created
-$KvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$KvPrivateEndpointName" -ErrorAction SilentlyContinue
+$KvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $KvPrivateEndpoint.Name -ErrorAction SilentlyContinue
 if ($KvDnsZoneGroup) {
     Write-Output "Found Key Vault DNS zone group"
 } else {
@@ -663,19 +668,19 @@ if ($KvDnsZoneGroup) {
 # check if ccl key vault exists
 if ($NmeCclKeyVaultName) {
     # get ccl key vault
-    $NmeCclKeyVault = Get-AzKeyVault -VaultName $NmeCclKeyVaultName 
-    # create if ccl key vault private endpoint created
-    $CclKvPrivateEndpoint = Get-AzPrivateEndpoint -Name "$CclKvPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
-    if ($CclKvPrivateEndpoint) {
+    $NmeCclKeyVault = Get-AzKeyVault -VaultName $NmeCclKeyVaultName
+    # check if ccl key vault private endpoint exists in $ExistingPrivateEndpoints
+    if ($ExistingPrivateEndpoints.PrivateLinkServiceConnections.PrivateLinkServiceId -contains $NmeCclKeyVault.ResourceId) {
         Write-Output "Found CCL Key Vault private endpoint"
-    } 
+        $CclKvPrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $NmeCclKeyVault.ResourceId }
+    }
     else {
         Write-Output "Configuring CCL keyvault service connection and private endpoint"
-        $CclKvServiceConnection = New-AzPrivateLinkServiceConnection -Name $CclKvServiceConnectionName -PrivateLinkServiceId $NmeCclKeyVault.ResourceId -GroupId vault 
+        $CclKvServiceConnection = New-AzPrivateLinkServiceConnection -Name $CclKvServiceConnectionName -PrivateLinkServiceId $NmeCclKeyVault.ResourceId -GroupId vault
         $CclKvPrivateEndpoint = New-AzPrivateEndpoint -Name "$CclKvPrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $CclKvServiceConnection
     }
     # check if ccl keyvault dns zone group created
-    $CclKvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclKvPrivateEndpointName" -ErrorAction SilentlyContinue
+    $CclKvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $CclKvPrivateEndpoint.Name -ErrorAction SilentlyContinue
     if ($CclKvDnsZoneGroup) {
         Write-Output "Found CCL Key Vault DNS zone group"
     } else {
@@ -690,7 +695,7 @@ if ($NmeIiKeyVaultName) {
     # get intune insights key vault
     $NmeIiKeyVault = Get-AzKeyVault -VaultName $NmeIiKeyVaultName
     # create if intune insights key vault private endpoint created
-    $IiKvPrivateEndpoint = Get-AzPrivateEndpoint -Name "$IiKvPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+    $IiKvPrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $NmeIiKeyVault.ResourceId }
     if ($IiKvPrivateEndpoint) {
         Write-Output "Found Intune Insights Key Vault private endpoint"
     } 
@@ -700,7 +705,7 @@ if ($NmeIiKeyVaultName) {
         $IiKvPrivateEndpoint = New-AzPrivateEndpoint -Name "$IiKvPrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $IiKvServiceConnection
     }
     # check if intune insights keyvault dns zone group created
-    $IiKvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$IiKvPrivateEndpointName" -ErrorAction SilentlyContinue
+    $IiKvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $IiKvPrivateEndpoint.Name -ErrorAction SilentlyContinue
     if ($IiKvDnsZoneGroup) {
         Write-Output "Found Intune Insights Key Vault DNS zone group"
     } else {
@@ -713,7 +718,7 @@ if ($NmeIiKeyVaultName) {
 $SqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeSqlServerName
 
 #check if sql private endpoint created
-$SqlPrivateEndpoint = Get-AzPrivateEndpoint -Name "$SqlPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+$SqlPrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $SqlServer.ResourceId }
 if ($SqlPrivateEndpoint) {
     Write-Output "Found SQL private endpoint"
 } 
@@ -724,7 +729,7 @@ else {
 }
 
 # check if sql dns zone group created
-$SqlDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$SqlPrivateEndpointName" -ErrorAction SilentlyContinue
+$SqlDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $SqlPrivateEndpoint.Name -ErrorAction SilentlyContinue
 if ($SqlDnsZoneGroup) {
     Write-Output "Found SQL DNS zone group"
 } else {
@@ -737,7 +742,7 @@ if ($SqlDnsZoneGroup) {
 if ($NmeIiSqlServerName) {
     $IiSqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeIiSqlServerName
     # check if intune insights sql private endpoint created
-    $IiSqlPrivateEndpoint = Get-AzPrivateEndpoint -Name "$IiSqlPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+    $IiSqlPrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $IiSqlServer.ResourceId }
     if ($IiSqlPrivateEndpoint) {
         Write-Output "Found Intune Insights SQL private endpoint"
     } 
@@ -747,7 +752,7 @@ if ($NmeIiSqlServerName) {
         $IiSqlPrivateEndpoint = New-AzPrivateEndpoint -Name "$IiSqlPrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $IiSqlServiceConnection 
     }
     # check if intune insights sql dns zone group created
-    $IiSqlDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$IiSqlPrivateEndpointName" -ErrorAction SilentlyContinue
+    $IiSqlDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $IiSqlPrivateEndpoint.Name -ErrorAction SilentlyContinue
     if ($IiSqlDnsZoneGroup) {
         Write-Output "Found Intune Insights SQL DNS zone group"
     } else {
@@ -759,19 +764,19 @@ if ($NmeIiSqlServerName) {
 
 
 # check if automation account private endpoint is created
-$AutomationPrivateEndpoint = Get-AzPrivateEndpoint -Name "$AutomationPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+$NmeAutomationAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Automation/automationAccounts/$NmeAutomationAccountName"
+$AutomationPrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $NmeAutomationAccountResourceId }
 if ($AutomationPrivateEndpoint) {
     Write-Output "Found Automation private endpoint"
 } 
 else {
     Write-Output "Configuring automation service connection and private endpoint"
-    $NmeAutomationAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Automation/automationAccounts/$NmeAutomationAccountName"
     $AutomationServiceConnection = New-AzPrivateLinkServiceConnection -Name $AutomationServiceConnectionName -PrivateLinkServiceId $NmeAutomationAccountResourceId -GroupId DSCAndHybridWorker 
     $AutomationPrivateEndpoint = New-AzPrivateEndpoint -Name "$AutomationPrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $AutomationServiceConnection 
 
 }
 # check if automation account dns zone group created
-$AutomationDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AutomationPrivateEndpointName" -ErrorAction SilentlyContinue
+$AutomationDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $AutomationPrivateEndpoint.Name -ErrorAction SilentlyContinue
 if ($AutomationDnsZoneGroup) {
     Write-Output "Found Automation DNS zone group"
 } else {
@@ -782,20 +787,21 @@ if ($AutomationDnsZoneGroup) {
 
 
 # Get scripted action automation account
+       
 if ($NmeScriptedActionsAccountName) {
+    $ScriptedActionsAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Automation/automationAccounts/$NmeScriptedActionsAccountName"
     # check if scripted action automation account private endpoint is created
-    $ScriptedActionsPrivateEndpoint = Get-AzPrivateEndpoint -Name $ScriptedActionsPrivateEndpointName -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+    $ScriptedActionsPrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $ScriptedActionsAccountResourceId }
     if ($ScriptedActionsPrivateEndpoint) {
         Write-Output "Found scripted actions private endpoint"
     } 
     else {
         Write-Output "Configuring scripted actions service connection and private endpoint"
-        $ScriptedActionsAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Automation/automationAccounts/$NmeScriptedActionsAccountName"
         $ScriptedActionsServiceConnection = New-AzPrivateLinkServiceConnection -Name $ScriptedActionsServiceConnectionName -PrivateLinkServiceId $ScriptedActionsAccountResourceId -GroupId DSCAndHybridWorker 
         $ScriptedActionsPrivateEndpoint = New-AzPrivateEndpoint -Name $ScriptedActionsPrivateEndpointName -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ScriptedActionsServiceConnection 
     }
     # check if scripted action automation account dns zone group created
-    $ScriptedActionsDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsPrivateEndpointName -ErrorAction SilentlyContinue
+    $ScriptedActionsDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsPrivateEndpoint.Name -ErrorAction SilentlyContinue
     if ($ScriptedActionsDnsZoneGroup) {
         Write-Output "Found scripted actions DNS zone group"
     } else {
@@ -807,19 +813,22 @@ if ($NmeScriptedActionsAccountName) {
     if ($MakeSaStoragePrivate -eq 'True') {
         # Get scripted actions storage account
         $ScriptedActionsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg | Where-Object StorageAccountName -Match 'cssa'
+        # throw error if no scripted actions storage account found
+        if (-not $ScriptedActionsStorageAccount) {
+            throw "No scripted actions storage account found in resource group $NmeRg"
+        }
         # check if scripted action storage account private endpoint is created
-        $ScriptedActionsStoragePrivateEndpoint = Get-AzPrivateEndpoint -Name "$ScriptedActionsStoragePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+        $ScriptedActionsStoragePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $ScriptedActionsStorageAccount.Id }
         if ($ScriptedActionsStoragePrivateEndpoint) {
             Write-Output "Found scripted actions storage private endpoint"
         } 
         else {
             Write-Output "Configuring scripted actions storage service connection and private endpoint"
-            $ScriptedActionsStorageAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Storage/storageAccounts/$($ScriptedActionsStorageAccount.StorageAccountName)"
-            $ScriptedActionsStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $SaStorageServiceConnectionName -PrivateLinkServiceId $ScriptedActionsStorageAccountResourceId -GroupId blob 
+            $ScriptedActionsStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $SaStorageServiceConnectionName -PrivateLinkServiceId $ScriptedActionsStorageAccount.Id -GroupId blob 
             $ScriptedActionsStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$ScriptedActionsStoragePrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ScriptedActionsStorageServiceConnection 
         }
         # check if scripted action storage account dns zone group created
-        $ScriptedActionsStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$ScriptedActionsStoragePrivateEndpointName" -ErrorAction SilentlyContinue
+        $ScriptedActionsStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsStoragePrivateEndpoint.Name -ErrorAction SilentlyContinue
         if ($ScriptedActionsStorageDnsZoneGroup) {
             Write-Output "Found scripted actions storage DNS zone group"
         } else {
@@ -835,18 +844,17 @@ if ($NmeCclStorageAccountName) {
     # Get ccl storage account
     $NmeCclStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeCclStorageAccountName
     # check if ccl storage account private endpoint is created
-    $CclStoragePrivateEndpoint = Get-AzPrivateEndpoint -Name "$CclStoragePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+    $CclStoragePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $NmeCclStorageAccount.Id }
     if ($CclStoragePrivateEndpoint) {
         Write-Output "Found CCL storage private endpoint"
     } 
     else {
         Write-Output "Configuring CCL storage service connection and private endpoint"
-        $CclStorageAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Storage/storageAccounts/$($NmeCclStorageAccount.StorageAccountName)"
-        $CclStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $CclStorageServiceConnectionName -PrivateLinkServiceId $CclStorageAccountResourceId -GroupId blob 
+        $CclStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $CclStorageServiceConnectionName -PrivateLinkServiceId $NmeCclStorageAccount.Id -GroupId blob 
         $CclStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$CclStoragePrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $CclStorageServiceConnection 
     }
     # check if ccl storage account dns zone group created
-    $CclStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclStoragePrivateEndpointName" -ErrorAction SilentlyContinue
+    $CclStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $CclStoragePrivateEndpoint.Name -ErrorAction SilentlyContinue
     if ($CclStorageDnsZoneGroup) {
         Write-Output "Found CCL storage DNS zone group"
     } else {
@@ -861,18 +869,17 @@ if ($NmeDpsStorageAccountName) {
     # Get dps storage account
     $NmeDpsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeDpsStorageAccountName
     # check if dps storage account private endpoint is created
-    $DpsStoragePrivateEndpoint = Get-AzPrivateEndpoint -Name "$DpsStoragePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+    $DpsStoragePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $NmeDpsStorageAccount.Id }
     if ($DpsStoragePrivateEndpoint) {
         Write-Output "Found DPS storage private endpoint"
     } 
     else {
         Write-Output "Configuring DPS storage service connection and private endpoint"
-        $DpsStorageAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Storage/storageAccounts/$($NmeDpsStorageAccount.StorageAccountName)"
-        $DpsStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $DpsStorageServiceConnectionName -PrivateLinkServiceId $DpsStorageAccountResourceId -GroupId blob 
+        $DpsStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $DpsStorageServiceConnectionName -PrivateLinkServiceId $NmeDpsStorageAccount.Id -GroupId blob 
         $DpsStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$DpsStoragePrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $DpsStorageServiceConnection 
     }
     # check if dps storage account dns zone group created
-    $DpsStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$DpsStoragePrivateEndpointName" -ErrorAction SilentlyContinue
+    $DpsStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $DpsStoragePrivateEndpoint.Name -ErrorAction SilentlyContinue
     if ($DpsStorageDnsZoneGroup) {
         Write-Output "Found DPS storage DNS zone group"
     } else {
@@ -889,7 +896,7 @@ else {
 
 $AppService = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
 # check if app service private endpoint is created
-$AppServicePrivateEndpoint = Get-AzPrivateEndpoint -Name "$AppServicePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+$AppServicePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $AppService.id }
 if ($AppServicePrivateEndpoint) {
     Write-Output "Found App Service private endpoint"
 } 
@@ -901,7 +908,7 @@ else {
     $AppServicePrivateEndpoint = New-AzPrivateEndpoint -Name "$AppServicePrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $AppServiceServiceConnection 
 }
 # check if app service dns zone group created
-$AppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AppServicePrivateEndpointName" -ErrorAction SilentlyContinue
+$AppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $AppServicePrivateEndpoint.Name -ErrorAction SilentlyContinue
 if ($AppServiceDnsZoneGroup) {
     Write-Output "Found App Service DNS zone group"
 } else {
@@ -914,7 +921,7 @@ if ($AppServiceDnsZoneGroup) {
 if ($NmeCclWebAppName) {
     $CclAppService = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeCclWebAppName
     # check if ccl app service private endpoint is created
-    $CclAppServicePrivateEndpoint = Get-AzPrivateEndpoint -Name "$CclAppServicePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+    $CclAppServicePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $CclAppService.id }
     if ($CclAppServicePrivateEndpoint) {
         Write-Output "Found CCL App Service private endpoint"
     } 
@@ -926,7 +933,7 @@ if ($NmeCclWebAppName) {
         $CclAppServicePrivateEndpoint = New-AzPrivateEndpoint -Name "$CclAppServicePrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $CclAppServiceServiceConnection 
     }
     # check if ccl app service dns zone group created
-    $CclAppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclAppServicePrivateEndpointName" -ErrorAction SilentlyContinue
+    $CclAppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $CclAppServicePrivateEndpoint.Name -ErrorAction SilentlyContinue
     if ($CclAppServiceDnsZoneGroup) {
         Write-Output "Found CCL App Service DNS zone group"
     } else {
@@ -943,7 +950,7 @@ if ($NmeCclWebAppName) {
 if ($NmeIiWebAppName) {
     $IiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeIiWebAppName
     # check if intune insights app service private endpoint is created
-    $IiAppServicePrivateEndpoint = Get-AzPrivateEndpoint -Name "$IiAppServicePrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+    $IiAppServicePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $IiWebApp.id }
     if ($IiAppServicePrivateEndpoint) {
         Write-Output "Found Intune Insights App Service private endpoint"
     } 
@@ -954,7 +961,7 @@ if ($NmeIiWebAppName) {
         $IiAppServicePrivateEndpoint = New-AzPrivateEndpoint -Name "$IiAppServicePrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $IiAppServiceServiceConnection 
     }
     # check if intune insights app service dns zone group created
-    $IiAppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$IiAppServicePrivateEndpointName" -ErrorAction SilentlyContinue
+    $IiAppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $IiAppServicePrivateEndpoint.Name -ErrorAction SilentlyContinue
     if ($IiAppServiceDnsZoneGroup) {
         Write-Output "Found Intune Insights App Service DNS zone group"
     } else {
@@ -1588,7 +1595,7 @@ if ($NmeCclKeyVaultName) {
 # check if deny rule for sql exists
 $SqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeSqlServerName
 $ServerRules = Get-AzSqlServerVirtualNetworkRule -ServerName $NmeSqlServerName -ResourceGroupName $NmeRg 
-if (($ServerRules.VirtualNetworkSubnetId -contains $PrivateEndpointSubnet.id) -and ($SqlServer.PublicNetworkAccess -eq 'Disabled')) {
+if ($SqlServer.PublicNetworkAccess -eq 'Disabled') {
     Write-Output "SQL public access already disabled"
 }
 else {
