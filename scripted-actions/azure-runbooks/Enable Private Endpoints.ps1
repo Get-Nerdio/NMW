@@ -155,14 +155,7 @@ function Set-NmeVars {
     Write-Verbose "Getting Nerdio Manager web app"
     $webapps = Get-AzWebApp -ResourceGroupName $NmeRg 
     if ($webapps){
-        $script:NmeWebApp = $webapps | Where-Object { ($_.siteconfig.appsettings | where-object name -eq "Deployment:KeyVaultName" | Select-Object -ExpandProperty value) -eq $keyvaultName | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'PAAS'} }
-        if ($script:NmeWebApp.count -ne 1) {
-            $script:NmeWebApp = $webapps | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'PAAS'} 
-        }
-        if ($script:NmeWebApp.count -ne 1) {
-            Write-Error "Unable to find Nerdio Manager web app"
-            throw "Unable to find Nerdio Manager web app"
-        }
+        $script:NmeWebApp = $webapps | Where-Object { ($_.siteconfig.appsettings | where-object name -eq "Deployment:KeyVaultName" | Select-Object -ExpandProperty value) -eq $keyvaultName }
     }
     else {
         throw "Unable to find Nerdio Manager web app"
