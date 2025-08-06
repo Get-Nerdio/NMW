@@ -35,21 +35,29 @@ Expand-Archive `
     -Force `
     -Verbose
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-cd "C:\Windows\Temp\fslogix\install\"
+Set-Location "C:\Windows\Temp\fslogix\install\"
 
 $Dir = Get-ChildItem C:\Windows\Temp\fslogix\install\ | Where-Object PSIsContainer -eq $true
 if ($Dir.Count -gt 1) {
     $Dir = Get-ChildItem C:\Windows\Temp\fslogix\ | Where-Object PSIsContainer -eq $true
 }
 
+# Validate installer path.
+$InstallerPath = "$($Dir.FullName)\x64\Release\FSLogixAppsSetup.exe"
+if (-not (Test-Path $InstallerPath)) {
+    $InstallerPath = "$($Dir.FullName)\Release\FSLogixAppsSetup.exe"
+}
+
+if (-not (Test-Path $InstallerPath)) {
+    throw "FSLogixAppsSetup.exe not found"
+}
+
 # Install FSLogix. 
 Write-Host "INFO: Installing FSLogix. . ."
-Start-Process "$($Dir.FullName)\x64\Release\FSLogixAppsSetup.exe" `
+Start-Process $InstallerPath `
     -ArgumentList "/install /quiet" `
     -Wait `
-    -Passthru `
-  
-
+    -Passthru
 
 Write-Host "INFO: FSLogix install finished."
 
