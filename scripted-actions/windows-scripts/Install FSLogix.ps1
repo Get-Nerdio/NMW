@@ -1,58 +1,92 @@
-#description: Downloads and installs FSLogix on the session hosts
+#description: Downloads and installs the Microsoft FSLogix Agent on target session hosts
 #Written by Johan Vanneuville
 #No warranties given for this script
 #execution mode: IndividualWithRestart
 #tags: Nerdio, Apps install, FSLogix
 <# 
-Notes:
-This script installs FSLogix on AVD Session hosts.
-
+    Notes:
+    This script installs FSLogix on AVD Session hosts.
 #>
+$FslogixUrl = "https://aka.ms/fslogix/download"
 
-$FslogixUrl = "https://aka.ms/fslogix_download"
-
-# Start powershell logging
-$SaveVerbosePreference = $VerbosePreference
-$VerbosePreference = 'continue'
+# Start PowerShell logging
+$VerbosePreference = "Continue"
+$ProgressPreference = [System.Management.Automation.ActionPreference]::SilentlyContinue # Suppress verbose output during script execution for faster performance
 $VMTime = Get-Date
 $LogTime = $VMTime.ToUniversalTime()
-mkdir "C:\Windows\temp\NerdioManagerLogs\ScriptedActions\fslogix" -Force
-Start-Transcript -Path "C:\Windows\temp\NerdioManagerLogs\ScriptedActions\fslogix\ps_log.txt" -Append
+New-Item -Path "$Env:SystemRoot\Temp\NerdioManagerLogs\ScriptedActions\fslogix" -ItemType "Directory" -Force
+Start-Transcript -Path "$Env:SystemRoot\Temp\NerdioManagerLogs\ScriptedActions\fslogix\ps_log.txt" -Append
 Write-Host "################# New Script Run #################"
-Write-host "Current time (UTC-0): $LogTime"
+Write-Host "Current time (UTC-0): $LogTime"
 
 # Make directory to hold install files
+$SavePath = "$Env:SystemRoot\Temp\fslogix\install"
+if (Test-Path -Path $SavePath) {
+    Get-ChildItem -Path $SavePath | Remove-Item -Recurse -Force
+}
+New-Item -Path $SavePath -ItemType Directory -Force | Out-Null
 
-mkdir "C:\Windows\Temp\fslogix\install" -Force
+# Download the FSLogix installer
+try {
+    if ($PSEdition -eq "Desktop") {
+        Add-Type -AssemblyName "System.Net.Http"
+        Add-Type -AssemblyName "System.Web"
+    }
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+    $HttpClient = New-Object -TypeName "System.Net.Http.HttpClient"
+    $FslogixResolvedUrl = $HttpClient.SendAsync((New-Object -TypeName "System.Net.Http.HttpRequestMessage" -ArgumentList "HEAD", $FslogixUrl)).Result.RequestMessage.RequestUri.AbsoluteUri
+    Write-Host "Resolved FSLogix download URL: $FslogixResolvedUrl"
+    $HttpClient.Dispose()
 
-Get-ChildItem C:\Windows\Temp\fslogix\install\ | Remove-Item -Recurse -Force
-
-Invoke-WebRequest -Uri $FslogixUrl -OutFile "C:\Windows\Temp\fslogix\install\FSLogixAppsSetup.zip" -UseBasicParsing
-
-Expand-Archive `
-    -LiteralPath "C:\Windows\Temp\fslogix\install\FSLogixAppsSetup.zip" `
-    -DestinationPath "C:\Windows\Temp\fslogix\install" `
-    -Force `
-    -Verbose
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-cd "C:\Windows\Temp\fslogix\install\"
-
-$Dir = Get-ChildItem C:\Windows\Temp\fslogix\install\ | Where-Object PSIsContainer -eq $true
-if ($Dir.Count -gt 1) {
-    $Dir = Get-ChildItem C:\Windows\Temp\fslogix\ | Where-Object PSIsContainer -eq $true
+    $params = @{
+        Uri             = $FslogixResolvedUrl
+        OutFile         = "$SavePath\FSLogixAppsSetup.zip"
+        UseBasicParsing = $true
+        ErrorAction     = "Stop"
+    }
+    Invoke-WebRequest @params
+    Write-Host "Downloaded FSLogix installer to: $($OutFile.FullName)"
+}
+catch {
+    Write-Host "ERROR: Failed to download FSLogix installer. Please check the URL or your network connection."
+    Stop-Transcript
+    exit 1
 }
 
-# Install FSLogix. 
-Write-Host "INFO: Installing FSLogix. . ."
-Start-Process "$($Dir.FullName)\x64\Release\FSLogixAppsSetup.exe" `
-    -ArgumentList "/install /quiet" `
-    -Wait `
-    -Passthru `
-  
+# Expand the installer
+$params = @{
+    LiteralPath     = "$SavePath\FSLogixAppsSetup.zip"
+    DestinationPath = $SavePath
+    Force           = $true
+    ErrorAction     = "Stop"
+}
+Expand-Archive @params
+Write-Host "Extracted FSLogix installer to: $SavePath"
 
+# Find the installer from the extracted files and install
+$Installers = Get-ChildItem -Path $SavePath -Recurse -Include "FSLogixAppsSetup.exe" | Where-Object { $_.Directory -match "x64" }
+foreach ($Installer in $Installers) {
+    Write-Host "Installing Microsoft FSLogix Apps agent"
+    $params = @{
+        FilePath     = $Installer.FullName
+        ArgumentList = "/install /quiet /norestart /log `"$Env:SystemRoot\Temp\NerdioManagerLogs\ScriptedActions\fslogix\fslogix_install.log`""
+        Wait         = $true
+        PassThru     = $true
+        ErrorAction  = "Stop"
+    }
+    $Result = Start-Process @params
+    Write-Host "FSLogix installation process result: $($Result.ExitCode)"
+}
 
-Write-Host "INFO: FSLogix install finished."
+# Clean up
+Remove-Item -Path $SavePath -Recurse -Force -ErrorAction "Ignore"
+
+# Remove an unnecessary shortcut
+Start-Sleep -Seconds 5
+$Shortcut = "$Env:ProgramData\Microsoft\Windows\Start Menu\FSLogix\FSLogix Apps Online Help.lnk"
+Write-Host "Removing shortcut: $Shortcut"
+Remove-Item -Path $Shortcut -Force -ErrorAction "Ignore"
 
 # End Logging
+Write-Host "INFO: FSLogix install finished."
 Stop-Transcript
-$VerbosePreference=$SaveVerbosePreference
