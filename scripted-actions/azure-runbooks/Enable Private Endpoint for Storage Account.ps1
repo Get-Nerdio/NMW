@@ -98,10 +98,13 @@ if (-not $PrivateDnsZone) {
 }
 # link private dns zone to private endpoint
 Write-Output "Linking private DNS zone to private endpoint"
-New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $privatednszoneresourcegroup -ZoneName 'privatelink.file.core.windows.net' -Name "$($storageAccount.Name)PrivateDnsVirtualNetworkLink" -VirtualNetworkId $vnet.Id -RegistrationEnabled $true  
+New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $privatednszoneresourcegroup -ZoneName 'privatelink.file.core.windows.net' -Name "$($storageAccount.Name)PrivateDnsVirtualNetworkLink" -VirtualNetworkId $vnet.Id -EnableRegistration 
 
 # Create private DNS zone config
 $Config = New-AzPrivateDnsZoneConfig -Name 'privatelink.file.core.windows.net' -PrivateDnsZoneId $PrivateDnsZone.ResourceId
 
 # Create private DNS zone group
+Write-Output "Changing Azure context back to subscription $AzureSubscriptionId"
+Select-AzSubscription -SubscriptionId $AzureSubscriptionId
+Write-Output "Creating private DNS zone group"
 New-AzPrivateDnsZoneGroup -ResourceGroupName $VNetResourceGroup -PrivateEndpointName $privateEndpoint.Name -Name "$($storageAccount.Name)PrivateDnsZoneGroup" -PrivateDnsZoneConfig $config
