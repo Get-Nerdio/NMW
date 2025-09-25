@@ -21,6 +21,7 @@ if (!(Test-Path -Path "C:\Temp")) {
 Invoke-WebRequest -Uri $OneDriveSetupUrl -OutFile $DownloadPath
 
 # Execute the OneDriveSetup.exe file with the /allusers flag
-Start-Process -FilePath $DownloadPath -ArgumentList "/allusers" -Wait
+$process = Start-Process -FilePath $DownloadPath -ArgumentList "/allusers", "/silent" -PassThru
+$process.WaitForExit()
 
 ### End Script ###
