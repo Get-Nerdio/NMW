@@ -56,6 +56,7 @@ if (-not $storageAccount) {
 # Create private link service connection
 Write-Output "Creating private link service connection"
 $privateLinkServiceConnection = New-AzPrivateLinkServiceConnection -Name "$($storageAccount.Name)PrivateLinkServiceConnection" -PrivateLinkServiceId $storageAccount.Id -GroupId "file"
+Write-Output "Private link service connection created"
 
 # Get vnet
 Write-Output "Getting VNet"
@@ -79,9 +80,9 @@ if ($privateEndpoint) {
 }
 else {
 # Create private endpoint
-    Write-Output "Creating private endpoint and private link service connection"
-    $FileServiceConnection = New-AzPrivateLinkServiceConnection -Name "$($storageAccount.Name)-serviceconnection" -PrivateLinkServiceId $storageAccount.ResourceId -GroupId 'file'
+    Write-Output "Creating private endpoint and applying private link service connection"
     $privateEndpoint = New-AzPrivateEndpoint -ResourceGroupName $VNetResourceGroup -Name "$($storageAccount.Name)PrivateEndpoint" -Location $storageAccount.Location -Subnet $subnet -PrivateLinkServiceConnection $privateLinkServiceConnection
+    Write-Output "Private endpoint created"
 }
 
 
@@ -98,10 +99,13 @@ if (-not $PrivateDnsZone) {
 }
 # link private dns zone to private endpoint
 Write-Output "Linking private DNS zone to private endpoint"
-New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $privatednszoneresourcegroup -ZoneName 'privatelink.file.core.windows.net' -Name "$($storageAccount.Name)PrivateDnsVirtualNetworkLink" -VirtualNetworkId $vnet.Id -RegistrationEnabled $true  
+New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $privatednszoneresourcegroup -ZoneName 'privatelink.file.core.windows.net' -Name "$($storageAccount.Name)PrivateDnsVirtualNetworkLink" -VirtualNetworkId $vnet.Id -EnableRegistration 
 
 # Create private DNS zone config
 $Config = New-AzPrivateDnsZoneConfig -Name 'privatelink.file.core.windows.net' -PrivateDnsZoneId $PrivateDnsZone.ResourceId
 
 # Create private DNS zone group
+Write-Output "Changing Azure context back to subscription $AzureSubscriptionId"
+Select-AzSubscription -SubscriptionId $AzureSubscriptionId
+Write-Output "Creating private DNS zone group"
 New-AzPrivateDnsZoneGroup -ResourceGroupName $VNetResourceGroup -PrivateEndpointName $privateEndpoint.Name -Name "$($storageAccount.Name)PrivateDnsZoneGroup" -PrivateDnsZoneConfig $config
