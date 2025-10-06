@@ -34,7 +34,6 @@ param (
   [string] $driverUrl,
 
   [ComponentModel.DisplayName('Nvidia license token url')]
-
   [string] $licenseTokenUrl
 )
 
