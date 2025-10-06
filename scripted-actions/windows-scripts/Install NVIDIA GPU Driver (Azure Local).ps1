@@ -29,6 +29,14 @@ If using Secure Variables, the variables to create in Nerdio Manager are:
 }
 #>
 
+param (
+  [ComponentModel.DisplayName('Nvidia guest driver url')]
+  [string] $driverUrl,
+
+  [ComponentModel.DisplayName('Nvidia license token url')]
+  [string] $licenseTokenUrl
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
