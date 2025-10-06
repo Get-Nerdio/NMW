@@ -41,10 +41,12 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-if($SecureVars | Get-Member -MemberType Property).Name.Contains("HciNvidiaGuestDriverUrl")
+if ($SecureVars | Get-Member -MemberType Property).Name.Contains("HciNvidiaGuestDriverUrl") {
   $azureDriverUrl = $SecureVars.HciNvidiaGuestDriverUrl
-if($SecureVars | Get-Member -MemberType Property).Name.Contains("HciNvidiaLicenseUrl")
+}
+if ($SecureVars | Get-Member -MemberType Property).Name.Contains("HciNvidiaLicenseUrl") {
   $azureLicenseTokenUrl = $SecureVars.HciNvidiaLicenseUrl
+}
 
 if ($driverUrl) {
   $azureDriverUrl = $driverUrl
