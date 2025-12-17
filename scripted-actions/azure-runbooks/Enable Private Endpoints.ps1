@@ -67,10 +67,10 @@ endpoint vnet.
     "IsRequired": false,
     "DefaultValue": ""
   },
-  "MakeSaStoragePrivate": {
-    "Description": "Make the scripted actions storage account private. AVD hosts require access to the scripted actions storage account, so making this storage account private will require peering the AVD VNets to the NME private VNet or using additional private endpoints to put the scripted actions storage account on the AVD VNets as well as the NME private VNet.",
+  "CssaStorageAccount": {
+    "Description": "Values: Public, Restricted, or Private. AVD hosts require access to the scripted actions storage account, which stores install files such as the FSLogix installer, and windows scripted actions. There should be no sensitive information in this SA. Setting this to Restricted will keep the public endpoint enabled but restricted to the VNets linked to Nerdio Manager, allowing access from AVD networks. Setting this to Private will disable the public endpoint and will require peering the AVD VNets to the NME private VNet or using additional private endpoints to put the scripted actions storage account on the AVD VNets as well as the NME private VNet, and configuring DNS routing.",
     "IsRequired": false,
-    "DefaultValue": "false"
+    "DefaultValue": "Restricted"
   },
   "PeerVnetIds": {
     "Description": "Optional. Values are 'All' or comma-separated list of Azure resource IDs of VNets to peer to private endpoint VNet. If 'All' then all linked VNets will be peered. The VNETs or their resource groups must be linked to Nerdio Manager in Settings->Azure environment. All VNets must be in the same subscription as Nerdio Manager. External VNets must be peered manually.",
@@ -106,11 +106,18 @@ function Set-NmeVars {
     $keyvaultTags = $NmeKeyVault.Tags
     $key = $keyvaultTags.GetEnumerator() | Where-Object { $_.Value -eq "PAAS" } | Select-Object -ExpandProperty Name
     if (!$Key) {
-        $ScriptedActionsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg | Where-Object StorageAccountName -Match 'cssa'
-        $key = $ScriptedActionsStorageAccount.Tags.GetEnumerator() | Where-Object { $_.Value -eq "CUSTOM_SCRIPTS_STORAGE_ACCOUNT" } | Select-Object -ExpandProperty Key
+        # Get storage account where any tag value equals 'CUSTOM_SCRIPTS_STORAGE_ACCOUNT'
+        $ScriptedActionStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg | Where-Object { $_.Tags.Values -contains "CUSTOM_SCRIPTS_STORAGE_ACCOUNT" }
+        $key = $ScriptedActionStorageAccount.Tags.GetEnumerator() | Where-Object { $_.Value -eq "CUSTOM_SCRIPTS_STORAGE_ACCOUNT" } | Select-Object -ExpandProperty Key
     }
     else {
         $key = 'NMW_OBJECT_TYPE'
+    }
+    if ($ScriptedActionStorageAccount) {
+        $script:NmeScriptedActionStorageAccountName = $ScriptedActionStorageAccount.StorageAccountName
+    }
+    else {
+        write-warning "Unable to find Cssa storage account. It should have a tag with value CUSTOM_SCRIPTS_STORAGE_ACCOUNT"
     }
     Write-Verbose "Getting Nerdio Manager sql server"
     # First check to see if there's a sql server with tag "$Prefix`_RESOURCE" and value "PRIMARY_SQL_SERVER"
@@ -998,21 +1005,20 @@ if ($NmeScriptedActionsAccountName) {
         Write-Output "Skipping scripted actions DNS zone group configuration (SkipDNS enabled)"
     }
 
-    if ($MakeSaStoragePrivate -eq 'True') {
-        # Get scripted actions storage account
-        $ScriptedActionsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg | Where-Object StorageAccountName -Match 'cssa'
+    if ($CssaStorageAccount -eq 'Private' -or $CssaStorageAccount -eq 'Restricted') {
+        $ScriptedActionStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeScriptedActionStorageAccountName -ErrorAction SilentlyContinue
         # throw error if no scripted actions storage account found
-        if (-not $ScriptedActionsStorageAccount) {
+        if (-not $ScriptedActionStorageAccount) {
             throw "No scripted actions storage account found in resource group $NmeRg"
         }
         # check if scripted action storage account private endpoint is created
-        $ScriptedActionsStoragePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $ScriptedActionsStorageAccount.Id }
+        $ScriptedActionsStoragePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $ScriptedActionStorageAccount.Id }
         if ($ScriptedActionsStoragePrivateEndpoint) {
             Write-Output "Found scripted actions storage private endpoint"
         } 
         else {
             Write-Output "Configuring scripted actions storage service connection and private endpoint"
-            $ScriptedActionsStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $SaStorageServiceConnectionName -PrivateLinkServiceId $ScriptedActionsStorageAccount.Id -GroupId blob 
+            $ScriptedActionsStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $SaStorageServiceConnectionName -PrivateLinkServiceId $ScriptedActionStorageAccount.Id -GroupId blob 
             $ScriptedActionsStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$ScriptedActionsStoragePrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ScriptedActionsStorageServiceConnection 
         }
         # check if scripted action storage account dns zone group created
@@ -1458,8 +1464,8 @@ $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpoint
 $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
 
 $ServiceEndpoints = @('Microsoft.KeyVault', 'Microsoft.Sql', 'Microsoft.Web')
-if ($MakeSaStoragePrivate -eq 'True') {
-    $ServiceEndpoints += 'Microsoft.Storage'
+if ($CssaStorageAccount -eq 'Private' -or $CssaStorageAccount -eq 'Restricted') {
+    $ServiceEndpoints += 'Microsoft.Storage.Global'
 }
 
 
@@ -1625,7 +1631,7 @@ else {
     }
 }
 
-if ($MakeSaStoragePrivate -eq 'True') {
+if ($CssaStorageAccount -eq 'Private' ) {
     # check if deny rule for storage exists
     $StorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg | Where-Object StorageAccountName -Match 'cssa'
     if ($StorageAccount.PublicNetworkAccess -eq 'Disabled') {
@@ -1635,6 +1641,33 @@ if ($MakeSaStoragePrivate -eq 'True') {
         Write-Output "Disabling storage public access"
         Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $StorageAccount.StorageAccountName | Out-Null
     }
+}
+elseif ($cssastorageaccount -eq 'Restricted') {
+    # keep storage account public but add network rules to allow access from 'All' Vnets linked to NME
+    $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
+    $VnetIds = Get-AzVirtualNetwork | ? {if ($_.tag){$True}}| Where-Object {$_.tag["$Prefix`_OBJECT_TYPE"] -eq 'LINKED_NETWORK'} -ErrorAction SilentlyContinue | Where-Object id -ne $vnet.id | Select-Object -ExpandProperty Id
+    # if no vnets, warn that no vnets will be added to storage account network rules
+    if (!$VnetIds) {
+        Write-Warning "No linked vnets found to add to storage account network rules. Cssa storage account will not be accessible from AVD networks."
+        Write-Output "No linked vnets found to add to storage account network rules. Cssa storage account will not be accessible from AVD networks."
+    }
+    else {
+        $NmeStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg | Where-Object StorageAccountName -eq $NmeScriptedActionStorageAccountName
+        Write-Output "Configuring cssa storage account network rules"
+        # add vnet rules for each linked vnet
+        foreach ($id in $VnetIds) {
+            # get the vnet
+            $ThisVnet = Get-AzvirtualNetwork -Name (Get-AzResource -ResourceId $id).Name -ResourceGroupName (Get-AzResource -ResourceId $id).ResourceGroupName
+            # add all subnets to network rules
+            foreach ($subnet in $ThisVnet.Subnets) {
+                Write-Output "Adding subnet $($subnet.Name) from vnet $($ThisVnet.Name) to cssa storage account network rules"
+                $rule = Add-AzStorageAccountNetworkRule -ResourceGroupName $NmeRg -Name $NmeStorageAccount.StorageAccountName -VirtualNetworkResourceId $Subnet.id
+            }
+        }
+        # set default action to deny
+        Update-AzStorageAccountNetworkRuleSet -ResourceGroupName $NmeRg -Name $NmeStorageAccount.StorageAccountName -DefaultAction Deny
+    }
+    
 }
 
 # make ccl storage account private
