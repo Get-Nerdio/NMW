@@ -136,7 +136,16 @@ function Set-NmeVars {
         }
         else {
             $script:NmeSqlServerName = $SqlServer.ServerName
+            $script:NmeSqlServerFQDN = $SqlServer.FullyQualifiedDomainName
         }
+    }
+    # Get database with tag displayName = Database
+    $NmeDatabase = Get-AzSqlDatabase -ResourceGroupName $nmeRg -ServerName $nmeSqlServerName | Where-Object DatabaseName -ne 'master' | Where-Object {$_.tags['displayName'] -eq 'Database'}
+    if ($NmeDatabase.count -ne 1) {
+        write-error "Unable to find NME database."
+    }
+    else {
+        $script:NmeDatabaseName = $NmeDatabase.DatabaseName
     }
     # look for secondary sql server with tag "$NmeResourceTagName" and value "SECONDARY_SQL_SERVER"
     $SqlSecondary = Get-AzSqlServer -ResourceGroupName $nmerg | Where-Object {$_.tags[$NmeResourceTagName] -eq 'SECONDARY_SQL_SERVER'}
@@ -547,6 +556,24 @@ function GetEntAppName {
     $App = Get-MgApplicationbyAppId -AppId $ctx.account.Id
     disconnect-mggraph | out-null
     return $App.DisplayName
+}
+
+function GetVnets {
+    $moduleName = "SqlServer"
+    if (-not (Get-Module -ListAvailable -Name $moduleName)) {
+        Install-Module -Name $moduleName -Force 
+    }
+    $ctx = Get-AzContext
+    if ($ctx.Environment -eq "AzureUSGovernment") {
+        $ResourceUrl = ($ctx.environment.sqldatabasednssuffix).TrimStart(".")
+    }
+    $token = (Get-AzAccessToken -ResourceUrl "https://$ResourceUrl").Token
+    $VNets = Invoke-SqlCmd -ServerInstance $NmeSqlServerFQDN `
+                -Database $NmeSqlDbName `
+                -AccessToken $token `
+                -Query "SELECT * FROM [dbo].[Networks]"
+
+    $VNets
 }
 
 #### main script ####
