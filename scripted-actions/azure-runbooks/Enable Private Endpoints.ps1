@@ -564,9 +564,7 @@ function GetVnets {
         Install-Module -Name $moduleName -Force 
     }
     $ctx = Get-AzContext
-    if ($ctx.Environment -eq "AzureUSGovernment") {
-        $ResourceUrl = ($ctx.environment.sqldatabasednssuffix).TrimStart(".")
-    }
+    $ResourceUrl = ($ctx.environment.sqldatabasednssuffix).TrimStart(".")
     $token = (Get-AzAccessToken -ResourceUrl "https://$ResourceUrl").Token
     $VNets = Invoke-SqlCmd -ServerInstance $NmeSqlServerFQDN `
                 -Database $NmeSqlDbName `
@@ -1327,122 +1325,42 @@ if ($NmeRtiKeyVaultName) {
         Write-Output "Skipping RTI Key Vault DNS zone group configuration (SkipDNS enabled)"
     }
 }
-
-#endregion
-
-#region create azure monitor private link scope
-if ($MakeAzureMonitorPrivate -eq 'True') {
-    
-    $AmplScopeProperties = @{
-        accessModeSettings = @{
-            queryAccessMode     = $QueryAccessMode; 
-            ingestionAccessMode = $IngestionAccessMode
-        } 
-    }
-
-    # Check if scope exists
-    $AmplScope = Get-AzResource -ResourceId "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Insights/privateLinkScopes/$AmplScopeName" -ErrorAction SilentlyContinue
-    if ($AmplScope) {
-        Write-Output "Found Azure Monitor private link scope"
-    } 
-    else {
-        Write-Output "Creating Azure Monitor private link scope"
-        $AmplScope = New-AzResource -Location "Global" -Properties $AmplScopeProperties -ResourceName $AmplScopeName -ResourceType "Microsoft.Insights/privateLinkScopes" -ResourceGroupName $NmeRg -ApiVersion "2021-07-01-preview" -Force
-    }
-
-    # Create linked scope resources
-    # Check if LAW Scope exists
-    $NmeLAWName = $NmeLogAnalyticsWorkspaceId.Split("/")[-1]
-    $LAWScope = Get-AzInsightsPrivateLinkScopedResource -ResourceGroupName $NmeRg -ScopeName $AmplScopeName -Name $NmeLAWName -ErrorAction SilentlyContinue
-    if ($LAWScope) {
-        Write-Output "Found Azure Monitor LAW scope"
-    } 
-    else {
-        Write-Output "Creating Azure Monitor LAW scope"
-        $LAWScope = New-AzInsightsPrivateLinkScopedResource -LinkedResourceId $NmeLogAnalyticsWorkspaceId -ResourceGroupName $NmeRg -ScopeName $AmplScopeName -Name $NmeLAWName
-    }
-
-    # Check if App Insights Scope exists
-    $AppInsightsScope = Get-AzInsightsPrivateLinkScopedResource -ResourceGroupName $NmeRg -ScopeName $AmplScopeName -Name "$NmeAppInsightsName" -ErrorAction SilentlyContinue
-    if ($AppInsightsScope) {
-        Write-Output "Found Azure Monitor App Insights scope"
-    } 
-    else {
-        Write-Output "Creating Azure Monitor App Insights scope"
-        $AppInsights = Get-AzApplicationInsights -ResourceGroupName $NmeRg -Name "$NmeAppInsightsName"
-        $AppInsightsScope = New-AzInsightsPrivateLinkScopedResource -LinkedResourceId $AppInsights.id -ResourceGroupName $NmeRg -ScopeName $AmplScopeName -Name "$NmeAppInsightsName" 
-    }
-
-    # check if app insights law scope exists
-    $AppInsightsLAWScope = Get-AzInsightsPrivateLinkScopedResource -ResourceGroupName $NmeRg -ScopeName $AmplScopeName -Name $NmeAppInsightsLAWName -ErrorAction SilentlyContinue
-    if ($AppInsightsLAWScope) {
-        Write-Output "Found Azure Monitor App Insights LAW scope"
-    } 
-    else {
-        Write-Output "Creating Azure Monitor App Insights LAW scope"
-        $AppInsightsLAW = Get-AzOperationalInsightsWorkspace -ResourceGroupName $NmeRg -Name $NmeAppInsightsLAWName
-        $AppInsightsLAWScope = New-AzInsightsPrivateLinkScopedResource -LinkedResourceId $AppInsightsLAW.ResourceId -ResourceGroupName $NmeRg -ScopeName $AmplScopeName -Name $NmeAppInsightsLAWName
-    }
-
-
-    if ($NmeCclAppInsightsName){
-        # Check if CCL Insights Scope exists
-        $CCLInsightsScope = Get-AzInsightsPrivateLinkScopedResource -ResourceGroupName $NmeRg -ScopeName $AmplScopeName -Name $NmeCclAppInsightsName -ErrorAction SilentlyContinue
-        if ($CCLInsightsScope) {
-            Write-Output "Found Azure Monitor CCL Insights scope"
-        } 
-        else {
-            Write-Output "Creating Azure Monitor CCL Insights scope"
-            # Get CCL App Insights
-            $NmeCclAppInsights = Get-AzApplicationInsights -ResourceGroupName $NmeRg -Name $NmeCclAppInsightsName
-            $CCLInsightsScope = New-AzInsightsPrivateLinkScopedResource -LinkedResourceId $NmeCclAppInsights.id -ResourceGroupName $NmeRg -ScopeName $AmplScopeName -Name $NmeCclAppInsightsName
+# if cssastorageaccount is private, create private endpoints for the cssa on all linked vnets and ensure prviate dns zone is linked to those vnets if SkipDNS is not True
+if ($CssaStorageAccount -eq 'Private') {
+    # Get cssa storage account
+    $LinkedVnets = GetVnets
+    $Sa = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeCssaStorageAccountName
+    foreach ($VnetId in ($LinkedVnets.NetworkId | select -unique)) {
+        # get subnets
+        $SubnetNames = $LinkedVnets | Where-Object { $_.NetworkId -eq $VnetId } | Select-Object -ExpandProperty Subnet 
+        foreach ($SubnetName in $SubnetNames) {
+            $Subnet = Get-AzVirtualNetworkSubnetConfig -ResourceId "$VNetid/subnets/$SubnetName" | where-object {$_.delegations -eq $null} | Sort | Select -first 1
+            if ($Subnet.AddressPrefix -like "$($CssaStorageSubnetPrefix)*") {
+                $FirstSubnet = $Subnet
+                break
+            }
         }
-    }
-    if ($NmeCclLawName) {
-        # check if CCL LAW scope exists
-        $CCLLAWScope = Get-AzInsightsPrivateLinkScopedResource -ResourceGroupName $NmeRg -ScopeName $AmplScopeName -Name $NmeCclLawName -ErrorAction SilentlyContinue
-        if ($CCLLAWScope) {
-            Write-Output "Found Azure Monitor CCL LAW scope"
-        } 
-        else {
-            Write-Output "Creating Azure Monitor CCL LAW scope"
-            # Get CCL LAW
-            $NmeCclLaw = Get-AzOperationalInsightsWorkspace -ResourceGroupName $NmeRg -Name $NmeCclLawName
-            $CCLLAWScope = New-AzInsightsPrivateLinkScopedResource -LinkedResourceId $NmeCclLaw.ResourceId -ResourceGroupName $NmeRg -ScopeName $AmplScopeName -Name $NmeCclLawName
-        }
-    }
-    # check if monitor private endpoint is created
-    $MonitorPrivateEndpoint = Get-AzPrivateEndpoint -Name "$MonitorPrivateEndpointName" -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
-    if ($MonitorPrivateEndpoint) {
-        Write-Output "Found Monitor private endpoint"
-    } 
-    else {
-        Write-Output "Configuring monitor service connection and private endpoint"
-        $MonitorServiceConnection = New-AzPrivateLinkServiceConnection -Name $MonitorServiceConnectionName -PrivateLinkServiceId $AmplScope.ResourceId -GroupId azuremonitor 
-        $MonitorPrivateEndpoint = New-AzPrivateEndpoint -Name "$MonitorPrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $MonitorServiceConnection 
-    }
-
-    # check if monitor dns zone group is created
-    if ($SkipDNS -ne 'True') {
-        $MonitorDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$MonitorPrivateEndpointName" -ErrorAction SilentlyContinue
-        if ($MonitorDnsZoneGroup) {
-            Write-Output "Found Monitor DNS zone group"
+        
+        
+        $CssaStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name "$SaStorageServiceConnectionName-$($VnetId.Split('/')[-1])" -PrivateLinkServiceId $Sa.Id -GroupId blob
+        $CssaStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$SaStoragePrivateEndpointName-$($VnetId.Split('/')[-1])" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $FirstSubnet -PrivateLinkServiceConnection $CssaStorageServiceConnection
+        # check if cssa storage account dns zone group 
+        if ($SkipDNS -ne 'True') {
+            $CssaStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $CssaStoragePrivateEndpoint.Name -ErrorAction SilentlyContinue
+            if ($CssaStorageDnsZoneGroup) {
+                Write-Output "Found CSSA storage DNS zone group for vnet $VnetId"
+            } else {
+                Write-Output "Configuring CSSA storage DNS zone group for vnet $VnetId"
+                $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
+                $CssaStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$SaStoragePrivateEndpointName-$($VnetId.Split('/')[-1])" -Name "$SaStoragePrivateDnsZoneGroupName-$($VnetId.Split('/')[-1])" -PrivateDnsZoneConfig $config
+            }
         } else {
-            Write-Output "Configuring monitor DNS zone group"
-            $Configs = @()
-            # create private dns zone configs for monitor, ops, oms, and monitor agent
-            $Configs += New-AzPrivateDnsZoneConfig -Name $MonitorDnsZoneName -PrivateDnsZoneId $MonitorDnsZone.ResourceId
-            $Configs += New-AzPrivateDnsZoneConfig -Name $OpsDnsZoneName -PrivateDnsZoneId $OpsDnsZone.ResourceId
-            $Configs += New-AzPrivateDnsZoneConfig -Name $OdsDnsZoneName -PrivateDnsZoneId $OdsDnsZone.ResourceId
-            $Configs += New-AzPrivateDnsZoneConfig -Name $MonitorAgentDnsZoneName -PrivateDnsZoneId $MonitorAgentDnsZone.ResourceId
-            $MonitorDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$MonitorPrivateEndpointName" -Name $MonitorPrivateDnsZoneGroupName -PrivateDnsZoneConfig $Configs
+            Write-Output "Skipping CSSA storage DNS zone group configuration for vnet $VnetId (SkipDNS enabled)"
         }
-    } else {
-        Write-Output "Skipping Monitor DNS zone group configuration (SkipDNS enabled)"
     }
-
 
 }
+
 #endregion
 
 # region create private link peering
@@ -1492,7 +1410,7 @@ $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName
 
 $ServiceEndpoints = @('Microsoft.KeyVault', 'Microsoft.Sql', 'Microsoft.Web')
 if ($CssaStorageAccount -eq 'Private' -or $CssaStorageAccount -eq 'Restricted') {
-    $ServiceEndpoints += 'Microsoft.Storage.Global'
+    $ServiceEndpoints += 'Microsoft.Storage'
 }
 
 
