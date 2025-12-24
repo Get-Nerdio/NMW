@@ -68,7 +68,7 @@ endpoint vnet.
     "DefaultValue": ""
   },
   "CssaStorageAccount": {
-    "Description": "Values: Public, Restricted, or Private. AVD hosts require access to the scripted actions storage account, which stores install files such as the FSLogix installer, and windows scripted actions. There should be no sensitive information in this SA. Setting this to Restricted will keep the public endpoint enabled but restricted to the VNets linked to Nerdio Manager, allowing access from AVD networks. Setting this to Private will disable the public endpoint and will require peering the AVD VNets to the NME private VNet or using additional private endpoints to put the scripted actions storage account on the AVD VNets as well as the NME private VNet, and configuring DNS routing.",
+    "Description": "Values: Public, Restricted, or Private. AVD hosts require access to the scripted actions storage account, which stores install files such as the FSLogix installer, and windows scripted actions. Setting this to Restricted will keep the public endpoint enabled but restricted to the VNets linked to Nerdio Manager, allowing access from AVD networks. Setting this to Private will create private endpoints to put the scripted actions storage account on the AVD VNets and configure Azure Private DNS routing.",
     "IsRequired": false,
     "DefaultValue": "Restricted"
   },
@@ -566,12 +566,17 @@ function GetVnets {
     $ctx = Get-AzContext
     $ResourceUrl = ($ctx.environment.sqldatabasednssuffix).TrimStart(".")
     $token = (Get-AzAccessToken -ResourceUrl "https://$ResourceUrl").Token
-    $VNets = Invoke-SqlCmd -ServerInstance $NmeSqlServerFQDN `
+    try {
+        $VNets = Invoke-SqlCmd -ServerInstance $NmeSqlServerFQDN `
                 -Database $NmeSqlDbName `
                 -AccessToken $token `
                 -Query "SELECT * FROM [dbo].[Networks]"
 
     $VNets
+    } catch {
+        Write-Error "Unable to retrieve vnet list from Nerdio Manager database. $_"
+        Throw $_
+    }
 }
 
 #### main script ####
@@ -622,6 +627,10 @@ if ($VNet) {
     $AppServiceSubnet = New-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -AddressPrefix $AppServiceSubnetRange 
     $VNet = New-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NmeRg -Location $NmeRegion -AddressPrefix $VnetAddressRange -Subnet $PrivateEndpointSubnet,$AppServiceSubnet
 }
+
+# Get linked VNets
+$LinkedVnets = GetVnets
+
 
 #region create DNS zones and links
 if ($SkipDNS -ne 'True') {
@@ -678,11 +687,36 @@ if ($SkipDNS -ne 'True') {
             Write-Output "Linking Private DNS Zone for Storage to vnet"
             $StorageZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $StorageDnsZoneName -Name $BlobZoneLinkName -VirtualNetworkId $vnet.Id
         }
+        # if cssastorageaccount is Private, check for links to linked networks
+        if ($CssaStorageAccount -eq 'Private') {
+            foreach ($linkedVnet in $LinkedVnets) {
+                if ($StorageZoneLink.VirtualNetworkId -contains $linkedVnet.id) {
+                    Write-Output "Private DNS Zone for Storage already linked to linked vnet $($linkedVnet.Name)"
+                }
+                else {
+                    Write-Output "Linking Private DNS Zone for Storage to linked VNet $($linkedVnet.Name)"
+                    try {$StorageZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $StorageDnsZoneName -Name "$($BlobZoneLinkName)-$($linkedVnet.Name)" -VirtualNetworkId $linkedVnet.Id}
+                    catch {
+                        Write-Error "Unable to link Private DNS Zone for Storage to linked VNet $($linkedVnet.Name). $_"
+                    }
+                }
+            }
+        }
     }
     else {
         Write-Output "Creating Private DNS Zones and VNet link for Storage"
         $StorageDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name $StorageDnsZoneName
         $StorageZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $StorageDnsZoneName -Name $BlobZoneLinkName -VirtualNetworkId $vnet.Id
+        # create links to linked networks
+        if ($CssaStorageAccount -eq 'Private') {
+            foreach ($linkedVnet in $LinkedVnets) {
+                Write-Output "Linking Private DNS Zone for Storage to linked VNet $($linkedVnet.Name)"
+                try {$StorageZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $StorageDnsZoneName -Name "$($BlobZoneLinkName)-$($linkedVnet.Name)" -VirtualNetworkId $linkedVnet.Id}
+                catch {
+                    Write-Error "Unable to link Private DNS Zone for Storage to linked VNet $($linkedVnet.Name). $_"
+                }
+            }
+        }
     }
 
     # Create and link private dns zone for automation account
@@ -1328,7 +1362,7 @@ if ($NmeRtiKeyVaultName) {
 # if cssastorageaccount is private, create private endpoints for the cssa on all linked vnets and ensure prviate dns zone is linked to those vnets if SkipDNS is not True
 if ($CssaStorageAccount -eq 'Private') {
      # Get cssa storage account
-    $LinkedVnets = GetVnets
+    
     $Sa = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeScriptedActionStorageAccountName
     foreach ($VnetId in ($LinkedVnets.NetworkId | select -unique)) {
         # Get vnet 
@@ -1357,6 +1391,9 @@ if ($CssaStorageAccount -eq 'Private') {
         $CssaStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$CssaStorageServiceConnectionName-$($VnetId.Split('/')[-1])" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $FirstSubnet -PrivateLinkServiceConnection $CssaStorageServiceConnection
         # check if cssa storage account dns zone group 
         if ($SkipDNS -ne 'True') {
+            # check if vnet already linked to private dns zone
+
+
             $CssaStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $CssaStoragePrivateEndpoint.Name -ErrorAction SilentlyContinue
             if ($CssaStorageDnsZoneGroup) {
                 Write-Output "Found CSSA storage DNS zone group for vnet $VnetId"
@@ -1424,7 +1461,7 @@ if ($PeerVnetIds) {
     Write-Output "Peering vnets" 
     $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
     if ($PeerVnetIds -eq 'All') {
-        $VnetIds = Get-AzVirtualNetwork | ? {if ($_.tag){$True}}| Where-Object {$_.tag["$Prefix`_OBJECT_TYPE"] -eq 'LINKED_NETWORK'} -ErrorAction SilentlyContinue | Where-Object id -ne $vnet.id | Select-Object -ExpandProperty Id
+        $VnetIds = GetVnets | Select-Object -ExpandProperty NetworkId
     }
     else {
         $VnetIds = $PeerVnetIds -split ','
