@@ -365,7 +365,7 @@ $KvServiceConnectionName = "$Prefix-app-kv-serviceconnection"
 $SqlServiceConnectionName = "$Prefix-app-sql-serviceconnection"
 $AutomationServiceConnectionName = "$Prefix-app-automation-serviceconnection"
 $ScriptedActionsServiceConnectionName = "$Prefix-app-scriptedactions-serviceconnection"
-$SaStorageServiceConnectionName = "$Prefix-app-sa-storage-serviceconnection"
+$CssaStorageServiceConnectionName = "$Prefix-app-sa-storage-serviceconnection"
 $MonitorServiceConnectionName = "$Prefix-app-monitor-serviceconnection"
 $AppServiceServiceConnectionName = "$Prefix-app-appservice-serviceconnection"
 $CclKvServiceConnectionName = "$Prefix-ccl-kv-serviceconnection"
@@ -1043,7 +1043,7 @@ if ($NmeScriptedActionsAccountName) {
         } 
         else {
             Write-Output "Configuring scripted actions storage service connection and private endpoint"
-            $ScriptedActionsStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $SaStorageServiceConnectionName -PrivateLinkServiceId $ScriptedActionStorageAccount.Id -GroupId blob 
+            $ScriptedActionsStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $CssaStorageServiceConnectionName -PrivateLinkServiceId $ScriptedActionStorageAccount.Id -GroupId blob 
             $ScriptedActionsStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$ScriptedActionsStoragePrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ScriptedActionsStorageServiceConnection 
         }
         # check if scripted action storage account dns zone group created
@@ -1327,23 +1327,34 @@ if ($NmeRtiKeyVaultName) {
 }
 # if cssastorageaccount is private, create private endpoints for the cssa on all linked vnets and ensure prviate dns zone is linked to those vnets if SkipDNS is not True
 if ($CssaStorageAccount -eq 'Private') {
-    # Get cssa storage account
+     # Get cssa storage account
     $LinkedVnets = GetVnets
-    $Sa = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeCssaStorageAccountName
+    $Sa = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeScriptedActionStorageAccountName
     foreach ($VnetId in ($LinkedVnets.NetworkId | select -unique)) {
-        # get subnets
-        $SubnetNames = $LinkedVnets | Where-Object { $_.NetworkId -eq $VnetId } | Select-Object -ExpandProperty Subnet 
-        foreach ($SubnetName in $SubnetNames) {
-            $Subnet = Get-AzVirtualNetworkSubnetConfig -ResourceId "$VNetid/subnets/$SubnetName" | where-object {$_.delegations -eq $null} | Sort | Select -first 1
-            if ($Subnet.AddressPrefix -like "$($CssaStorageSubnetPrefix)*") {
-                $FirstSubnet = $Subnet
-                break
-            }
+        # Get vnet 
+        $LinkedVNet = Get-AzVirtualNetwork -ResourceGroupName ($VnetId.Split('/')[4]) -Name ($VnetId.Split('/')[-1])
+        # check that vnet is in same azure region as storage account, or in a paired azure region
+        if ($LinkedVNet.Location -ne $NmeRegion) {
+            Write-Output "VNet $VnetId is not in the same region as the storage account or a paired region. Cannot create private endpoint"
+            Write-Warning "VNet $VnetId is not in the same region as the storage account or a paired region. Cannot create private endpoint"
+            continue
+            
         }
         
-        
-        $CssaStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name "$SaStorageServiceConnectionName-$($VnetId.Split('/')[-1])" -PrivateLinkServiceId $Sa.Id -GroupId blob
-        $CssaStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$SaStoragePrivateEndpointName-$($VnetId.Split('/')[-1])" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $FirstSubnet -PrivateLinkServiceConnection $CssaStorageServiceConnection
+        # get subnets
+        $SubnetNames = $LinkedVnets | Where-Object { $_.NetworkId -eq $VnetId } | Select-Object -ExpandProperty Subnet 
+        # select the first subnet that's name is in the list of $SubnetNames
+        $FirstSubnet = $LinkedVnet.Subnets | Sort-Object {$_.Name} | Where-Object { $SubnetNames -contains $_.Name } | Select -first 1
+        # add a private endpoint for the cssa storage account in the linked vnet
+        $CssaStoragePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $Sa.Id -and $_.Subnet.Id -like "*$($VnetId.Split('/')[-1])/*" }
+        if ($CssaStoragePrivateEndpoint) {
+            Write-Output "Found CSSA storage private endpoint for vnet $VnetId"
+            continue
+        }
+
+        Write-Output "Configuring CSSA storage service connection and private endpoint for vnet $VnetId"
+        $CssaStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name "$CssaStorageServiceConnectionName-$($VnetId.Split('/')[-1])" -PrivateLinkServiceId $Sa.Id -GroupId "blob"
+        $CssaStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$CssaStorageServiceConnectionName-$($VnetId.Split('/')[-1])" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $FirstSubnet -PrivateLinkServiceConnection $CssaStorageServiceConnection
         # check if cssa storage account dns zone group 
         if ($SkipDNS -ne 'True') {
             $CssaStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $CssaStoragePrivateEndpoint.Name -ErrorAction SilentlyContinue
@@ -1352,7 +1363,7 @@ if ($CssaStorageAccount -eq 'Private') {
             } else {
                 Write-Output "Configuring CSSA storage DNS zone group for vnet $VnetId"
                 $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
-                $CssaStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$SaStoragePrivateEndpointName-$($VnetId.Split('/')[-1])" -Name "$SaStoragePrivateDnsZoneGroupName-$($VnetId.Split('/')[-1])" -PrivateDnsZoneConfig $config
+                $CssaStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CssaStorageServiceConnectionName-$($VnetId.Split('/')[-1])" -Name "$SaStoragePrivateDnsZoneGroupName-$($VnetId.Split('/')[-1])" -PrivateDnsZoneConfig $config
             }
         } else {
             Write-Output "Skipping CSSA storage DNS zone group configuration for vnet $VnetId (SkipDNS enabled)"
@@ -1360,6 +1371,51 @@ if ($CssaStorageAccount -eq 'Private') {
     }
 
 }
+
+# if cssastorage account is 'Restricted' add service endpoints to each linked subnet
+elseif ($CssaStorageAccount -eq 'Restricted') {
+    $LinkedVnets = GetVnets
+    $Locations = Get-AzLocation 
+    foreach ($VnetId in ($LinkedVnets.NetworkId | select -unique)) {
+        # Get vnet 
+        $LinkedVNet = Get-AzVirtualNetwork -ResourceGroupName ($VnetId.Split('/')[4]) -Name ($VnetId.Split('/')[-1])
+        $VnetName = $VnetId.Split('/')[-1]
+        # check that vnet is in same azure region as storage account, or in a paired azure region
+        $Location = Get-AzLocation 
+        if ($LinkedVNet.Location -eq $NmeRegion -or ($Location | where location -eq $NmeRegion | Select PairedRegion -ExpandProperty PairedRegion | Select Name -ExpandProperty Name) -eq $LinkedVNet.Location) {
+            # add service endpoint
+            Write-Output "VNet $VNetName is in the same region as the storage account or a paired region. Adding service endpoint."
+            # get subnets
+            $SubnetNames = $LinkedVnets | Where-Object { $_.NetworkId -eq $VnetId } | Select-Object -ExpandProperty Subnet 
+            foreach ($SubnetName in $SubnetNames) {
+                $Subnet = Get-AzVirtualNetworkSubnetConfig -Name $SubnetName -VirtualNetwork $LinkedVNet
+                if ($Subnet.ServiceEndpoints -contains 'Microsoft.Storage') {
+                    Write-Output "Service endpoint already exists on subnet $SubnetName in vnet $VNetName"
+                } else {
+                    Write-Output "Adding service endpoint to subnet $SubnetName in vnet $VNetName"
+                    $LinkedVNet = $LinkedVNet | Set-AzVirtualNetworkSubnetConfig -Name $SubnetName -AddressPrefix $Subnet.AddressPrefix -ServiceEndpoint 'Microsoft.Storage' | Set-AzVirtualNetwork
+                }
+            }
+        }
+        else {
+            # add global endpoint
+            Write-Output "VNet $VNetName is not in the same region as the storage account or a paired region. Adding global endpoint."
+            # get subnets
+            $SubnetNames = $LinkedVnets | Where-Object { $_.NetworkId -eq $VnetId } | Select-Object -ExpandProperty Subnet 
+            foreach ($SubnetName in $SubnetNames) {
+                $Subnet = Get-AzVirtualNetworkSubnetConfig -Name $SubnetName -VirtualNetwork $LinkedVNet
+                if ($Subnet.ServiceEndpoints -contains 'Microsoft.Storage.Global') {
+                    Write-Output "Service endpoint already exists on subnet $SubnetName in vnet $VNetName"
+                } else {
+                    Write-Output "Adding global service endpoint to subnet $SubnetName in vnet $VNetName"
+                    $LinkedVNet = $LinkedVNet | Set-AzVirtualNetworkSubnetConfig -Name $SubnetName -AddressPrefix $Subnet.AddressPrefix -ServiceEndpoint 'Microsoft.Storage.Global' -ServiceEndpointPolicy 'Global' | Set-AzVirtualNetwork
+                }
+            }
+        }
+
+    }
+}
+
 
 #endregion
 
