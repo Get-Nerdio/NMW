@@ -559,6 +559,16 @@ function GetEntAppName {
 }
 
 function GetVnets {
+    # check if sql server public access is disabled; enable if needed
+    # check if sql server public access is disabled; enable if needed
+    $SqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeSqlServerName
+    if ($SqlServer.PublicNetworkAccess -eq 'Disabled') {
+        $SqlServerPrivate = $true
+        Write-Verbose "SQL server public access is disabled. Enabling temporarily to retrieve vnet list."
+        Set-AzSqlServer -ServerName $NmeSqlServerName -ResourceGroupName $NmeRg -PublicNetworkAccess "Enabled" | Out-Null
+        Start-Sleep -Seconds 10
+    }
+
     $moduleName = "SqlServer"
     if (-not (Get-Module -ListAvailable -Name $moduleName)) {
         Install-Module -Name $moduleName -Force 
@@ -577,7 +587,15 @@ function GetVnets {
         Write-Error "Unable to retrieve vnet list from Nerdio Manager database. $_"
         Throw $_
     }
+    finally {
+        # restore sql server public access setting
+        if ($SqlServerPrivate -eq $true) {
+            Write-Verbose "Restoring SQL server public access setting to Disabled."
+            Set-AzSqlServer -ServerName $NmeSqlServerName -ResourceGroupName $NmeRg -PublicNetworkAccess "Disabled" | Out-Null
+        }
+    }
 }
+
 
 #### main script ####
 
@@ -663,10 +681,10 @@ if ($SkipDNS -ne 'True') {
         # check for linked zone
         $SqlZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $SqlDnsZoneName -ErrorAction SilentlyContinue
         if ($SqlZoneLink.VirtualNetworkId -contains $vnet.id) {
-            Write-Output "Private DNS Zone for SQL already linked to vnet"
+            Write-Output "Private DNS Zone for SQL already linked to VNet"
         }
         else {
-            Write-Output "Linking Private DNS Zone for SQL to vnet"
+            Write-Output "Linking Private DNS Zone for SQL to VNet"
             $SqlZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $SqlDnsZoneName -Name $SqlZoneLinkName -VirtualNetworkId $vnet.Id
         }
     }
@@ -681,23 +699,26 @@ if ($SkipDNS -ne 'True') {
         # check for linked zone
         $StorageZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $StorageDnsZoneName -ErrorAction SilentlyContinue
         if ($StorageZoneLink.VirtualNetworkId -contains $vnet.id) {
-            Write-Output "Private DNS Zone for Storage already linked to vnet"
+            Write-Output "Private DNS Zone for Storage already linked to VNet"
         }
         else {
-            Write-Output "Linking Private DNS Zone for Storage to vnet"
+            Write-Output "Linking Private DNS Zone for Storage to VNet"
             $StorageZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $StorageDnsZoneName -Name $BlobZoneLinkName -VirtualNetworkId $vnet.Id
         }
         # if cssastorageaccount is Private, check for links to linked networks
         if ($CssaStorageAccount -eq 'Private') {
             foreach ($linkedVnet in $LinkedVnets) {
-                if ($StorageZoneLink.VirtualNetworkId -contains $linkedVnet.id) {
-                    Write-Output "Private DNS Zone for Storage already linked to linked vnet $($linkedVnet.Name)"
+                $LinkedVNetName = (($linkedVnet.NetworkId -split '/')[8])
+                if ($StorageZoneLink.VirtualNetworkId -contains $linkedVnet.NetworkId) {
+                    Write-Output "Private DNS Zone for Storage already linked to linked VNet $LinkedVNetName"
                 }
                 else {
-                    Write-Output "Linking Private DNS Zone for Storage to linked VNet $($linkedVnet.Name)"
-                    try {$StorageZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $StorageDnsZoneName -Name "$($BlobZoneLinkName)-$($linkedVnet.Name)" -VirtualNetworkId $linkedVnet.Id}
+                    Write-Output "Linking Private DNS Zone for Storage to linked VNet $LinkedVNetName"
+                    try {
+                        $StorageZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $StorageDnsZoneName -Name "$BlobZoneLinkName-$LinkedVNetName" -VirtualNetworkId $linkedVnet.NetworkId
+                    }
                     catch {
-                        Write-Error "Unable to link Private DNS Zone for Storage to linked VNet $($linkedVnet.Name). $_"
+                        Write-Error "Unable to link Private DNS Zone for Storage to linked VNet $LinkedVNetName. $_"
                     }
                 }
             }
@@ -1064,37 +1085,37 @@ if ($NmeScriptedActionsAccountName) {
         Write-Output "Skipping scripted actions DNS zone group configuration (SkipDNS enabled)"
     }
 
-    if ($CssaStorageAccount -eq 'Private' -or $CssaStorageAccount -eq 'Restricted') {
-        $ScriptedActionStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeScriptedActionStorageAccountName -ErrorAction SilentlyContinue
-        # throw error if no scripted actions storage account found
-        if (-not $ScriptedActionStorageAccount) {
-            throw "No scripted actions storage account found in resource group $NmeRg"
-        }
-        # check if scripted action storage account private endpoint is created
-        $ScriptedActionsStoragePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $ScriptedActionStorageAccount.Id }
-        if ($ScriptedActionsStoragePrivateEndpoint) {
-            Write-Output "Found scripted actions storage private endpoint"
-        } 
-        else {
-            Write-Output "Configuring scripted actions storage service connection and private endpoint"
-            $ScriptedActionsStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $CssaStorageServiceConnectionName -PrivateLinkServiceId $ScriptedActionStorageAccount.Id -GroupId blob 
-            $ScriptedActionsStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$ScriptedActionsStoragePrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ScriptedActionsStorageServiceConnection 
-        }
-        # check if scripted action storage account dns zone group created
-        if ($SkipDNS -ne 'True') {
-            $ScriptedActionsStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsStoragePrivateEndpoint.Name -ErrorAction SilentlyContinue
-            if ($ScriptedActionsStorageDnsZoneGroup) {
-                Write-Output "Found scripted actions storage DNS zone group"
-            } else {
-                Write-Output "Configuring scripted actions storage DNS zone group"
-                $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
-                $ScriptedActionsStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$ScriptedActionsStoragePrivateEndpointName" -Name $SaStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
-            }
-        } else {
-            Write-Output "Skipping scripted actions storage DNS zone group configuration (SkipDNS enabled)"
-        }
 
+    $ScriptedActionStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeScriptedActionStorageAccountName -ErrorAction SilentlyContinue
+    # throw error if no scripted actions storage account found
+    if (-not $ScriptedActionStorageAccount) {
+        throw "No scripted actions storage account found in resource group $NmeRg"
     }
+    # check if scripted action storage account private endpoint is created
+    $ScriptedActionsStoragePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $ScriptedActionStorageAccount.Id }
+    if ($ScriptedActionsStoragePrivateEndpoint) {
+        Write-Output "Found scripted actions storage private endpoint"
+    } 
+    else {
+        Write-Output "Configuring scripted actions storage service connection and private endpoint"
+        $ScriptedActionsStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $CssaStorageServiceConnectionName -PrivateLinkServiceId $ScriptedActionStorageAccount.Id -GroupId blob 
+        $ScriptedActionsStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$ScriptedActionsStoragePrivateEndpointName" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ScriptedActionsStorageServiceConnection 
+    }
+    # check if scripted action storage account dns zone group created
+    if ($SkipDNS -ne 'True') {
+        $ScriptedActionsStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsStoragePrivateEndpoint.Name -ErrorAction SilentlyContinue
+        if ($ScriptedActionsStorageDnsZoneGroup) {
+            Write-Output "Found scripted actions storage DNS zone group"
+        } else {
+            Write-Output "Configuring scripted actions storage DNS zone group"
+            $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
+            $ScriptedActionsStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$ScriptedActionsStoragePrivateEndpointName" -Name $SaStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
+        }
+    } else {
+        Write-Output "Skipping scripted actions storage DNS zone group configuration (SkipDNS enabled)"
+    }
+
+    
 }
 
 if ($NmeCclStorageAccountName) {
@@ -1365,12 +1386,13 @@ if ($CssaStorageAccount -eq 'Private') {
     
     $Sa = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeScriptedActionStorageAccountName
     foreach ($VnetId in ($LinkedVnets.NetworkId | select -unique)) {
+        $LinkedVnetName = $VnetId.Split('/')[-1]
         # Get vnet 
         $LinkedVNet = Get-AzVirtualNetwork -ResourceGroupName ($VnetId.Split('/')[4]) -Name ($VnetId.Split('/')[-1])
         # check that vnet is in same azure region as storage account, or in a paired azure region
         if ($LinkedVNet.Location -ne $NmeRegion) {
-            Write-Output "VNet $VnetId is not in the same region as the storage account or a paired region. Cannot create private endpoint"
-            Write-Warning "VNet $VnetId is not in the same region as the storage account or a paired region. Cannot create private endpoint"
+            Write-Output "VNet $LinkedVnetName is not in the same region as the storage account or a paired region. Cannot create private endpoint"
+            Write-Warning "VNet $LinkedVnetName is not in the same region as the storage account or a paired region. Cannot create private endpoint"
             continue
             
         }
@@ -1382,11 +1404,11 @@ if ($CssaStorageAccount -eq 'Private') {
         # add a private endpoint for the cssa storage account in the linked vnet
         $CssaStoragePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $Sa.Id -and $_.Subnet.Id -like "*$($VnetId.Split('/')[-1])/*" }
         if ($CssaStoragePrivateEndpoint) {
-            Write-Output "Found CSSA storage private endpoint for vnet $VnetId"
+            Write-Output "Found CSSA storage private endpoint for vnet $LinkedVnetName"
             continue
         }
 
-        Write-Output "Configuring CSSA storage service connection and private endpoint for vnet $VnetId"
+        Write-Output "Configuring CSSA storage service connection and private endpoint for vnet $LinkedVnetName"
         $CssaStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name "$CssaStorageServiceConnectionName-$($VnetId.Split('/')[-1])" -PrivateLinkServiceId $Sa.Id -GroupId "blob"
         $CssaStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$CssaStorageServiceConnectionName-$($VnetId.Split('/')[-1])" -ResourceGroupName $NmeRg -Location $NmeRegion -Subnet $FirstSubnet -PrivateLinkServiceConnection $CssaStorageServiceConnection
         # check if cssa storage account dns zone group 
@@ -1396,14 +1418,14 @@ if ($CssaStorageAccount -eq 'Private') {
 
             $CssaStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $CssaStoragePrivateEndpoint.Name -ErrorAction SilentlyContinue
             if ($CssaStorageDnsZoneGroup) {
-                Write-Output "Found CSSA storage DNS zone group for vnet $VnetId"
+                Write-Output "Found CSSA storage DNS zone group for vnet $LinkedVnetName"
             } else {
-                Write-Output "Configuring CSSA storage DNS zone group for vnet $VnetId"
+                Write-Output "Configuring CSSA storage DNS zone group for vnet $LinkedVnetName"
                 $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
                 $CssaStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CssaStorageServiceConnectionName-$($VnetId.Split('/')[-1])" -Name "$SaStoragePrivateDnsZoneGroupName-$($VnetId.Split('/')[-1])" -PrivateDnsZoneConfig $config
             }
         } else {
-            Write-Output "Skipping CSSA storage DNS zone group configuration for vnet $VnetId (SkipDNS enabled)"
+            Write-Output "Skipping CSSA storage DNS zone group configuration for vnet $LinkedVnetName (SkipDNS enabled)"
         }
     }
 
@@ -1441,11 +1463,11 @@ elseif ($CssaStorageAccount -eq 'Restricted') {
             $SubnetNames = $LinkedVnets | Where-Object { $_.NetworkId -eq $VnetId } | Select-Object -ExpandProperty Subnet 
             foreach ($SubnetName in $SubnetNames) {
                 $Subnet = Get-AzVirtualNetworkSubnetConfig -Name $SubnetName -VirtualNetwork $LinkedVNet
-                if ($Subnet.ServiceEndpoints -contains 'Microsoft.Storage.Global') {
+                if ($Subnet.ServiceEndpoints.Service -contains 'Microsoft.Storage.Global') {
                     Write-Output "Service endpoint already exists on subnet $SubnetName in vnet $VNetName"
                 } else {
                     Write-Output "Adding global service endpoint to subnet $SubnetName in vnet $VNetName"
-                    $LinkedVNet = $LinkedVNet | Set-AzVirtualNetworkSubnetConfig -Name $SubnetName -AddressPrefix $Subnet.AddressPrefix -ServiceEndpoint 'Microsoft.Storage.Global' -ServiceEndpointPolicy 'Global' | Set-AzVirtualNetwork
+                    $LinkedVNet = $LinkedVNet | Set-AzVirtualNetworkSubnetConfig -Name $SubnetName -AddressPrefix $Subnet.AddressPrefix -ServiceEndpoint 'Microsoft.Storage.Global' | Set-AzVirtualNetwork
                 }
             }
         }
@@ -1673,17 +1695,17 @@ if ($CssaStorageAccount -eq 'Private' ) {
     # check if deny rule for storage exists
     $StorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg | Where-Object StorageAccountName -Match 'cssa'
     if ($StorageAccount.PublicNetworkAccess -eq 'Disabled') {
-        Write-Output "Storage public access is already disabled"
+        Write-Output "CSSA storage public access is already disabled"
     }
     else {
-        Write-Output "Disabling storage public access"
+        Write-Output "Disabling CSSA storage public access"
         Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $StorageAccount.StorageAccountName | Out-Null
     }
 }
 elseif ($cssastorageaccount -eq 'Restricted') {
     # keep storage account public but add network rules to allow access from 'All' Vnets linked to NME
     $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName 
-    $VnetIds = Get-AzVirtualNetwork | ? {if ($_.tag){$True}}| Where-Object {$_.tag["$Prefix`_OBJECT_TYPE"] -eq 'LINKED_NETWORK'} -ErrorAction SilentlyContinue | Where-Object id -ne $vnet.id | Select-Object -ExpandProperty Id
+    $VnetIds = $LinkedVnets.NetworkId | select -unique
     # if no vnets, warn that no vnets will be added to storage account network rules
     if (!$VnetIds) {
         Write-Warning "No linked vnets found to add to storage account network rules. Cssa storage account will not be accessible from AVD networks."
@@ -1703,7 +1725,8 @@ elseif ($cssastorageaccount -eq 'Restricted') {
             }
         }
         # set default action to deny
-        Update-AzStorageAccountNetworkRuleSet -ResourceGroupName $NmeRg -Name $NmeStorageAccount.StorageAccountName -DefaultAction Deny
+        write-output "Setting default action to Deny for cssa storage account"
+        Update-AzStorageAccountNetworkRuleSet -ResourceGroupName $NmeRg -Name $NmeStorageAccount.StorageAccountName -DefaultAction Deny -Bypass None | Out-Null
     }
     
 }
