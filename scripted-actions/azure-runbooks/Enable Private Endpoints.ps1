@@ -1390,22 +1390,18 @@ if ($MakeAzureMonitorPrivate -eq 'True') {
     }
 
     # check if monitor dns zone group is created
-    if ($SkipDNS -ne 'True') {
-        $MonitorDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$MonitorPrivateEndpointName" -ErrorAction SilentlyContinue
-        if ($MonitorDnsZoneGroup) {
-            Write-Output "Found Monitor DNS zone group"
-        } else {
-            Write-Output "Configuring monitor DNS zone group"
-            $Configs = @()
-            # create private dns zone configs for monitor, ops, oms, and monitor agent
-            $Configs += New-AzPrivateDnsZoneConfig -Name $MonitorDnsZoneName -PrivateDnsZoneId $MonitorDnsZone.ResourceId
-            $Configs += New-AzPrivateDnsZoneConfig -Name $OpsDnsZoneName -PrivateDnsZoneId $OpsDnsZone.ResourceId
-            $Configs += New-AzPrivateDnsZoneConfig -Name $OdsDnsZoneName -PrivateDnsZoneId $OdsDnsZone.ResourceId
-            $Configs += New-AzPrivateDnsZoneConfig -Name $MonitorAgentDnsZoneName -PrivateDnsZoneId $MonitorAgentDnsZone.ResourceId
-            $MonitorDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$MonitorPrivateEndpointName" -Name $MonitorPrivateDnsZoneGroupName -PrivateDnsZoneConfig $Configs
-        }
+    $MonitorDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$MonitorPrivateEndpointName" -ErrorAction SilentlyContinue
+    if ($MonitorDnsZoneGroup) {
+        Write-Output "Found Monitor DNS zone group"
     } else {
-        Write-Output "Skipping Monitor DNS zone group configuration (SkipDNS enabled)"
+        Write-Output "Configuring monitor DNS zone group"
+        $Configs = @()
+        # create private dns zone configs for monitor, ops, oms, and monitor agent
+        $Configs += New-AzPrivateDnsZoneConfig -Name $MonitorDnsZoneName -PrivateDnsZoneId $MonitorDnsZone.ResourceId
+        $Configs += New-AzPrivateDnsZoneConfig -Name $OpsDnsZoneName -PrivateDnsZoneId $OpsDnsZone.ResourceId
+        $Configs += New-AzPrivateDnsZoneConfig -Name $OdsDnsZoneName -PrivateDnsZoneId $OdsDnsZone.ResourceId
+        $Configs += New-AzPrivateDnsZoneConfig -Name $MonitorAgentDnsZoneName -PrivateDnsZoneId $MonitorAgentDnsZone.ResourceId
+        $MonitorDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$MonitorPrivateEndpointName" -Name $MonitorPrivateDnsZoneGroupName -PrivateDnsZoneConfig $Configs
     }
 
 

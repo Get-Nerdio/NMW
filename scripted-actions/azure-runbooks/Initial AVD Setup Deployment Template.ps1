@@ -12,7 +12,7 @@ This script creates a working AVD environment, including:
 NOTE: the created Workspace will not be visible in NMW until you set 
 "Hide Unassigned Workspaces" to OFF in the settings of Workspaces page
 
-This script requires the NME API to be enabled, under settings -> Nerdio Integrations
+This script requires the NMW API to be enabled, under settings -> Nerdio Integrations
 
 Before running this script, set the Required Variables to your own values. 
 
