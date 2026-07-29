@@ -255,7 +255,7 @@
   "AssignableScopes": [
     "/subscriptions/<subscription-id1>",
     "/subscriptions/<subscription-id2>",
-    "/providers/Microsoft.Management/managementGroups/<resourcegroup-id1>",
-    "/providers/Microsoft.Management/managementGroups/<resourcegroup-id2>"
+    "/providers/Microsoft.Management/managementGroups/<management-group-id1>",
+    "/providers/Microsoft.Management/managementGroups/<management-group-id2>"
   ]
 }
