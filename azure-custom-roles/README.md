@@ -28,4 +28,4 @@ az role definition create --role-definition @nme-custom-role.json
 
 For complete setup instructions, permissions reference, and marketplace installer steps, see the NME Knowledge Base:
 
-**[Configure a Least-Privilege Azure Custom Role for NME](https://nmehelp.getnerdio.com/hc/tbd)**
+**Configure a Least-Privilege Azure Custom Role for NME (link TBD)**
