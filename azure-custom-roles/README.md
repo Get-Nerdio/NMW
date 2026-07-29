@@ -12,7 +12,7 @@ By default, NME requires Contributor and User Access Administrator on the resour
 
 ## Quick Start
 
-1. Optional pdate `AssignableScopes` in `nme-custom-role.json` with your subscription or management group IDs, or remove it.
+1. Optional: update `AssignableScopes` in `nme-custom-role.json` with your subscription or management group IDs (you must keep at least one scope to create the role).
 2. Create the role in your Azure tenant:
 
 ```bash
