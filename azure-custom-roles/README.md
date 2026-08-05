@@ -1,6 +1,6 @@
 # NME Azure Custom Role - Least-Privilege Permissions
 
-This folder contains the Azure custom role definition for **Nerdio Manager for Enterprise (NME)**.
+This directory contains the Azure custom role definitions for **Nerdio Manager for Enterprise (NME)**.
 
 By default, NME requires Contributor and User Access Administrator on the resource group it manages. For organizations with strict security postures, this custom role provides a least-privilege alternative - scoped to the Azure actions NME performs.
 
@@ -28,4 +28,4 @@ az role definition create --role-definition @nme-custom-role.json
 
 For complete setup instructions, permissions reference, and marketplace installer steps, see the NME Knowledge Base:
 
-**Configure a Least-Privilege Azure Custom Role for NME (link TBD)**
+**[Configure a Least-Privilege Azure Custom Role for NME](https://nmehelp.getnerdio.com/hc/en-us/articles/25499388177421-Azure-Permissions-and-Nerdio-Manager)**
