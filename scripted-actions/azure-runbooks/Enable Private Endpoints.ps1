@@ -421,6 +421,82 @@ if ($NmeWebApp.DefaultHostName -match "azurewebsites.us") {
 }
 
 
+# Looks up a job parameter by name, case-insensitively, since $job.JobParameters is a
+# dictionary and NME's parameter casing can vary between execution modes.
+function Get-NmeJobParameterValue {
+    param($JobParameters, [string]$Name)
+    if (-not $JobParameters) { return $null }
+    foreach ($k in $JobParameters.Keys) {
+        if ($k -ieq $Name) {
+            # Automation stores job parameters as JSON, so a string value can come back wrapped in
+            # double quotes depending on how it was submitted. Strip them - a stray quote would make
+            # a base64 decode fail (and silently disable duplicate-run detection) or corrupt a URI.
+            $Value = [string]$JobParameters[$k]
+            return $Value.Trim().Trim('"')
+        }
+    }
+    return $null
+}
+
+# Resolves the script text for a job in either execution mode: the newer inline mode
+# (full script body passed as base64 in the ScriptBase64 job parameter) or the older
+# download mode (script fetched from the scriptUri job parameter). If a future NME build
+# double-encodes the base64 or uses a different parameter name/casing, this is the single
+# place to adjust - verify the parameter shape against a real inline-mode job.
+function Get-NmeJobScriptText {
+    param($JobParameters)
+    try {
+        $ScriptBase64 = Get-NmeJobParameterValue -JobParameters $JobParameters -Name 'ScriptBase64'
+        if ($ScriptBase64) {
+            # Normalize URL-safe base64 (NME may or may not use it) before decoding.
+            $Normalized = $ScriptBase64.Replace('-', '+').Replace('_', '/')
+            while ($Normalized.Length % 4 -ne 0) { $Normalized += '=' }
+            $Bytes = [System.Convert]::FromBase64String($Normalized)
+            return [System.Text.Encoding]::UTF8.GetString($Bytes)
+        }
+
+        $ScriptUri = Get-NmeJobParameterValue -JobParameters $JobParameters -Name 'scriptUri'
+        if ($ScriptUri) {
+            $Response = Invoke-WebRequest -UseBasicParsing -Uri $ScriptUri
+            if ($Response.Content -is [byte[]]) {
+                return [System.Text.Encoding]::UTF8.GetString($Response.Content)
+            }
+            return [string]$Response.Content
+        }
+
+        return $null
+    }
+    catch {
+        Write-Verbose "Get-NmeJobScriptText failed to resolve script text: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+# Hashes script text after normalizing it, because the same script text can arrive with
+# different encodings depending on how it was retrieved (UTF8 BOM, CRLF vs LF line endings,
+# a trailing newline). An inline payload and the same script downloaded from storage are
+# unlikely to be byte-identical, so hashing the raw bytes would silently never match and
+# duplicate-run detection would look like it works while never actually triggering. Do not
+# "simplify" this back to a plain file hash.
+function Get-NmeScriptHash {
+    param([string]$ScriptText)
+    if ([string]::IsNullOrEmpty($ScriptText)) { return $null }
+
+    $Normalized = $ScriptText
+    if ($Normalized.Length -gt 0 -and $Normalized[0] -eq [char]0xFEFF) {
+        $Normalized = $Normalized.Substring(1)
+    }
+    $Normalized = $Normalized.Replace("`r`n", "`n").Replace("`r", "`n")
+    $Normalized = $Normalized.Trim()
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Normalized)
+        return [System.BitConverter]::ToString($sha256.ComputeHash($bytes)).Replace('-', '')
+    }
+    finally { $sha256.Dispose() }
+}
+
 # Check if the web app has been restarted recently and if the script has been run before
 Function Check-LastRunResults {
     # this function depends on the Set-NmeVars function, which must be run before this function
@@ -429,20 +505,28 @@ Function Check-LastRunResults {
     $app = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
     if ($app.LastModifiedTimeUtc -gt (get-date).AddMinutes(-$MinutesAgo).ToUniversalTime()) {
         Write-Output "Web job has been restarted recently. Checking for previous script run"
-        $ThisJob = Get-AzAutomationJob -id $PSPrivateMetadata['JobId'].Guid -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName 
-        Invoke-WebRequest -UseBasicParsing -Uri $ThisJob.JobParameters.scriptUri -OutFile .\ThisScript.ps1
-        $ThisScriptHash = Get-FileHash .\ThisScript.ps1
+        $ThisJob = Get-AzAutomationJob -id $PSPrivateMetadata['JobId'].Guid -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
+        $ThisScriptText = Get-NmeJobScriptText -JobParameters $ThisJob.JobParameters
+        $ThisScriptHash = Get-NmeScriptHash -ScriptText $ThisScriptText
+        if (-not $ThisScriptHash) {
+            Write-Verbose "Skipping duplicate-run detection because the running script's source could not be determined."
+            return
+        }
 
         $jobs = Get-AzAutomationJob -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName | ? status -match 'completed|Failed' | ? {$_.EndTime.datetime -gt (get-date).AddMinutes(-$MinutesAgo)}
         foreach ($job in $jobs){
-            $details = Get-AzAutomationJob -id $job.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName 
-            Invoke-WebRequest -UseBasicParsing -Uri $details.JobParameters.scriptUri -OutFile .\JobScript.ps1 
-            $JobHash = Get-FileHash .\JobScript.ps1 
-            if ($JobHash.hash -eq $ThisScriptHash.hash){
+            $details = Get-AzAutomationJob -id $job.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
+            $JobScriptText = Get-NmeJobScriptText -JobParameters $details.JobParameters
+            $JobHash = Get-NmeScriptHash -ScriptText $JobScriptText
+            if (-not $JobHash) {
+                Write-Verbose "Skipping job $($job.JobId) because its script source could not be determined."
+                continue
+            }
+            if ($JobHash -eq $ThisScriptHash){
                 Write-Output "Output of previous script run:"
                 $JobOutput = Get-AzAutomationJobOutput -Id $details.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
                 $JobOutput | select summary -ExpandProperty summary
-                
+
                 Write-Output "App Service restarted after running this script."
                 if (($minutesago - ((get-date).AddMinutes(-$MinutesAgo).ToUniversalTime() - $app.LastModifiedTimeUtc).minutes) -lt $MinutesAgo){
                     write-output "If you need to re-run the script, please wait $($minutesago - ((get-date).AddMinutes(-$MinutesAgo).ToUniversalTime() - $app.LastModifiedTimeUtc).minutes) minutes and try again."
