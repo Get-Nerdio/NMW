@@ -155,11 +155,12 @@ function Set-NmeVars {
 
     # if we didn't find a sql server, fall back to previous method of finding the sql server
     if (!$SqlServer) {
+        # $key always has a value by this point (the derivation above falls back to 'NMW_OBJECT_TYPE'),
+        # so these if ($key) guards are always true. The else branches they used to have were dead, and
+        # three of them ran an unfiltered Get over the whole resource group and bound an arbitrary
+        # resource as "the RTI resource" - do not re-add them.
         if ($key){
             $SqlServer = Get-AzSqlServer -ResourceGroupName $nmerg | ? ServerName -NotMatch '-secondary' | Where-Object {$_.tags[$key] -ne 'INTUNE_INSIGHTS_DEPLOYMENT_RESOURCE' -and $_.tags[$key] -ne 'EIDO_DEPLOYMENT_RESOURCE' -and $_.tags[$key] -ne 'REAL_TIME_INSIGHTS_DEPLOYMENT_RESOURCE' -and $_.tags[$key] -ne'NERDIO_COPILOT_DEPLOYMENT_RESOURCE'}
-        }
-        else {
-            $SqlServer = Get-AzSqlServer -ResourceGroupName $nmerg | ? ServerName -NotMatch '-secondary'
         }
     }
     # Validate and assign for both the tag-based and fallback lookups. This assignment used to live
@@ -175,8 +176,6 @@ function Set-NmeVars {
     if ($SqlSecondary) {
         $script:NmeSqlSecondaryServerName = $SqlSecondary.ServerName
     }
-    $script:NmeSqlDbName = (Get-AzSqlDatabase -ResourceGroupName $nmeRg -ServerName $nmeSqlServerName | Where-Object DatabaseName -ne 'master').DatabaseName
-
     if ($key) {
         $cclwebapp = Get-AzWebApp -ResourceGroupName $NmeRg | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'}
         if ($cclwebapp) {
@@ -258,23 +257,6 @@ function Set-NmeVars {
         throw "Unable to find Nerdio Manager web app. Please add the tag '$NmeResourceTagName' with value 'NERDIO_MANAGER_WEBAPP' to the Nerdio Manager web app and rerun this script."
     }
 
-    write-verbose "Getting Nerdio Manager Application Insights"
-    # try get nme app insights by tag using nmeresourcetagname
-    # These lookups are for optional components: a failed tag lookup is expected to fall through to the
-    # next discovery method, so the exception is intentionally swallowed here. It is still surfaced on the
-    # verbose stream so a throttling error or RBAC denial can be told apart from "not deployed".
-    try {
-        $NmeAppInsights = Get-AzApplicationInsights -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object {$_.tag[$NmeResourceTagName] -eq 'NERDIO_MANAGER_APPINSIGHTS' }
-    } catch { Write-Verbose "Lookup of NME Application Insights by tag failed: $($_.Exception.Message)" }
-    if (!$NmeAppInsights) {
-        Write-Verbose "NME App Insights not found by tag, trying by instrumentation key"
-        $NmeAppInsights = Get-AzApplicationInsights -ResourceGroupName $NmeRg | Where-Object { $_.InstrumentationKey -eq ($NmeWebApp.siteconfig.appsettings | Where-Object  {$_.name -eq 'ApplicationInsights:InstrumentationKey'} | Select-Object -ExpandProperty value) }
-    }
-    if ($NmeAppInsights.count -ne 1) {
-        throw "Unable to find NME App Insights. Please add the tag '$NmeResourceTagName' with value 'NERDIO_MANAGER_APPINSIGHTS' to the Nerdio Manager Application Insights resource and rerun this script."
-    }
-    $script:NmeAppInsightsName = $NmeAppInsights.name
-    $script:NmeAppServicePlanName = $NmeWebApp.ServerFarmId.Split("/")[-1]
     $script:NmeSubscriptionId = ($NmeWebApp.siteconfig.appsettings | Where-Object name -eq 'Deployment:SubscriptionId').value
     $script:NmeTagPrefix = ($NmeWebApp.siteconfig.appsettings | Where-Object name -eq 'Deployment:AzureTagPrefix').value
     $script:NmeAutomationAccountName = ($NmeWebApp.siteconfig.appsettings | Where-Object name -eq 'Deployment:AutomationAccountName').value
@@ -283,6 +265,9 @@ function Set-NmeVars {
 
     # Find Real Time Insights components if they exist
     # Find RTI sql server
+    # These lookups are for optional components: a failed tag lookup is expected to fall through to the
+    # next discovery method, so the exception is intentionally swallowed here. It is still surfaced on the
+    # verbose stream so a throttling error or RBAC denial can be told apart from "not deployed".
     try {$RtiSqlServer = Get-AzSqlServer -ResourceGroupName $nmerg | Where-Object {$_.tags[$NmeResourceTagName] -eq 'REAL_TIME_INSIGHTS_SQL_SERVER'}}
     catch { Write-Verbose "Lookup of Real Time Insights SQL server by tag failed: $($_.Exception.Message)" }
     # if not found, try previous method
@@ -304,9 +289,6 @@ function Set-NmeVars {
         if ($key){
             $RtiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'REAL_TIME_INSIGHTS_DEPLOYMENT_RESOURCE'}
         }
-        else {
-            $RtiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg
-        }
     }
     if ($RtiWebApp) {
         Write-Verbose "Found Real Time Insights web app"
@@ -321,9 +303,6 @@ function Set-NmeVars {
         if ($key){
             $RtiKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'REAL_TIME_INSIGHTS_DEPLOYMENT_RESOURCE'}
         }
-        else {
-            $RtiKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
-        }
     }
     if ($RtiKeyVault) {
         Write-Verbose "Found Real Time Insights key vault"
@@ -337,9 +316,6 @@ function Set-NmeVars {
     if (!$RtiStorageAccount) {
         if ($key){
             $RtiStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'REAL_TIME_INSIGHTS_DEPLOYMENT_RESOURCE'}
-        }
-        else {
-            $RtiStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
         }
     }
     if ($RtiStorageAccount) {
@@ -420,7 +396,6 @@ $SqlZoneLinkName = "$Prefix-database-privatelink"
 $BlobZoneLinkName = "$prefix-blob-privatelink"
 $AutomationZoneLinkName = "$prefix-automation-privatelink"
 $AppServiceZoneLinkName = "$Prefix-app-appservice-privatelink"
-$FileStoragePrivateDnsZoneLinkName = "$Prefix-filestorage-privatelink"
 $BlobStoragePrivateDnsZoneLinkName = "$Prefix-blobstorage-privatelink"
 $RtiTableStoragePrivateDnsZoneLinkName = "$Prefix-rti-tablestorage-privatelink"
 
@@ -432,7 +407,6 @@ if ($NmeWebApp.DefaultHostName -match "azurewebsites.us") {
     $StorageDnsZoneName = "privatelink.blob.core.usgovcloudapi.net"
     $TableDnsZoneName = "privatelink.table.core.usgovcloudapi.net"
     $AppServiceDnsZoneName = "privatelink.azurewebsites.us"
-    $AzureManagementApi = "management.usgovcloudapi.net"
 } else {
     $KeyVaultDnsZoneName = "privatelink.vaultcore.azure.net"
     $SqlDnsZoneName = "privatelink.database.windows.net"
@@ -440,8 +414,10 @@ if ($NmeWebApp.DefaultHostName -match "azurewebsites.us") {
     $StorageDnsZoneName = "privatelink.blob.core.windows.net"
     $TableDnsZoneName = "privatelink.table.core.windows.net"
     $AppServiceDnsZoneName = "privatelink.azurewebsites.net"
-    $AzureManagementApi = 'management.azure.com'
 }
+# There is deliberately no Azure Resource Manager endpoint variable here: ARM control-plane traffic
+# (management.azure.com / management.usgovcloudapi.net) is not made private by this script. See the
+# notes block at the top.
 
 
 # Looks up a job parameter by name, case-insensitively, since $job.JobParameters is a
@@ -600,15 +576,17 @@ elseif ($ExistingDNSZonesRG) {
         Write-Output "Setting context to subscription $existingDNSZonesSubId to retrieve existing DNS zones"
         $context = Set-AzContext -Subscription $existingDNSZonesSubId
     }
+    # Build the complete required-zone list before any lookup: a failure on one of the Get calls below
+    # is reported in the catch, and the list has to be complete at that point to be useful.
+    $RequiredDnsZones = @($KeyVaultDnsZoneName, $SqlDnsZoneName, $AutomationDnsZoneName, $StorageDnsZoneName, $AppServiceDnsZoneName)
+    if ($NmeRtiStorageAccountName) { $RequiredDnsZones += $TableDnsZoneName }
     try {
         # get DNS zones
-        $RequiredDnsZones = @($KeyVaultDnsZoneName, $SqlDnsZoneName, $AutomationDnsZoneName, $StorageDnsZoneName, $AppServiceDnsZoneName)
         $KeyVaultDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name $KeyVaultDnsZoneName -ErrorAction Stop
         $SqlDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name $SqlDnsZoneName -ErrorAction Stop
         $AutomationDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name $AutomationDnsZoneName -ErrorAction Stop
         $StorageDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name $StorageDnsZoneName -ErrorAction Stop
         if ($NmeRtiStorageAccountName) {
-            $RequiredDnsZones += $TableDnsZoneName
             $TableDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name $TableDnsZoneName -ErrorAction Stop
         }
         $AppServiceDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name $AppServiceDnsZoneName -ErrorAction Stop
