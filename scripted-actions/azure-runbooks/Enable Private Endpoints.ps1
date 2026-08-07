@@ -27,6 +27,40 @@ on the sql servers it manages. These are only ever raised, never lowered, so an 
 version keeps it. Shared key access on the storage accounts is deliberately left alone, because Nerdio Manager may
 depend on it.
 
+Storage accounts and sub-resources covered. Azure allows exactly one sub-resource per private endpoint, so each entry
+below is one endpoint. Anything not listed keeps resolving over the public endpoint even after this script runs, which
+is what makes this table worth checking when a new component is added:
+
+ - Scripted actions storage account - blob only, and only when MakeSaStoragePrivate is true.
+ - Cost Calculator (CCL) storage account - blob only.
+ - Deployment/Provisioning (DPS) storage account - blob only.
+ - Real Time Insights storage account - table only. Real Time Insights uses the table API and does not use blob, so
+   this endpoint deliberately does not request the blob sub-resource.
+
+No queue or file sub-resource endpoints are created, because no Nerdio Manager component requests them. Adding one
+means adding its private DNS zone name to the cloud if/else near the top of this script and one entry to the
+$StorageSubresourceDnsZoneNames map.
+
+Consequences of disabling public network access on the key vaults. This blocks the trusted-services path as well as the
+public path, so scenarios that rely on it stop working: App Service certificate binding from Key Vault, ARM template
+reference() to a secret, and Azure Backup are the common ones. If you depend on any of those, they must be reworked to
+use the private endpoint or the vault must be left public. The script also sets the trusted-services bypass to None;
+that is redundant once public network access is Disabled, and is set for clarity rather than effect.
+
+Recovering from a lockout. Every restriction this script applies is reversible only from the Azure Portal (or the CLI)
+- not by re-running this script, which never re-enables public network access on anything. If Nerdio Manager cannot
+reach its key vault or database after this script runs, re-enable public network access on the key vault and the sql
+server in the portal, confirm the private DNS records exist and resolve, and then re-run. The most common causes are
+private DNS records that had not propagated when public access was disabled (this script warns about that before the
+lockdown), and a pre-existing network security group on the private endpoint subnet whose rules this script has never
+inspected but has, by enabling privateEndpointNetworkPolicies, caused to be enforced (also warned about).
+
+App service subnet sizing. The AppServiceSubnetRange default is a /26. Microsoft recommends a /26 for App Service
+regional VNet integration: scale-out and in-place plan changes each temporarily double IP consumption, and up to four
+apps (Nerdio Manager, CCL, Intune Insights, Real Time Insights) integrate into this one subnet. The address range is
+ignored when the subnet already exists, so a subnet created too small on a first run cannot be widened by re-running
+this script - it has to be recreated, which means removing the VNet integration from every app first.
+
 If other NME components, such as Intune Insights, Cost Calculator, or Real Time Insights have been enabled, they will
 be added to the private network with private endpoints. The script can be re-run to add additional components to the
 private networking.
@@ -51,9 +85,9 @@ If the VNet and Subnets already exist, the existing resources will be used and a
 If they do not exist, they will be created. Names for resources created by this script, such as private endpoint names, 
 can be customized by cloning this script and editing the variables at the top of the script.
 
-If MakeSaStoragePrivate is True, the scripted actions storage account will be put on the private vnet. AVD VMs will need access to 
-the storage account to run scripted actions. Use the PeerVnetIds parameter to peer the AVD vnet to the private 
-endpoint vnet.
+If MakeSaStoragePrivate is True, the scripted actions storage account will be put on the private vnet. AVD VMs will need access to
+the storage account to run scripted actions. Use the PeerVnetIds parameter to peer the AVD vnet to the private
+endpoint vnet. This covers the blob sub-resource of that account only - see the storage sub-resource list above.
  
 #>
  
@@ -85,9 +119,9 @@ endpoint vnet.
     "DefaultValue": "nmw-app-subnet"
   },
   "AppServiceSubnetRange": {
-    "Description": "Address range for app service subnet. Ignored if subnet already exists.",
+    "Description": "Address range for app service subnet. Ignored if subnet already exists. A /26 is the Microsoft recommendation for App Service regional VNet integration: scale-out and in-place plan changes each temporarily double IP consumption, and up to four Nerdio Manager apps integrate into this one subnet. Because the range is ignored once the subnet exists, a subnet created too small cannot be widened by re-running this script - it has to be recreated, which means removing the VNet integration from every app first.",
     "IsRequired": false,
-    "DefaultValue": "10.250.251.0/28"
+    "DefaultValue": "10.250.251.0/26"
   },
   "ExistingDNSZonesRG": {
     "Description": "If you have private DNS zones already configured for use with the new private endpoints, specify their resource group here. This script will retrieve the existing DNS Zones and link them to the private network. Nerdio Manager needs to be linked to this RG in Settings->Azure Environment, or temporarily assigned the Private DNS Zone Contributor role for these zones. No changes will be made to the private DNS zones apart from linking them to the private VNet if necessary.",
@@ -100,7 +134,7 @@ endpoint vnet.
     "DefaultValue": ""
   },
   "MakeSaStoragePrivate": {
-    "Description": "Make the scripted actions storage account private. AVD hosts require access to the scripted actions storage account, so making this storage account private will require peering the AVD VNets to the NME private VNet or using additional private endpoints to put the scripted actions storage account on the AVD VNets as well as the NME private VNet.",
+    "Description": "Make the scripted actions storage account private. AVD hosts require access to the scripted actions storage account, so making this storage account private will require peering the AVD VNets to the NME private VNet or using additional private endpoints to put the scripted actions storage account on the AVD VNets as well as the NME private VNet. This covers the blob sub-resource of that account only; Azure permits one sub-resource per private endpoint, so any other sub-resource would continue to resolve over the public endpoint.",
     "IsRequired": false,
     "DefaultValue": "false"
   },
@@ -120,7 +154,7 @@ endpoint vnet.
     "DefaultValue": "false"
   },
   "SkipDNS": {
-    "Description": "Skip all DNS operations including checking for existing private DNS zones, creating new DNS zones, and linking DNS zones to VNets. Use this if you want to manage DNS separately.",
+    "Description": "WARNING: Skip all DNS operations including checking for existing private DNS zones, creating new DNS zones, and linking DNS zones to VNets. Use this only if you are managing DNS yourself. With this set to true the private endpoints are created with no DNS zone groups, so nothing resolves to them until you configure DNS - while the same run may still disable public network access on the key vault and sql server, which locks Nerdio Manager out. The private DNS records must exist and resolve before the make-private steps take effect. If that happens, re-enable public network access on the key vault and sql server in the Azure Portal, fix DNS, and re-run.",
     "IsRequired": false,
     "DefaultValue": "false"
   }
@@ -1746,6 +1780,14 @@ $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $Vnet
 $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
 $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
 
+# Why service endpoints exist here at all, alongside private endpoints. Traffic that arrives over a
+# private endpoint is not evaluated against VNet or service-endpoint rules, and once
+# PublicNetworkAccess is Disabled those rules are inert regardless - so in the steady state this is
+# redundant with the private-endpoint model. They are kept deliberately, as a documented fallback for
+# the window before the make-private region runs (and for a deployment that stops short of it, for
+# example one that never sets MakeSaStoragePrivate), during which the app service can still reach key
+# vault, sql and storage over the service endpoint. Mixing the two models is what makes this region
+# hard to read; this comment is the record of that being a decision rather than an oversight.
 $ServiceEndpoints = @('Microsoft.KeyVault', 'Microsoft.Sql', 'Microsoft.Web')
 if ($MakeSaStoragePrivate) {
     $ServiceEndpoints += 'Microsoft.Storage'
@@ -1972,7 +2014,16 @@ if (($NmeKeyVault.NetworkAcls.DefaultAction -eq 'Deny') -and ($NmeKeyVault.Publi
 }
 else {
     Write-Output "Disabling key vault public access"
-    Add-AzKeyVaultNetworkRule -VaultName $NmeKeyVault.VaultName -VirtualNetworkResourceId $PrivateEndpointSubnet.id -ResourceGroupName $NmeRg 
+    # The same lockdown is applied to all four vaults (NME, CCL, Intune Insights, RTI). Two notes that
+    # apply to every copy of it:
+    #  - The VNet rule is the service-endpoint fallback described in the app service VNet integration
+    #    region above; it has no effect on traffic arriving over the private endpoint.
+    #  - -Bypass None is redundant once PublicNetworkAccess is Disabled, since that blocks the
+    #    trusted-services path too. It is set for clarity, not effect. What does matter is that
+    #    disabling public network access breaks trusted-service scenarios some customers rely on -
+    #    App Service certificate binding from Key Vault, ARM template reference() to a secret, Azure
+    #    Backup. That consequence is documented in the notes block rather than worked around here.
+    Add-AzKeyVaultNetworkRule -VaultName $NmeKeyVault.VaultName -VirtualNetworkResourceId $PrivateEndpointSubnet.id -ResourceGroupName $NmeRg
     Update-AzKeyVaultNetworkRuleSet -VaultName $NmeKeyVault.VaultName -Bypass None -ResourceGroupName $NmeRg
     update-AzKeyVaultNetworkRuleSet -VaultName $NmeKeyVault.VaultName -DefaultAction Deny -ResourceGroupName $NmeRg
     Update-AzKeyVault -ResourceGroupName $NmeRg -VaultName $NmeKeyVault.VaultName -PublicNetworkAccess 'Disabled' | out-null
