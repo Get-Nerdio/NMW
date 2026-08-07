@@ -4,8 +4,22 @@
 <# Notes:
  
 This script will add private endpoints and service endpoints to allow the Nerdio Manager app service to communicate
-with the sql database, keyvault, and automation account over a private network, with no traffic routed over the public 
-internet. Access to the sql database and keyvault will be restricted to the private network. 
+with the sql database, keyvault, and automation account over a private network. Access to the sql database and
+keyvault will be restricted to the private network.
+
+What this script does NOT make private, so that the scope is not overstated:
+
+ - The automation accounts. Both the Nerdio Manager automation account and the scripted actions automation account get
+   private endpoints, but their public network access is deliberately left enabled. Disabling it on an Automation
+   account restricts runbook execution to Hybrid Runbook Workers - Azure sandbox jobs stop working - which would break
+   scripted actions for any deployment that does not run everything on hybrid workers. The private endpoints use the
+   DSCAndHybridWorker sub-resource only; the Webhook sub-resource is not configured.
+ - The secondary sql server, if geo-replication is configured. It is detected but gets no private endpoint and no
+   public access restriction, because it is typically in a different region and would need its own VNet, private
+   endpoint and DNS zone link.
+ - Azure Monitor, Application Insights and Log Analytics. Making these private requires an Azure Monitor Private Link
+   Scope, which is out of scope for this script by design - configure AMPLS separately if you need it.
+ - Azure Resource Manager control plane traffic (management.azure.com), which is not private-linkable here.
 
 If other NME components, such as Intune Insights, Cost Calculator, or Real Time Insights have been enabled, they will
 be added to the private network with private endpoints. The script can be re-run to add additional components to the
