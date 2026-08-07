@@ -48,12 +48,20 @@ use the private endpoint or the vault must be left public. The script also sets 
 that is redundant once public network access is Disabled, and is set for clarity rather than effect.
 
 Recovering from a lockout. Every restriction this script applies is reversible only from the Azure Portal (or the CLI)
-- not by re-running this script, which never re-enables public network access on anything. If Nerdio Manager cannot
-reach its key vault or database after this script runs, re-enable public network access on the key vault and the sql
-server in the portal, confirm the private DNS records exist and resolve, and then re-run. The most common causes are
-private DNS records that had not propagated when public access was disabled (this script warns about that before the
-lockdown), and a pre-existing network security group on the private endpoint subnet whose rules this script has never
-inspected but has, by enabling privateEndpointNetworkPolicies, caused to be enforced (also warned about).
+- not by re-running this script, which never re-enables public network access on anything. Before disabling anything,
+the script now resolves the Nerdio Manager key vault, primary sql server and DPS storage account FQDNs from inside the
+VNet-integrated app service worker (via the Kudu/SCM command API), against the VNet's own DNS servers, and TCP-connects
+to whatever IP comes back. If any of those three checks fails - the resolved IP is not the private endpoint's IP, or
+the TCP connect fails - the script aborts before the make-private region runs and changes nothing. This probe is
+skipped with a warning (not an error) when the app service's SCM endpoint cannot be reached, which is the normal case
+when re-running this script against a deployment that is already private: disabling public network access on the app
+service also blocks its own Kudu endpoint. In that case the script falls back to the weaker private-DNS-zone-record
+check described below and proceeds. If Nerdio Manager cannot reach its key vault or database after this script runs
+anyway, re-enable public network access on the key vault and the sql server in the portal, confirm the private DNS
+records exist and resolve, and then re-run. The most common causes are private DNS records that had not propagated
+when public access was disabled, and a pre-existing network security group on the private endpoint subnet whose rules
+this script has never inspected but has, by enabling privateEndpointNetworkPolicies, caused to be enforced (also
+warned about).
 
 App service subnet sizing. The AppServiceSubnetRange default is a /26. Microsoft recommends a /26 for App Service
 regional VNet integration: scale-out and in-place plan changes each temporarily double IP consumption, and up to four
@@ -999,9 +1007,17 @@ function New-NmeStoragePrivateEndpoint {
 }
 
 function Test-NmePrivateDnsResolution {
-    # Diagnostic only - never blocks. Runs before the make-private region so a missing private DNS
-    # record is reported *before* public access is disabled, which is the point at which it stops
-    # being recoverable from inside Nerdio Manager.
+    # FALLBACK ONLY, used when the real connectivity probe (Test-NmeAppServiceConnectivity, run from
+    # inside the VNet-integrated app service worker via Kudu) could not run - most commonly because
+    # public network access on the app service was already disabled by an earlier run, which also
+    # blocks its own SCM/Kudu endpoint. This function does not prove Nerdio Manager can actually reach
+    # or resolve anything: it only proves the Azure private DNS zone contains an A record for the
+    # resource. It says nothing about whether that zone is linked to the right VNet, whether DNS is
+    # actually being consulted by the worker, or about routing and NSGs - and it is useless entirely
+    # when SkipDNS is true, since a customer running their own DNS may have no Azure private DNS zone
+    # to check. Diagnostic only - never blocks. Runs before the make-private region so a missing
+    # private DNS record is reported *before* public access is disabled, which is the point at which
+    # it stops being recoverable from inside Nerdio Manager.
     #
     # Deliberately does NOT use Resolve-DnsName. This script executes in the Azure Automation
     # sandbox, which sits outside the VNet and therefore does not use the private DNS zones linked
@@ -1049,6 +1065,201 @@ function Set-NmeSubnetConfig {
     if ($Subnet.RouteTable.Id)           { $Params['RouteTableId']           = $Subnet.RouteTable.Id }
     if ($Subnet.Delegations)             { $Params['Delegation']             = $Subnet.Delegations }
     $VirtualNetwork | Set-AzVirtualNetworkSubnetConfig @Params | Set-AzVirtualNetwork
+}
+
+function Invoke-NmeKuduCommand {
+    # Runs a PowerShell script inside the VNet-integrated app service worker via the Kudu/SCM
+    # /api/command endpoint. This is how the script observes what the worker process can actually
+    # resolve and reach, rather than what Azure Resource Manager reports about the private endpoints
+    # and DNS zones it created - the two can disagree (DNS not yet propagated, a blocking NSG, bad
+    # routing) and ARM has no visibility into that disagreement.
+    param(
+        [Parameter(Mandatory=$true)][string]$ScmHost,
+        [Parameter(Mandatory=$true)][string]$ScriptText
+    )
+
+    # Newer Az.Accounts returns .Token as a SecureString rather than a plain string. This dual
+    # handling is deliberate: this script has to run against whatever Az.Accounts version happens to
+    # be installed in the customer's Automation account, and there is no way to know which shape it
+    # will return ahead of time.
+    $RawToken = (Get-AzAccessToken -ResourceUrl (Get-AzContext).Environment.ResourceManagerUrl -ErrorAction Stop).Token
+    $KuduToken = if ($RawToken -is [System.Security.SecureString]) {
+        [System.Net.NetworkCredential]::new("", $RawToken).Password
+    } else {
+        $RawToken
+    }
+
+    # Send the remote script base64-encoded via -EncodedCommand rather than as an inline quoted
+    # string. An inline string would have to survive three layers of quoting - the local PowerShell
+    # string, the JSON request body, cmd.exe, and the remote powershell -Command parser - and that is
+    # the usual source of breakage in this pattern. -EncodedCommand requires UTF-16LE, hence Unicode
+    # (not UTF8) below.
+    $EncodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($ScriptText))
+    $RemoteCommand = "powershell -NoProfile -EncodedCommand $EncodedCommand"
+    $Body = @{ command = $RemoteCommand; dir = 'site\wwwroot' } | ConvertTo-Json
+    $Headers = @{ Authorization = "Bearer $KuduToken"; 'Content-Type' = 'application/json' }
+
+    # Exceptions propagate to the caller - it decides what a failed Kudu call means (see the
+    # connectivity gate below, which treats it as "could not run the probe", not as a failed probe).
+    $Response = Invoke-RestMethod -Method POST -Uri "https://$ScmHost/api/command" -Headers $Headers -Body $Body -TimeoutSec 180 -ErrorAction Stop
+    return $Response.Output
+}
+
+function Test-NmeAppServiceConnectivity {
+    # Runs a real connectivity probe from inside the VNet-integrated app service worker: for each
+    # target, resolve its FQDN against a specific VNet DNS server and TCP-connect to whatever comes
+    # back. This is a probe, not a DNS flush - it proves the DNS server is reachable through VNet
+    # integration and holds the expected record, but it does not change what the app worker process
+    # itself is currently resolving against (that would require restarting the app, which this script
+    # deliberately avoids - explicit DNS-server targeting is what makes a restart or retry loop
+    # unnecessary here).
+    param(
+        [Parameter(Mandatory=$true)][string]$ScmHost,
+        [Parameter(Mandatory=$true)][string[]]$DnsServer,
+        [Parameter(Mandatory=$true)]$Target   # array of pscustomobject: Name, Fqdn, Port, ExpectedIp
+    )
+
+    # Build the three interpolated lists once, locally, then splice them into a single-quoted (fully
+    # literal) remote script template. Keeping the template single-quoted avoids having to escape `$`
+    # and backtick characters that are meant to be evaluated on the REMOTE side rather than here.
+    $FqdnList = ($Target | ForEach-Object { "'$($_.Fqdn -replace "'", "''")'" }) -join ','
+    $PortMap = ($Target | ForEach-Object { "'$($_.Fqdn -replace "'", "''")'='$($_.Port)'" }) -join ';'
+    $DnsServerList = ($DnsServer | ForEach-Object { "'$($_ -replace "'", "''")'" }) -join ','
+
+    # $ErrorActionPreference = 'SilentlyContinue' plus a try/catch around every step for every target,
+    # so a single bad target (typo'd FQDN, a missing tool) cannot kill the loop and silently skip the
+    # remaining targets. Emits exactly one '<fqdn>|<resolvedip>|<OK|FAIL>|<dns method>|<tcp method>'
+    # line per target.
+    $RemoteScriptTemplate = @'
+$ErrorActionPreference = 'SilentlyContinue'
+$fqdns = @(__FQDNS__)
+$ports = @{ __PORTS__ }
+$dnsServers = @(__DNSSERVERS__)
+foreach ($fqdn in $fqdns) {
+    $resolvedIp = ''
+    $dnsMethod = ''
+    # Try each supplied DNS server in turn until one returns something usable.
+    foreach ($dnsServer in $dnsServers) {
+        try {
+            $nrOutput = nameresolver $fqdn $dnsServer 2>$null
+            if ($nrOutput) {
+                # Same parsing approach as NmeNetworkTest.ps1: keep lines that are not the "Server:"
+                # line and that end in an IPv4 address, trim, strip a leading "Addresses:" label, and
+                # take the first one.
+                $ips = ($nrOutput -split "`n" | Where-Object { $_ -notmatch 'Server:' -and $_ -match '\s*\d{1,3}(\.\d{1,3}){3}\s*$' } | ForEach-Object { $_.Trim() }) -replace 'Addresses:\s*', ''
+                $ips = @($ips | Where-Object { $_ })
+                if ($ips.Count -gt 0) {
+                    $resolvedIp = $ips[0]
+                    $dnsMethod = "nameresolver($dnsServer)"
+                    break
+                }
+            }
+        } catch {}
+    }
+    if (-not $resolvedIp) {
+        # nameresolver is missing or returned nothing usable. Fall back to .NET DNS resolution, which
+        # cannot target a specific server (it uses whatever the worker is currently configured to use)
+        # and is therefore a weaker signal than nameresolver - reported as such via $dnsMethod.
+        try {
+            $addr = [System.Net.Dns]::GetHostAddresses($fqdn) | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | Select-Object -First 1
+            if ($addr) {
+                $resolvedIp = $addr.IPAddressToString
+                $dnsMethod = 'dotnet'
+            }
+        } catch {}
+    }
+
+    $tcpOk = $false
+    $tcpMethod = ''
+    if ($resolvedIp) {
+        $port = $ports[$fqdn]
+        try {
+            # tcpping is preferred because it is the tool Microsoft documents for testing outbound
+            # connectivity from an App Service worker.
+            $tpOutput = tcpping "$($resolvedIp):$port" 2>$null
+            if ($tpOutput -match 'Connected to') {
+                $tcpOk = $true
+                $tcpMethod = 'tcpping'
+            }
+        } catch {}
+        if (-not $tcpMethod) {
+            # tcpping is missing or its output did not match - fall back to a raw socket connect,
+            # whose behavior does not depend on a tool being present or on its output format.
+            try {
+                $client = New-Object System.Net.Sockets.TcpClient
+                $asyncResult = $client.BeginConnect($resolvedIp, [int]$port, $null, $null)
+                if ($asyncResult.AsyncWaitHandle.WaitOne(10000)) {
+                    $client.EndConnect($asyncResult)
+                    $tcpOk = $client.Connected
+                }
+                $client.Close()
+                $tcpMethod = 'tcpclient'
+            } catch { $tcpMethod = 'tcpclient' }
+        }
+    }
+    $status = if ($tcpOk) { 'OK' } else { 'FAIL' }
+    Write-Output ("$fqdn|$resolvedIp|$status|$dnsMethod|$tcpMethod")
+}
+'@
+    $RemoteScript = $RemoteScriptTemplate.Replace('__FQDNS__', $FqdnList).Replace('__PORTS__', $PortMap).Replace('__DNSSERVERS__', $DnsServerList)
+
+    # Exceptions from Invoke-NmeKuduCommand propagate to the caller - that is what lets the caller
+    # tell "the probe ran and found a problem" (returned results, some failing) apart from "the probe
+    # could not run at all" (an exception here), which are handled very differently by the gate below.
+    $Output = Invoke-NmeKuduCommand -ScmHost $ScmHost -ScriptText $RemoteScript
+    $Lines = @()
+    if ($Output) {
+        $Lines = @($Output -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '\|' })
+    }
+
+    $Results = @()
+    foreach ($t in $Target) {
+        $Line = $Lines | Where-Object { ($_ -split '\|')[0] -eq $t.Fqdn } | Select-Object -First 1
+        if ($Line) {
+            $Parts = $Line -split '\|'
+            $ResolvedIp = $Parts[1]
+            $TcpOk = ($Parts[2] -eq 'OK')
+            $DnsMethod = $Parts[3]
+            $TcpMethod = $Parts[4]
+        }
+        else {
+            # No line came back for this target at all (e.g. the remote script errored before it got
+            # to this target). Treat exactly like an empty resolution - it fails Pass below.
+            $ResolvedIp = ''
+            $TcpOk = $false
+            $DnsMethod = ''
+            $TcpMethod = ''
+        }
+        # Pass requires BOTH: the resolved IP is non-empty and is one of the private endpoint's
+        # private IPs, AND the TCP connect succeeded. The IP check is not optional and must not be
+        # dropped: at the point this probe runs, public network access has not yet been disabled, so a
+        # target whose DNS still returns its PUBLIC IP would happily pass a TCP-443 connect today,
+        # while being exactly the misconfiguration that causes the outage a minute from now, once
+        # public access actually is disabled and DNS still points at the public endpoint.
+        $Pass = [bool]($ResolvedIp -and (@($t.ExpectedIp) -contains $ResolvedIp) -and $TcpOk)
+        $Results += [pscustomobject]@{
+            Name       = $t.Name
+            Fqdn       = $t.Fqdn
+            Port       = $t.Port
+            ExpectedIp = $t.ExpectedIp
+            ResolvedIp = $ResolvedIp
+            TcpOk      = $TcpOk
+            DnsMethod  = $DnsMethod
+            TcpMethod  = $TcpMethod
+            Pass       = $Pass
+        }
+    }
+    return $Results
+}
+
+function Get-NmeConnectivityExpectedIps {
+    param(
+        [Parameter(Mandatory=$true)]$PrivateEndpoints,
+        [Parameter(Mandatory=$true)][string]$PrivateLinkServiceId
+    )
+    $MatchedEndpoint = $PrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $PrivateLinkServiceId } | Select-Object -First 1
+    if (-not $MatchedEndpoint) { return @() }
+    return @($MatchedEndpoint.CustomDnsConfigs.IpAddresses | Where-Object { $_ })
 }
 
 #### main script ####
@@ -1871,22 +2082,6 @@ if ($NmeCclWebAppName) {
         $CclWebApp.Properties.vnetRouteAllEnabled = 'false'
         $CclWebApp = $CclWebApp | Set-AzResource -Force
     }
-
-    # The Cost Calculator web app is always made private, regardless of MakeAppServicePrivate.
-    # Nothing but the primary Nerdio Manager web app talks to it, and that traffic goes over the
-    # private network once the private endpoint and VNet integration above are in place - so
-    # there is no scenario in which it needs to be reachable from the internet. This runs after
-    # VNet integration deliberately: locking it down first would have cut off public access while
-    # the private path was still being built.
-    $CclWebApp = Get-AzResource -Id $NmeCclWebApp.id
-    if ($CclWebApp.Properties.publicNetworkAccess -eq 'Disabled') {
-        Write-Output "CCL app service public access already disabled"
-    }
-    else {
-        Write-Output "Disabling CCL app service public access"
-        $CclWebApp.Properties.publicNetworkAccess = "Disabled"
-        $CclWebApp | Set-AzResource -Force | Out-Null
-    }
 }
 
 # check if $NmeIiWebAppName exists
@@ -1928,13 +2123,130 @@ if ($NmeRtiWebAppName) {
 #endregion
 
 #region private DNS and network preflight checks
-# This region only reports - it never blocks, throws or alters control flow. It runs after private
-# endpoints and DNS zone groups have been created but before the make-private region below disables
-# public access on the key vault(s) and sql server(s), which is the point after which recovery
-# requires the Azure Portal rather than another run of this script.
+# The NSG/route table checks further down only report - they never block, throw or alter control
+# flow. The connectivity gate immediately below is the exception: it can Throw and stop the script
+# before the make-private region runs. Both run after private endpoints and DNS zone groups have been
+# created but before the make-private region below disables public access on the key vault(s) and sql
+# server(s), which is the point after which recovery requires the Azure Portal rather than another run
+# of this script.
 
-if (-not $SkipDNS) {
-    Write-Output "Checking private DNS records before disabling public access"
+# --- Real connectivity probe from inside the VNet-integrated app service worker -------------------
+# Test-NmePrivateDnsResolution (the fallback used further below) proves the Azure private DNS zone has
+# an A record for a resource. That proves the private endpoint's DNS zone group did its job, but
+# nothing about what the Nerdio Manager app service actually resolves and can reach - it says nothing
+# about whether the zone is linked to the right VNet, whether the worker is actually consulting it, or
+# about routing and NSGs. It is also useless when SkipDNS is true, since a customer running their own
+# DNS may have no Azure private DNS zone to check at all. So this probe, not the zone-record check, is
+# what gates the make-private region: if Nerdio Manager cannot reach its key vault, sql server or DPS
+# storage account, the app fails to load with a 500.30 error, so disabling public access in that state
+# is a guaranteed outage.
+#
+# Exactly three targets are probed - nothing else - matching what the app needs merely to start:
+#   1. the Nerdio Manager key vault, TCP 443
+#   2. the primary sql server, TCP 1433
+#   3. the DPS storage account (blob), TCP 443, only when $NmeDpsStorageAccountName is set
+$ConnectivityTargets = @()
+$ConnectivityTargets += [pscustomobject]@{
+    Name       = 'Nerdio Manager key vault'
+    # Read the FQDN off the resource rather than composing it from the vault name and a hardcoded
+    # suffix - composing breaks in sovereign clouds such as US Gov, where the suffix differs.
+    Fqdn       = ([uri]$NmeKeyVault.VaultUri).Host
+    Port       = 443
+    ExpectedIp = @()
+}
+if (-not $SqlServer) {
+    $SqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeSqlServerName
+}
+$ConnectivityTargets += [pscustomobject]@{
+    Name       = 'primary sql server'
+    Fqdn       = $SqlServer.FullyQualifiedDomainName
+    Port       = 1433
+    ExpectedIp = @()
+}
+if ($NmeDpsStorageAccountName) {
+    if (-not $NmeDpsStorageAccount) {
+        $NmeDpsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeDpsStorageAccountName
+    }
+    $ConnectivityTargets += [pscustomobject]@{
+        Name       = 'DPS storage account'
+        Fqdn       = ([uri]$NmeDpsStorageAccount.PrimaryEndpoints.Blob).Host
+        Port       = 443
+        ExpectedIp = @()
+    }
+}
+
+# Re-fetch private endpoints subscription-wide, with the same fallback-to-$NmeRg pattern used for
+# $ExistingPrivateEndpoints earlier in this script, rather than reusing $KvPrivateEndpoint /
+# $SqlPrivateEndpoint / the DPS storage helper's return value (which is discarded at its call site). A
+# freshly created endpoint may not have CustomDnsConfigs populated yet on the object New-AzPrivateEndpoint
+# returned earlier in this same run, so only a fresh Get can be trusted for the private IPs here.
+try {
+    $ConnectivityPrivateEndpoints = Get-AzPrivateEndpoint -ErrorAction Stop
+}
+catch {
+    Write-Warning "Unable to list private endpoints across the subscription ($($_.Exception.Message)). Falling back to resource group '$NmeRg' only for the connectivity probe - a private endpoint in another resource group will not be matched, and its target's expected-IP list will be empty (which fails the probe for that target)."
+    $ConnectivityPrivateEndpoints = Get-AzPrivateEndpoint -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+}
+
+($ConnectivityTargets | Where-Object { $_.Name -eq 'Nerdio Manager key vault' }).ExpectedIp = Get-NmeConnectivityExpectedIps -PrivateEndpoints $ConnectivityPrivateEndpoints -PrivateLinkServiceId $NmeKeyVault.ResourceId
+($ConnectivityTargets | Where-Object { $_.Name -eq 'primary sql server' }).ExpectedIp = Get-NmeConnectivityExpectedIps -PrivateEndpoints $ConnectivityPrivateEndpoints -PrivateLinkServiceId $SqlServer.ResourceId
+if ($NmeDpsStorageAccountName) {
+    ($ConnectivityTargets | Where-Object { $_.Name -eq 'DPS storage account' }).ExpectedIp = Get-NmeConnectivityExpectedIps -PrivateEndpoints $ConnectivityPrivateEndpoints -PrivateLinkServiceId $NmeDpsStorageAccount.Id
+}
+
+# SCM host: prefer the app's own EnabledHostNames (works in every cloud without composing anything).
+# Fall back to deriving it from DefaultHostName by inserting '.scm' after the site name, e.g.
+# foo.azurewebsites.net -> foo.scm.azurewebsites.net - this also works for azurewebsites.us since it
+# only touches the part before the first dot.
+$ScmHost = $NmeWebApp.EnabledHostNames | Where-Object { $_ -match '\.scm\.' } | Select-Object -First 1
+if (-not $ScmHost) {
+    $HostNameParts = $NmeWebApp.DefaultHostName.Split('.', 2)
+    $ScmHost = "$($HostNameParts[0]).scm.$($HostNameParts[1])"
+}
+
+# DNS servers to query explicitly, rather than relying on whatever the worker process happens to be
+# using - this is what removes the need to restart the app or retry, since nameresolver queries a
+# specific server immediately without changing app config. An empty DhcpOptions.DnsServers means the
+# VNet uses Azure-provided DNS: 168.63.129.16 is Azure's DNS virtual IP, and querying it directly is
+# what actually consults the private DNS zones linked to this VNet.
+$ConnectivityDnsServers = @($VNet.DhcpOptions.DnsServers | Where-Object { $_ })
+if ($ConnectivityDnsServers.Count -eq 0) {
+    $ConnectivityDnsServers = @('168.63.129.16')
+}
+Write-Output "Connectivity probe will query DNS server(s): $($ConnectivityDnsServers -join ', ')"
+
+try {
+    $ConnectivityResults = Test-NmeAppServiceConnectivity -ScmHost $ScmHost -DnsServer $ConnectivityDnsServers -Target $ConnectivityTargets
+}
+catch {
+    # "Could not run the probe" is NOT a failure. Disabling public network access on the app service
+    # also blocks its own SCM/Kudu endpoint, so on any deployment where MakeAppServicePrivate was set
+    # by an earlier run, a later re-run of this script cannot reach Kudu at all - treating that as a
+    # failure would make the script permanently un-re-runnable on exactly the deployments that took
+    # its advice. Warn and proceed; only a probe that ran and reported a bad result throws.
+    Write-Warning "Could not run the connectivity probe from inside the app service worker via Kudu ($($_.Exception.Message)). This is expected when the app service's public network access - and therefore its SCM endpoint - has already been disabled by an earlier run of this script. Proceeding without this check."
+    $ConnectivityResults = $null
+}
+
+if ($ConnectivityResults) {
+    foreach ($Result in $ConnectivityResults) {
+        $ResultLine = "$($Result.Name) ($($Result.Fqdn):$($Result.Port)): resolved '$($Result.ResolvedIp)' via $($Result.DnsMethod); expected one of [$($Result.ExpectedIp -join ', ')]; TCP $(if ($Result.TcpOk) { 'connected' } else { 'failed' }) via $($Result.TcpMethod)"
+        if ($Result.Pass) {
+            Write-Output "PASS: $ResultLine"
+        }
+        else {
+            Write-Warning "FAIL: $ResultLine"
+        }
+    }
+    $FailedConnectivityTargets = @($ConnectivityResults | Where-Object { -not $_.Pass })
+    if ($FailedConnectivityTargets.Count -gt 0) {
+        $FailedConnectivityNames = ($FailedConnectivityTargets | ForEach-Object { $_.Name }) -join ', '
+        Throw "The connectivity probe run from inside the app service worker failed for: $FailedConnectivityNames. Nerdio Manager will not load (500.30 error) if it cannot reach these resources, so no public network access has been disabled by this run - the script stopped here before the make-private region. Fix DNS resolution and/or routing/NSGs for the failed target(s) above and re-run."
+    }
+}
+elseif (-not $SkipDNS) {
+    # Fallback: the weaker DNS-zone-record check, only used when the real probe above could not run.
+    Write-Output "Checking private DNS records before disabling public access (fallback check - the in-worker connectivity probe could not run)"
     $DnsCheckFailures = 0
     if ($existingDNSZonesSubId) {
         Write-Output "Setting context to subscription $existingDNSZonesSubId to check private DNS records"
@@ -2156,6 +2468,28 @@ if ($NmeIiKeyVaultName) {
 if ($NmeIiSqlServerName) {
     Disable-NmeSqlPublicAccess -ServerName $NmeIiSqlServerName -ResourceGroupName $NmeRg -PrivateEndpointSubnetId $PrivateEndpointSubnet.id -DisplayName 'Intune Insights SQL'
     Set-NmeSqlBaseline -ResourceGroupName $NmeRg -ServerName $NmeIiSqlServerName -DisplayName 'Intune Insights SQL'
+}
+
+# The Cost Calculator web app is always made private, regardless of MakeAppServicePrivate. Nothing
+# but the primary Nerdio Manager web app talks to it, and that traffic goes over the private
+# network once the private endpoint and VNet integration are in place - so there is no scenario in
+# which it needs to be reachable from the internet. This runs here, in the make-private region,
+# which is both after CCL VNet integration (in the #region app service vnet integration block
+# above) and after the connectivity gate above: locking it down before VNet integration would have
+# cut off public access while the private path was still being built, and locking it down before
+# the gate would mean a run that aborts there had already disabled CCL's public access - leaving
+# this here means an aborted run leaves CCL untouched.
+if ($NmeCclWebAppName) {
+    $NmeCclWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeCclWebAppName
+    $CclWebApp = Get-AzResource -Id $NmeCclWebApp.id
+    if ($CclWebApp.Properties.publicNetworkAccess -eq 'Disabled') {
+        Write-Output "CCL app service public access already disabled"
+    }
+    else {
+        Write-Output "Disabling CCL app service public access"
+        $CclWebApp.Properties.publicNetworkAccess = "Disabled"
+        $CclWebApp | Set-AzResource -Force | Out-Null
+    }
 }
 
 # make intune insights app service private. Gated on MakeAppServicePrivate rather than its own parameter: the
