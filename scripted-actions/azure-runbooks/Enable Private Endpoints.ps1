@@ -976,7 +976,10 @@ if ($SkipDNS -ne 'True') {
     } else {
         Write-Output "Configuring keyvault DNS zone group"
         $Config = New-AzPrivateDnsZoneConfig -Name $KeyVaultDnsZoneName  -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
-        $KvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$KvPrivateEndpointName" -Name "$KvDnsZoneGroupName" -PrivateDnsZoneConfig $config
+        # Use the discovered endpoint's actual .Name (not this script's naming convention): a pre-existing private
+        # endpoint is matched by PrivateLinkServiceId, so its name may not follow the convention, and the DNS zone
+        # group must be attached to the endpoint that actually exists.
+        $KvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $KvPrivateEndpoint.Name -Name "$KvDnsZoneGroupName" -PrivateDnsZoneConfig $config
     }
 } else {
     Write-Output "Skipping Key Vault DNS zone group configuration (SkipDNS enabled)"
@@ -1004,7 +1007,7 @@ if ($NmeCclKeyVaultName) {
         } else {
             Write-Output "Configuring CCL keyvault DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $KeyVaultDnsZoneName  -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
-            $CclKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclKvPrivateEndpointName" -Name "$CclKvDnsZoneGroupName" -PrivateDnsZoneConfig $config
+            $CclKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $CclKvPrivateEndpoint.Name -Name "$CclKvDnsZoneGroupName" -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping CCL Key Vault DNS zone group configuration (SkipDNS enabled)"
@@ -1033,7 +1036,7 @@ if ($NmeIiKeyVaultName) {
         } else {
             Write-Output "Configuring Intune Insights keyvault DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $KeyVaultDnsZoneName  -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
-            $IiKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$IiKvPrivateEndpointName" -Name "$IiKvDnsZoneGroupName" -PrivateDnsZoneConfig $Config
+            $IiKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $IiKvPrivateEndpoint.Name -Name "$IiKvDnsZoneGroupName" -PrivateDnsZoneConfig $Config
         }
     } else {
         Write-Output "Skipping Intune Insights Key Vault DNS zone group configuration (SkipDNS enabled)"
@@ -1061,7 +1064,7 @@ if ($SkipDNS -ne 'True') {
     } else {
         Write-Output "Configuring sql DNS zone group"
         $Config = New-AzPrivateDnsZoneConfig -Name $SqlDnsZoneName -PrivateDnsZoneId $SqlDnsZone.ResourceId
-        $SqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$SqlPrivateEndpointName" -Name "$SqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
+        $SqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $SqlPrivateEndpoint.Name -Name "$SqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
     }
 } else {
     Write-Output "Skipping SQL DNS zone group configuration (SkipDNS enabled)"
@@ -1088,7 +1091,7 @@ if ($NmeIiSqlServerName) {
         } else {
             Write-Output "Configuring Intune Insights sql DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $SqlDnsZoneName -PrivateDnsZoneId $SqlDnsZone.ResourceId
-            $IiSqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$IiSqlPrivateEndpointName" -Name "$IiSqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
+            $IiSqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $IiSqlPrivateEndpoint.Name -Name "$IiSqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping Intune Insights SQL DNS zone group configuration (SkipDNS enabled)"
@@ -1116,7 +1119,7 @@ if ($SkipDNS -ne 'True') {
     } else {
         Write-Output "Configuring automation DNS zone group"
         $Config = New-AzPrivateDnsZoneConfig -Name $AutomationDnsZoneName -PrivateDnsZoneId $AutomationDnsZone.ResourceId
-        $AutomationDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AutomationPrivateEndpointName" -Name "$AutomationDnsZoneGroupName" -PrivateDnsZoneConfig $config
+        $AutomationDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $AutomationPrivateEndpoint.Name -Name "$AutomationDnsZoneGroupName" -PrivateDnsZoneConfig $config
     }
 } else {
     Write-Output "Skipping Automation DNS zone group configuration (SkipDNS enabled)"
@@ -1145,7 +1148,7 @@ if ($NmeScriptedActionsAccountName) {
         } else {
             Write-Output "Configuring scripted actions DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $AutomationDnsZoneName -PrivateDnsZoneId $AutomationDnsZone.ResourceId
-            $ScriptedActionsDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsPrivateEndpointName -Name "$ScriptedActionsDnsZoneGroupName" -PrivateDnsZoneConfig $config
+            $ScriptedActionsDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsPrivateEndpoint.Name -Name "$ScriptedActionsDnsZoneGroupName" -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping scripted actions DNS zone group configuration (SkipDNS enabled)"
@@ -1176,7 +1179,7 @@ if ($NmeScriptedActionsAccountName) {
             } else {
                 Write-Output "Configuring scripted actions storage DNS zone group"
                 $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
-                $ScriptedActionsStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$ScriptedActionsStoragePrivateEndpointName" -Name $SaStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
+                $ScriptedActionsStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsStoragePrivateEndpoint.Name -Name $SaStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
             }
         } else {
             Write-Output "Skipping scripted actions storage DNS zone group configuration (SkipDNS enabled)"
@@ -1206,7 +1209,7 @@ if ($NmeCclStorageAccountName) {
         } else {
             Write-Output "Configuring CCL storage DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
-            $CclStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclStoragePrivateEndpointName" -Name $CclStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
+            $CclStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $CclStoragePrivateEndpoint.Name -Name $CclStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping CCL storage DNS zone group configuration (SkipDNS enabled)"
@@ -1235,7 +1238,7 @@ if ($NmeDpsStorageAccountName) {
         } else {
             Write-Output "Configuring DPS storage DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
-            $DpsStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$DpsStoragePrivateEndpointName" -Name $DpsStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
+            $DpsStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $DpsStoragePrivateEndpoint.Name -Name $DpsStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping DPS storage DNS zone group configuration (SkipDNS enabled)"
@@ -1267,7 +1270,7 @@ if ($SkipDNS -ne 'True') {
     } else {
         Write-Output "Configuring app service DNS zone group"
         $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
-        $AppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$AppServicePrivateEndpointName" -Name $AppServicePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
+        $AppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $AppServicePrivateEndpoint.Name -Name $AppServicePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
     }
 } else {
     Write-Output "Skipping App Service DNS zone group configuration (SkipDNS enabled)"
@@ -1296,7 +1299,7 @@ if ($NmeCclWebAppName) {
         } else {
             Write-Output "Configuring CCL app service DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
-            $CclAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclAppServicePrivateEndpointName" -Name $CclAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
+            $CclAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $CclAppServicePrivateEndpoint.Name -Name $CclAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping CCL App Service DNS zone group configuration (SkipDNS enabled)"
@@ -1328,7 +1331,7 @@ if ($NmeIiWebAppName) {
         } else {
             Write-Output "Configuring Intune Insights app service DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
-            $IiAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$IiAppServicePrivateEndpointName" -Name $IiAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
+            $IiAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $IiAppServicePrivateEndpoint.Name -Name $IiAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping Intune Insights App Service DNS zone group configuration (SkipDNS enabled)"
@@ -1358,7 +1361,7 @@ if ($NmeRtiWebAppName) {
         } else {
             Write-Output "Configuring RTI app service DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
-            $RtiAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$RtiAppServicePrivateEndpointName" -Name $RtiAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
+            $RtiAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $RtiAppServicePrivateEndpoint.Name -Name $RtiAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping RTI App Service DNS zone group configuration (SkipDNS enabled)"
@@ -1385,7 +1388,7 @@ if ($NmeRtiSqlServerName) {
         } else {
             Write-Output "Configuring RTI sql DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $SqlDnsZoneName -PrivateDnsZoneId $SqlDnsZone.ResourceId
-            $RtiSqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$RtiSqlPrivateEndpointName" -Name $RtiSqlDnsZoneGroupName -PrivateDnsZoneConfig $config
+            $RtiSqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $RtiSqlPrivateEndpoint.Name -Name $RtiSqlDnsZoneGroupName -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping RTI SQL DNS zone group configuration (SkipDNS enabled)"
@@ -1453,7 +1456,7 @@ if ($NmeRtiKeyVaultName) {
         } else {
             Write-Output "Configuring RTI Key Vault DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $KeyVaultDnsZoneName  -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
-            $RtiKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$RtiKvPrivateEndpointName" -Name $RtiKvDnsZoneGroupName -PrivateDnsZoneConfig $Config
+            $RtiKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $RtiKvPrivateEndpoint.Name -Name $RtiKvDnsZoneGroupName -PrivateDnsZoneConfig $Config
         }
     } else {
         Write-Output "Skipping RTI Key Vault DNS zone group configuration (SkipDNS enabled)"
