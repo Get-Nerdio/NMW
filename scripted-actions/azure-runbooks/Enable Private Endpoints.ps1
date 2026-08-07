@@ -645,7 +645,37 @@ Function Check-LastRunResults {
             if ($JobHash -eq $ThisScriptHash){
                 Write-Output "Output of previous script run:"
                 $JobOutput = Get-AzAutomationJobOutput -Id $details.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
-                $JobOutput | Select-Object summary -ExpandProperty summary
+                # Note: Get-AzAutomationJobOutput only returns a truncated summary of each record.
+                # If the full, untruncated text is ever needed, use Get-AzAutomationJobOutputRecord -Id <record id> instead.
+                foreach ($record in $JobOutput) {
+                    $Summary = $record.Summary
+                    if ([string]::IsNullOrEmpty($Summary)) {
+                        continue
+                    }
+                    switch ($record.Type) {
+                        'Error' {
+                            # -ErrorAction Continue is required here: this script sets $ErrorActionPreference = 'Stop',
+                            # and a bare Write-Error would throw under that preference, aborting the replay before
+                            # reaching the "App Service restarted" message and wait-time calculation below. Do not remove.
+                            Write-Error "[previous run] $Summary" -ErrorAction Continue
+                        }
+                        'Warning' {
+                            Write-Warning "[previous run] $Summary"
+                        }
+                        'Verbose' {
+                            Write-Verbose "[previous run] $Summary"
+                        }
+                        'Debug' {
+                            Write-Debug "[previous run] $Summary"
+                        }
+                        'Progress' {
+                            # Progress records were transient UI state in the original run; skip them in the replay.
+                        }
+                        default {
+                            Write-Output "[previous run] $Summary"
+                        }
+                    }
+                }
 
                 Write-Output "App Service restarted after running this script."
                 # How much of the cooldown window is left, based on how long ago the app was actually modified.
@@ -653,7 +683,6 @@ Function Check-LastRunResults {
                 if ($WaitMinutes -gt 0) {
                     Write-Output "If you need to re-run the script, please wait $WaitMinutes minutes and try again."
                 }
-                $joboutput| Where-Object type -eq warning | Select-Object summary -ExpandProperty summary | write-warning
                 Exit
             }
         }
