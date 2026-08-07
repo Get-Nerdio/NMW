@@ -78,7 +78,7 @@ endpoint vnet.
     "DefaultValue": ""
   },
   "MakeAppServicePrivate": {
-    "Description": "WARNING: If set to true, only hosts on the VNet created by this script, or on peered VNets, will be able to access the app service URL.",
+    "Description": "WARNING: If set to true, only hosts on the VNet created by this script, or on peered VNets, will be able to access the app service URL. Note that setting this back to false does NOT re-enable public access on a later run - this script never re-enables public network access implicitly. To undo it, re-enable public network access on the app service in the Azure Portal.",
     "IsRequired": false,
     "DefaultValue": "false"
   },
@@ -1650,7 +1650,10 @@ else {
     Write-Output "Enabling app service VNet integration"
     $webApp.Properties.virtualNetworkSubnetId = $AppServiceSubnet.id
     $webApp.Properties.vnetRouteAllEnabled = 'false'
-    $webApp.Properties.publicNetworkAccess = "Enabled"
+    # publicNetworkAccess is deliberately not written here. VNet integration is an outbound
+    # concern and says nothing about whether the app service should be reachable from the
+    # internet; setting it to "Enabled" silently re-exposed an app service the customer had
+    # locked down, either manually or on a previous run with MakeAppServicePrivate = true.
     $WebApp = $webApp | Set-AzResource -Force
 }
 
@@ -1828,15 +1831,20 @@ if ($NmeIiSqlServerName) {
 
 #endregion
 
-$webApp = Get-AzResource -Id $NmeWebApp.id 
+# Public network access is only ever written when MakeAppServicePrivate explicitly asks for it.
+# The previous else branch wrote "Enabled" whenever the parameter was anything other than 'True',
+# which meant a customer who locked the app service down manually - or who ran this script once
+# with MakeAppServicePrivate = true and re-ran it later to add a component without re-supplying
+# the flag - had their app service quietly re-exposed to the internet. Re-enabling public access
+# is a deliberate act and is left to the Azure Portal.
 if ($MakeAppServicePrivate -eq 'True') {
+    $webApp = Get-AzResource -Id $NmeWebApp.id
     Write-Output "Disabling NME app service public access"
     $webApp.Properties.publicNetworkAccess = "Disabled"
     $webApp | Set-AzResource -Force | Out-Null
 }
 else {
-    $webApp.Properties.publicNetworkAccess = "Enabled"
-    $webApp | Set-AzResource -Force | Out-Null
+    Write-Output "MakeAppServicePrivate is not set to true - leaving NME app service public network access unchanged."
 }
 
 # restart the app service
