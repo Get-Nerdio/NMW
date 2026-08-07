@@ -513,7 +513,12 @@ Function Check-LastRunResults {
             return
         }
 
-        $jobs = Get-AzAutomationJob -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName | ? status -match 'completed|Failed' | ? {$_.EndTime.datetime -gt (get-date).AddMinutes(-$MinutesAgo)}
+        # EndTime is a DateTimeOffset; compare both sides in UTC explicitly rather than
+        # relying on the sandbox's local timezone happening to be UTC.
+        $JobCutoffUtc = (Get-Date).ToUniversalTime().AddMinutes(-$MinutesAgo)
+        $jobs = Get-AzAutomationJob -ResourceGroupName $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName |
+            Where-Object { $_.Status -match 'completed|Failed' } |
+            Where-Object { $_.EndTime.UtcDateTime -gt $JobCutoffUtc }
         foreach ($job in $jobs){
             $details = Get-AzAutomationJob -id $job.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
             $JobScriptText = Get-NmeJobScriptText -JobParameters $details.JobParameters
@@ -528,8 +533,10 @@ Function Check-LastRunResults {
                 $JobOutput | select summary -ExpandProperty summary
 
                 Write-Output "App Service restarted after running this script."
-                if (($minutesago - ((get-date).AddMinutes(-$MinutesAgo).ToUniversalTime() - $app.LastModifiedTimeUtc).minutes) -lt $MinutesAgo){
-                    write-output "If you need to re-run the script, please wait $($minutesago - ((get-date).AddMinutes(-$MinutesAgo).ToUniversalTime() - $app.LastModifiedTimeUtc).minutes) minutes and try again."
+                # How much of the cooldown window is left, based on how long ago the app was actually modified.
+                $WaitMinutes = [math]::Ceiling($MinutesAgo - ((Get-Date).ToUniversalTime() - $app.LastModifiedTimeUtc).TotalMinutes)
+                if ($WaitMinutes -gt 0) {
+                    Write-Output "If you need to re-run the script, please wait $WaitMinutes minutes and try again."
                 }
                 $joboutput| Where-Object type -eq warning | select summary -ExpandProperty summary | write-warning
                 Exit
