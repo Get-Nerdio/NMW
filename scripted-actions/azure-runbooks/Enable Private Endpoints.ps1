@@ -1644,17 +1644,12 @@ if ($NmeRtiWebAppName) {
         $RtiWebApp = $RtiWebApp | Set-AzResource -Force
     }
 }
-# enable network policy
-$AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet
-$VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $VnetRg 
-
-if ($AppServiceSubnet.PrivateEndpointNetworkPolicies -eq 'Enabled') {
-    Write-Output "Network policies already enabled"
-} else {
-    Write-Output "Enabling network policies"
-    #$Vnet = $VNet | Set-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -AddressPrefix $AppServiceSubnet.addressprefix -PrivateEndpointNetworkPoliciesFlag Enabled | Set-AzVirtualNetwork
-    
-}
+# privateEndpointNetworkPolicies is deliberately NOT set on the app service subnet. That flag only
+# governs whether NSGs and route tables are applied to *private endpoints* in a subnet, and this
+# subnet is delegated to Microsoft.Web/serverFarms and holds no private endpoints - so the flag has
+# no effect here. NSG and UDR support on a VNet integration subnet does not depend on it. This
+# previously printed "Enabling network policies" and then did nothing, because the only statement in
+# the branch was commented out.
 #endregion
 
 #region make resources private
