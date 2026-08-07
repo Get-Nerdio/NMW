@@ -240,9 +240,12 @@ function Set-NmeVars {
 
     write-verbose "Getting Nerdio Manager Application Insights"
     # try get nme app insights by tag using nmeresourcetagname
+    # These lookups are for optional components: a failed tag lookup is expected to fall through to the
+    # next discovery method, so the exception is intentionally swallowed here. It is still surfaced on the
+    # verbose stream so a throttling error or RBAC denial can be told apart from "not deployed".
     try {
         $NmeAppInsights = Get-AzApplicationInsights -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object {$_.tag[$NmeResourceTagName] -eq 'NERDIO_MANAGER_APPINSIGHTS' }
-    } catch{}
+    } catch { Write-Verbose "Lookup of NME Application Insights by tag failed: $($_.Exception.Message)" }
     if (!$NmeAppInsights) {
         Write-Verbose "NME App Insights not found by tag, trying by instrumentation key"
         $NmeAppInsights = Get-AzApplicationInsights -ResourceGroupName $NmeRg | Where-Object { $_.InstrumentationKey -eq ($NmeWebApp.siteconfig.appsettings | Where-Object  {$_.name -eq 'ApplicationInsights:InstrumentationKey'} | Select-Object -ExpandProperty value) }
@@ -260,8 +263,8 @@ function Set-NmeVars {
 
     # Find Real Time Insights components if they exist
     # Find RTI sql server
-    try {$RtiSqlServer = Get-AzSqlServer -ResourceGroupName $nmerg | Where-Object {$_.tags[$NmeResourceTagName] -eq 'REAL_TIME_INSIGHTS_SQL_SERVER'}} 
-    catch{}
+    try {$RtiSqlServer = Get-AzSqlServer -ResourceGroupName $nmerg | Where-Object {$_.tags[$NmeResourceTagName] -eq 'REAL_TIME_INSIGHTS_SQL_SERVER'}}
+    catch { Write-Verbose "Lookup of Real Time Insights SQL server by tag failed: $($_.Exception.Message)" }
     # if not found, try previous method
     if (!$RtiSqlServer) {
         if ($key){
@@ -275,7 +278,7 @@ function Set-NmeVars {
     # find RTI web app
     try {
         $RtiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg | Where-Object {$_.tags[$NmeResourceTagName] -eq 'REAL_TIME_INSIGHTS_WEBAPP'}
-    } catch{}
+    } catch { Write-Verbose "Lookup of Real Time Insights web app by tag failed: $($_.Exception.Message)" }
     # if not found, try previous method
     if (!$RtiWebApp) {
         if ($key){
@@ -292,7 +295,7 @@ function Set-NmeVars {
     # find RTI key vault
     try {
         $RtiKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object {$_.tags[$NmeResourceTagName] -eq 'REAL_TIME_INSIGHTS_KEYVAULT'}
-    } catch{}
+    } catch { Write-Verbose "Lookup of Real Time Insights key vault by tag failed: $($_.Exception.Message)" }
     # if not found, try previous method
     if (!$RtiKeyVault) {
         if ($key){
@@ -309,7 +312,7 @@ function Set-NmeVars {
     # find RTI storage account
     try {
         $RtiStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object {$_.tags[$NmeResourceTagName] -eq 'REAL_TIME_INSIGHTS_STORAGE_ACCOUNT'}
-    } catch{}
+    } catch { Write-Verbose "Lookup of Real Time Insights storage account by tag failed: $($_.Exception.Message)" }
     # if not found, try previous method
     if (!$RtiStorageAccount) {
         if ($key){
