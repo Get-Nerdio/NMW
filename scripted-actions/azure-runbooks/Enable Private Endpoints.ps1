@@ -628,13 +628,89 @@ function GetEntAppName {
     # check if mggraph module installed
     if (!(Get-Module -ListAvailable -Name Microsoft.Graph.Applications)) {
         Write-Verbose "Installing Microsoft.Graph.Applications module to retrieve app name"
-        Install-Module -Name Microsoft.Graph.Applications -repository PSGallery -Force
+        # -MinimumVersion pinned to 2.0.0: that's the first version whose Connect-MgGraph
+        # parameter sets support -Identity, which the managed-identity branch below needs.
+        # -Scope CurrentUser avoids failing in a sandbox that can't elevate to AllUsers.
+        Install-Module -Name Microsoft.Graph.Applications -Repository PSGallery -Force -Scope CurrentUser -AllowClobber -MinimumVersion '2.0.0'
     }
-    $ctx = get-azcontext
-    $graph = Connect-MgGraph -tenantid $ctx.Tenant.Id -ClientId $ctx.account -CertificateThumbprint $ctx.account.CertificateThumbprint -nowelcome
-    $App = Get-MgApplicationbyAppId -AppId $ctx.account.Id
-    disconnect-mggraph | out-null
-    return $App.DisplayName
+
+    $ctx = Get-AzContext
+    if (!$ctx) {
+        throw "GetEntAppName: Get-AzContext returned nothing - no Azure context is active to resolve the running identity's display name."
+    }
+
+    $AppId = $ctx.Account.Id
+    $TenantId = $ctx.Tenant.Id
+    # A certificate-based service principal login (NME's default connection mode) records its
+    # thumbprint in ExtendedProperties. $ctx.Account.CertificateThumbprint is not a real property
+    # on PSAzureRmAccount - reading it always returned $null, which is why auth silently failed.
+    $Thumbprint = $null
+    if ($ctx.Account.ExtendedProperties) {
+        $Thumbprint = $ctx.Account.ExtendedProperties['CertificateThumbprint']
+    }
+
+    # Connect-MgGraph needs to be told which cloud it's targeting or it silently fails to
+    # authenticate in sovereign clouds. This script supports US Gov elsewhere (see the
+    # azurewebsites.us branching), so map the Az environment name to a Graph environment.
+    $GraphEnvironment = switch ($ctx.Environment.Name) {
+        'AzureUSGovernment' { 'USGov' }
+        'AzureChinaCloud'   { 'China' }
+        'AzureGermanCloud'  { 'Germany' }
+        default             { 'Global' }
+    }
+
+    if ($Thumbprint) {
+        # NME's default connection mode: certificate-based service principal.
+        Connect-MgGraph -TenantId $TenantId -ClientId $AppId -CertificateThumbprint $Thumbprint -Environment $GraphEnvironment -NoWelcome
+    }
+    elseif ($ctx.Account.Type -eq 'ManagedService') {
+        # NME's MANAGED_IDENTITY_ connection mode. NME's _Connect-AzAccount always passes
+        # -AccountId, so try the user-assigned form first; fall back to the system-assigned
+        # form (no -ClientId) because Connect-MgGraph rejects -ClientId for system-assigned
+        # identities.
+        try {
+            Connect-MgGraph -Identity -ClientId $AppId -Environment $GraphEnvironment -NoWelcome
+        }
+        catch {
+            Connect-MgGraph -Identity -Environment $GraphEnvironment -NoWelcome
+        }
+    }
+    else {
+        # Federated-credentials connection mode (or anything unrecognised) leaves no reusable
+        # secret or certificate in the context - there is no credential this function can use
+        # to authenticate to Microsoft Graph. Throw before the try/catch below so this message
+        # reaches the caller unwrapped instead of being re-wrapped by the generic catch.
+        throw "GetEntAppName: the Azure connection in use (Account.Type = '$($ctx.Account.Type)') leaves no credential this script can reuse to authenticate to Microsoft Graph, so the SQL Entra admin display name cannot be looked up automatically. Set the SQL server's Entra admin to a named user or group in the Azure Portal and re-run."
+    }
+
+    try {
+        # A service principal (not an application object) exists in the tenant for BOTH an
+        # application registration and a managed identity - an application object exists only
+        # for the former. The previous app-object lookup by app id would return nothing for a
+        # managed identity, which is why it silently broke that auth mode.
+        $ServicePrincipal = Get-MgServicePrincipal -Filter "appId eq '$AppId'" -ErrorAction Stop
+        if (!$ServicePrincipal) {
+            throw "No service principal found in the tenant for appId '$AppId'."
+        }
+        # .Count on a single (non-collection) object is unreliable in PowerShell; wrap in @() first.
+        $ServicePrincipal = @($ServicePrincipal)[0]
+        return $ServicePrincipal.DisplayName
+    }
+    catch {
+        # This recovery path exists specifically so the caller's "Disable in Azure Portal"
+        # fallback doesn't mask the real cause - surface it plus the actionable permission fix.
+        throw "GetEntAppName: failed to resolve the running identity's display name via Microsoft Graph: $($_.Exception.Message). The identity running this scripted action needs Microsoft Graph permission to read service principals (Application.Read.All or Directory.Read.All) for this recovery path to work."
+    }
+    finally {
+        if (Get-MgContext) {
+            try {
+                Disconnect-MgGraph | Out-Null
+            }
+            catch {
+                Write-Verbose "GetEntAppName: failed to disconnect from Microsoft Graph cleanly: $($_.Exception.Message)"
+            }
+        }
+    }
 }
 
 function Set-NmeSubnetConfig {
