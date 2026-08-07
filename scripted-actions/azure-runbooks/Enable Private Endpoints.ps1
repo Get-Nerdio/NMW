@@ -21,6 +21,12 @@ What this script does NOT make private, so that the scope is not overstated:
    Scope, which is out of scope for this script by design - configure AMPLS separately if you need it.
  - Azure Resource Manager control plane traffic (management.azure.com), which is not private-linkable here.
 
+Alongside disabling public network access, this script applies two Microsoft baseline settings to the storage accounts
+it manages (minimum TLS version 1.2, and anonymous public blob access disallowed) and sets a minimum TLS version of 1.2
+on the sql servers it manages. These are only ever raised, never lowered, so an account already requiring a newer TLS
+version keeps it. Shared key access on the storage accounts is deliberately left alone, because Nerdio Manager may
+depend on it.
+
 If other NME components, such as Intune Insights, Cost Calculator, or Real Time Insights have been enabled, they will
 be added to the private network with private endpoints. The script can be re-run to add additional components to the
 private networking.
@@ -802,6 +808,70 @@ function Disable-NmeSqlPublicAccess {
             Write-Output $_
             Write-Warning "Disabling $DisplayName public network access failed. Disable in Azure Portal"
         }
+    }
+}
+
+function Set-NmeStorageBaseline {
+    # Microsoft's storage security baseline items that are low-risk for these NME-internal accounts:
+    # require TLS 1.2 and disallow anonymous public blob access. Applied as an explicit part of
+    # "make private" rather than left to the customer. Both are only ever raised, never lowered - an
+    # account already requiring TLS 1.3 keeps it. AllowSharedKeyAccess is deliberately NOT touched:
+    # NME may depend on shared-key access. A failure here is warned about, never thrown: this runs
+    # after key vault and SQL public access have been disabled, and hardening niceties must not
+    # abort a run at that point.
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$StorageAccountName,
+        # Used in output messages, e.g. "scripted actions", "CCL", "DPS", "RTI".
+        [Parameter(Mandatory=$true)][string]$DisplayName
+    )
+    try {
+        $StorageAccount = Get-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $StorageAccountName -ErrorAction Stop
+        $SetParams = @{}
+        # TLS1_0 < TLS1_1 < TLS1_2 < TLS1_3, and the property is a string like 'TLS1_2'. Compare by
+        # ordinal position in that list so a future TLS1_3 default is not downgraded to TLS1_2.
+        $TlsOrder = @('TLS1_0', 'TLS1_1', 'TLS1_2', 'TLS1_3')
+        $CurrentTls = [string]$StorageAccount.MinimumTlsVersion
+        if ([string]::IsNullOrWhiteSpace($CurrentTls) -or ($TlsOrder.IndexOf($CurrentTls) -lt $TlsOrder.IndexOf('TLS1_2'))) {
+            $SetParams['MinimumTlsVersion'] = 'TLS1_2'
+        }
+        if ($StorageAccount.AllowBlobPublicAccess -ne $false) {
+            $SetParams['AllowBlobPublicAccess'] = $false
+        }
+        if ($SetParams.Count -eq 0) {
+            Write-Output "$DisplayName storage account already requires TLS 1.2 and disallows public blob access"
+            return
+        }
+        Write-Output "Applying storage baseline to the $DisplayName storage account ($($SetParams.Keys -join ', '))"
+        Set-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $StorageAccountName @SetParams | Out-Null
+    }
+    catch {
+        Write-Warning "Unable to apply the storage baseline (TLS 1.2 minimum, no public blob access) to the $DisplayName storage account '$StorageAccountName': $($_.Exception.Message). Set these in the Azure Portal if required."
+    }
+}
+
+function Set-NmeSqlBaseline {
+    # SQL's equivalent baseline item: require TLS 1.2. Only ever raised, never lowered. Warned about
+    # rather than thrown for the same reason as Set-NmeStorageBaseline.
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$ServerName,
+        # Used in output messages, e.g. "SQL", "RTI SQL", "Intune Insights SQL".
+        [Parameter(Mandatory=$true)][string]$DisplayName
+    )
+    try {
+        $SqlServer = Get-AzSqlServer -ResourceGroupName $ResourceGroupName -ServerName $ServerName -ErrorAction Stop
+        # MinimalTlsVersion is a string like '1.2'. An unset value means no minimum is enforced.
+        $CurrentTls = [string]$SqlServer.MinimalTlsVersion
+        if (-not [string]::IsNullOrWhiteSpace($CurrentTls) -and ([double]$CurrentTls -ge 1.2)) {
+            Write-Output "$DisplayName already requires TLS 1.2"
+            return
+        }
+        Write-Output "Setting $DisplayName minimum TLS version to 1.2"
+        Set-AzSqlServer -ResourceGroupName $ResourceGroupName -ServerName $ServerName -MinimalTlsVersion '1.2' | Out-Null
+    }
+    catch {
+        Write-Warning "Unable to set the minimum TLS version to 1.2 on $DisplayName server '$ServerName': $($_.Exception.Message). Set it in the Azure Portal if required."
     }
 }
 
@@ -1812,6 +1882,7 @@ if ($NmeCclKeyVaultName) {
 
 # check if deny rule for sql exists
 Disable-NmeSqlPublicAccess -ServerName $NmeSqlServerName -ResourceGroupName $NmeRg -PrivateEndpointSubnetId $PrivateEndpointSubnet.id -DisplayName 'SQL'
+Set-NmeSqlBaseline -ResourceGroupName $NmeRg -ServerName $NmeSqlServerName -DisplayName 'SQL'
 
 if ($MakeSaStoragePrivate) {
     # check if deny rule for storage exists (resolved in Set-NmeVars via tag, then name pattern, then the NMW_RESOURCE fallback tag)
@@ -1823,6 +1894,7 @@ if ($MakeSaStoragePrivate) {
         Write-Output "Disabling storage public access"
         Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $StorageAccount.StorageAccountName | Out-Null
     }
+    Set-NmeStorageBaseline -ResourceGroupName $NmeRg -StorageAccountName $StorageAccount.StorageAccountName -DisplayName 'scripted actions'
 }
 
 # make ccl storage account private
@@ -1835,6 +1907,7 @@ if ($NmeCclStorageAccountName) {
         Write-Output "Disabling CCL storage public access"
         Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $NmeCclStorageAccount.StorageAccountName | Out-Null
     }
+    Set-NmeStorageBaseline -ResourceGroupName $NmeRg -StorageAccountName $NmeCclStorageAccount.StorageAccountName -DisplayName 'CCL'
 }
 
 
@@ -1848,6 +1921,7 @@ if ($NmeDpsStorageAccountName) {
         Write-Output "Disabling DPS storage public access"
         Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $NmeDpsStorageAccount.StorageAccountName | Out-Null
     }
+    Set-NmeStorageBaseline -ResourceGroupName $NmeRg -StorageAccountName $NmeDpsStorageAccount.StorageAccountName -DisplayName 'DPS'
 }
 # make real time insights resources private
 if ($NmeRtiStorageAccountName) {
@@ -1859,9 +1933,11 @@ if ($NmeRtiStorageAccountName) {
         Write-Output "Disabling RTI storage public access"
         Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $NmeRtiStorageAccount.StorageAccountName | Out-Null
     }
+    Set-NmeStorageBaseline -ResourceGroupName $NmeRg -StorageAccountName $NmeRtiStorageAccount.StorageAccountName -DisplayName 'RTI'
 }
 if ($NmeRtiSqlServerName) {
     Disable-NmeSqlPublicAccess -ServerName $NmeRtiSqlServerName -ResourceGroupName $NmeRg -PrivateEndpointSubnetId $PrivateEndpointSubnet.id -DisplayName 'RTI SQL'
+    Set-NmeSqlBaseline -ResourceGroupName $NmeRg -ServerName $NmeRtiSqlServerName -DisplayName 'RTI SQL'
 }
 if ($NmeRtiKeyVaultName) {
     $RtiKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -VaultName $NmeRtiKeyVaultName
@@ -1896,6 +1972,7 @@ if ($NmeIiKeyVaultName) {
 # make intune insights sql server private
 if ($NmeIiSqlServerName) {
     Disable-NmeSqlPublicAccess -ServerName $NmeIiSqlServerName -ResourceGroupName $NmeRg -PrivateEndpointSubnetId $PrivateEndpointSubnet.id -DisplayName 'Intune Insights SQL'
+    Set-NmeSqlBaseline -ResourceGroupName $NmeRg -ServerName $NmeIiSqlServerName -DisplayName 'Intune Insights SQL'
 }
 
 
