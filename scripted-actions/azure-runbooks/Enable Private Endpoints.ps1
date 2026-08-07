@@ -1296,7 +1296,7 @@ if ($NmeCclWebAppName) {
         } else {
             Write-Output "Configuring CCL app service DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
-            $CclAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclAppServicePrivateEndpointName" -Name $CclStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
+            $CclAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName "$CclAppServicePrivateEndpointName" -Name $CclAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping CCL App Service DNS zone group configuration (SkipDNS enabled)"
