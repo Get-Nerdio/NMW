@@ -832,8 +832,19 @@ function Set-NmeSubnetConfig {
 
 # check to see if NMW app already has vnet integration enabled
 
-# Get all existing private endpoints
-$ExistingPrivateEndpoints = Get-AzPrivateEndpoint -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+# Get all existing private endpoints. This is looked up subscription-wide rather than in $NmeRg
+# alone: every "does an endpoint already exist for this resource" check below matches on
+# PrivateLinkServiceId, which is unique per target resource, so a wider search cannot produce a
+# false match - but a narrower one misses an endpoint a customer created in another resource group
+# and this script then creates a duplicate. Endpoints this script creates still go in $NmeRg.
+# If the subscription-wide list is denied by RBAC, fall back to $NmeRg and say so.
+try {
+    $ExistingPrivateEndpoints = Get-AzPrivateEndpoint -ErrorAction Stop
+}
+catch {
+    Write-Warning "Unable to list private endpoints across the subscription ($($_.Exception.Message)). Falling back to resource group '$NmeRg' only - if a private endpoint for one of these resources exists in another resource group, this script will not see it and will create a duplicate."
+    $ExistingPrivateEndpoints = Get-AzPrivateEndpoint -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+}
 
 # Check if vnet created
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue
