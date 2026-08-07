@@ -33,13 +33,19 @@ private networking.
 
 The MakeAppServicePrivate parameter can be set to 'true' to further limit access to the app service to clients on the
 private network or peered networks. Supplying ResourceIds for one ore more existing networks will cause those networks
-to be peered to the new private network. Note that MakeAppServicePrivate governs the primary Nerdio Manager app service
-only. If the Cost Calculator (CCL) is deployed, its web app is always made private, regardless of this parameter: the
-only thing that communicates with it is the primary Nerdio Manager web app, over the private network. The Intune
-Insights and Real Time Insights web apps get private endpoints but are not made private by this script.
+to be peered to the new private network. MakeAppServicePrivate governs both the primary Nerdio Manager app service and
+the Intune Insights app service: Intune Insights is iframed into the Nerdio Manager interface, so it has to be
+reachable by exactly the same clients as the primary app service, and tying it to the same parameter keeps the two
+consistent instead of letting an admin create a broken combination. If the Cost Calculator (CCL) is deployed, its web
+app is always made private, regardless of this parameter: the only thing that communicates with it is the primary
+Nerdio Manager web app, over the private network. Real Time Insights has its own MakeRtiAppServicePrivate parameter,
+defaulting to 'false', because making it private cuts off any reporting endpoint (AVD session hosts, Windows 365 Cloud
+PCs, Intune-managed devices) that lacks line-of-sight to the private VNet, and that failure is silent - see the
+MakeRtiAppServicePrivate parameter description for details before enabling it.
 
-This script never re-enables public network access on anything. Setting MakeAppServicePrivate back to 'false' on a
-later run leaves the app service private; re-enable public access in the Azure Portal if that is what you want.
+This script never re-enables public network access on anything. Setting MakeAppServicePrivate or
+MakeRtiAppServicePrivate back to 'false' on a later run leaves the corresponding app service private; re-enable
+public access in the Azure Portal if that is what you want.
 
 If the VNet and Subnets already exist, the existing resources will be used and address ranges will not be changed. 
 If they do not exist, they will be created. Names for resources created by this script, such as private endpoint names, 
@@ -108,6 +114,11 @@ endpoint vnet.
     "IsRequired": false,
     "DefaultValue": "false"
   },
+  "MakeRtiAppServicePrivate": {
+    "Description": "WARNING: If set to true, only clients with network line-of-sight to the private VNet or a peered VNet will be able to reach the Real Time Insights app service. Every endpoint that reports to Real Time Insights - AVD session hosts, Windows 365 Cloud PCs and Intune-managed devices - must be able to reach it to post metrics, and devices that cannot will simply stop reporting with no error surfaced in Nerdio Manager; the symptom is missing history noticed weeks later. Intune-managed devices are typically internet-based and roaming with no VNet line-of-sight, and Cloud PCs on a Microsoft-hosted network have no customer VNet at all - neither can be recovered by peering. AVD session hosts in customer Azure VNets can be recovered by peering their VNet via PeerVnetIds and ensuring DNS resolves the app service FQDN to the private endpoint. Leave this false unless you have confirmed every reporting population can reach the private VNet. Note that setting this back to false does NOT re-enable public access on a later run - this script never re-enables public network access implicitly. To undo it, re-enable public network access on the app service in the Azure Portal.",
+    "IsRequired": false,
+    "DefaultValue": "false"
+  },
   "SkipDNS": {
     "Description": "Skip all DNS operations including checking for existing private DNS zones, creating new DNS zones, and linking DNS zones to VNets. Use this if you want to manage DNS separately.",
     "IsRequired": false,
@@ -159,9 +170,10 @@ function ConvertTo-NmeBoolean {
     }
 }
 
-$MakeSaStoragePrivate  = ConvertTo-NmeBoolean -Value $MakeSaStoragePrivate  -Name 'MakeSaStoragePrivate'
-$MakeAppServicePrivate = ConvertTo-NmeBoolean -Value $MakeAppServicePrivate -Name 'MakeAppServicePrivate'
-$SkipDNS               = ConvertTo-NmeBoolean -Value $SkipDNS               -Name 'SkipDNS'
+$MakeSaStoragePrivate     = ConvertTo-NmeBoolean -Value $MakeSaStoragePrivate     -Name 'MakeSaStoragePrivate'
+$MakeAppServicePrivate    = ConvertTo-NmeBoolean -Value $MakeAppServicePrivate    -Name 'MakeAppServicePrivate'
+$MakeRtiAppServicePrivate = ConvertTo-NmeBoolean -Value $MakeRtiAppServicePrivate -Name 'MakeRtiAppServicePrivate'
+$SkipDNS                  = ConvertTo-NmeBoolean -Value $SkipDNS                  -Name 'SkipDNS'
 
 # Set variables
 function Set-NmeVars {
@@ -1248,7 +1260,14 @@ if (-not $SkipDNS) {
                 $BlobStoragePrivateDnsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $StorageDnsZoneName -Name (Get-NmePeerVnetLinkName -BaseName $BlobStoragePrivateDnsZoneLinkName -VnetResourceId $vnetId) -VirtualNetworkId $vnetId
             }
         }
-        if ($MakeAppServicePrivate){
+        # The app service private DNS zone is shared by all four web apps (NME, CCL, Intune Insights and RTI) -
+        # they all resolve the same *.azurewebsites.net/.us hostname pattern through this one zone. So a peer
+        # VNet needs this link whenever ANY of those app services is made private, not only the primary one.
+        # Without this, MakeRtiAppServicePrivate = true with MakeAppServicePrivate = false would lock down RTI
+        # while leaving peered VNets (e.g. an AVD VNet) unable to resolve its FQDN - the exact silent-failure
+        # scenario the MakeRtiAppServicePrivate parameter description warns about, for the one population that
+        # was supposed to be recoverable by peering.
+        if ($MakeAppServicePrivate -or $MakeRtiAppServicePrivate){
             $AppServicePrviateDnsZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $AppServiceDnsZoneName -ErrorAction SilentlyContinue
             $AppServiceMissingLinks = $VnetIds | Where-Object { $AppServicePrviateDnsZoneLink.VirtualNetworkId -notcontains $_ }
             if ($AppServiceMissingLinks) {
@@ -2047,6 +2066,26 @@ if ($NmeRtiKeyVaultName) {
     }
 }
 
+# make real time insights app service private. Gated on its own MakeRtiAppServicePrivate parameter, not
+# MakeAppServicePrivate: unlike Intune Insights, nothing requires RTI to be reachable by the same clients as the
+# primary app service, and locking it down silently cuts off any reporting endpoint (AVD session hosts, Windows
+# 365 Cloud PCs, Intune-managed devices) without VNet line-of-sight - see the parameter description. This only
+# ever writes Disabled, never Enabled, for the same reason as the NME app service block at the end of this
+# script: setting the parameter back to false must not re-expose an app the customer locked down. Runs after RTI
+# VNet integration (in the #region app service vnet integration block above), per the lesson from the CCL web app.
+if ($NmeRtiWebAppName -and $MakeRtiAppServicePrivate) {
+    $NmeRtiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeRtiWebAppName
+    $RtiWebAppResource = Get-AzResource -Id $NmeRtiWebApp.id
+    if ($RtiWebAppResource.Properties.publicNetworkAccess -eq 'Disabled') {
+        Write-Output "RTI app service public access already disabled"
+    }
+    else {
+        Write-Output "Disabling RTI app service public access"
+        $RtiWebAppResource.Properties.publicNetworkAccess = "Disabled"
+        $RtiWebAppResource | Set-AzResource -Force | Out-Null
+    }
+}
+
 # make intune insights key vault private
 if ($NmeIiKeyVaultName) {
     $IiKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -VaultName $NmeIiKeyVaultName
@@ -2068,6 +2107,24 @@ if ($NmeIiSqlServerName) {
     Set-NmeSqlBaseline -ResourceGroupName $NmeRg -ServerName $NmeIiSqlServerName -DisplayName 'Intune Insights SQL'
 }
 
+# make intune insights app service private. Gated on MakeAppServicePrivate rather than its own parameter: the
+# Intune Insights web app is iframed into the Nerdio Manager interface, so it has to be reachable by exactly the
+# same clients as the primary NME app service. Tying it to MakeAppServicePrivate keeps the two consistent - a
+# separate switch here would let an admin lock down Intune Insights while leaving NME public (or vice versa),
+# breaking the iframe. This only ever writes Disabled, never Enabled. Runs after Intune Insights VNet integration
+# (in the #region app service vnet integration block above), per the ordering lesson from the CCL web app.
+if ($NmeIiWebAppName -and $MakeAppServicePrivate) {
+    $NmeIiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeIiWebAppName
+    $IiWebAppResource = Get-AzResource -Id $NmeIiWebApp.id
+    if ($IiWebAppResource.Properties.publicNetworkAccess -eq 'Disabled') {
+        Write-Output "Intune Insights app service public access already disabled"
+    }
+    else {
+        Write-Output "Disabling Intune Insights app service public access"
+        $IiWebAppResource.Properties.publicNetworkAccess = "Disabled"
+        $IiWebAppResource | Set-AzResource -Force | Out-Null
+    }
+}
 
 #endregion
 
