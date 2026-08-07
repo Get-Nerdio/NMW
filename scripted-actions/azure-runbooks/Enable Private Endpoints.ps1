@@ -707,6 +707,61 @@ function GetEntAppName {
     }
 }
 
+function Disable-NmeSqlPublicAccess {
+    # All three NME SQL servers (primary, Real Time Insights, Intune Insights) get the same
+    # treatment. The primary server used to call Set-AzSqlServer bare: with
+    # $ErrorActionPreference = 'Stop' that aborted the whole script if it hit the Entra-admin
+    # condition the other two already handled - and it runs after the key vault has been locked
+    # down, which is the worst point to abort.
+    param(
+        [Parameter(Mandatory=$true)][string]$ServerName,
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$PrivateEndpointSubnetId,
+        # Used in output messages, e.g. "SQL", "RTI SQL", "Intune Insights SQL".
+        [Parameter(Mandatory=$true)][string]$DisplayName
+    )
+    $SqlServer = Get-AzSqlServer -ResourceGroupName $ResourceGroupName -ServerName $ServerName
+    if ($SqlServer.PublicNetworkAccess -eq 'Disabled') {
+        Write-Output "$DisplayName public access already disabled"
+        return
+    }
+    Write-Output "Disabling $DisplayName public access"
+    $ServerRules = Get-AzSqlServerVirtualNetworkRule -ServerName $ServerName -ResourceGroupName $ResourceGroupName
+    if ($ServerRules.VirtualNetworkSubnetId -notcontains $PrivateEndpointSubnetId) {
+        New-AzSqlServerVirtualNetworkRule -VirtualNetworkRuleName 'Allow private endpoint subnet' -VirtualNetworkSubnetId $PrivateEndpointSubnetId -ServerName $ServerName -ResourceGroupName $ResourceGroupName | Out-Null
+    }
+    # An equivalent 'Allow app service subnet' rule was commented out at all three original call
+    # sites; left out here deliberately. Traffic arriving over a private endpoint is not evaluated
+    # against VNet rules at all, and once PublicNetworkAccess is Disabled these rules are inert.
+    if ($SqlServer.PublicNetworkAccess -ne 'Enabled') {
+        return
+    }
+    try {
+        Set-AzSqlServer -ServerName $ServerName -ResourceGroupName $ResourceGroupName -PublicNetworkAccess Disabled | Out-Null
+    }
+    catch {
+        try {
+            if ($SqlServer.Administrators.Sid.guid -eq $SqlServer.Administrators.login) {
+                # Workaround for an app id (rather than a named principal) being set as the Entra
+                # admin: resolve that identity's display name and set it as the admin, then retry.
+                $AppName = GetEntAppName
+                Set-AzSqlServerActiveDirectoryAdministrator -ResourceGroupName $ResourceGroupName -ServerName $ServerName -DisplayName $AppName
+                Set-AzSqlServer -ServerName $ServerName -ResourceGroupName $ResourceGroupName -PublicNetworkAccess Disabled | Out-Null
+            }
+            else {
+                Write-Output "Disabling $DisplayName public network access failed. Disable in Azure Portal"
+                Write-Output $_
+                Write-Warning "Disabling $DisplayName public network access failed. Disable in Azure Portal"
+            }
+        }
+        catch {
+            Write-Output "Disabling $DisplayName public network access failed. Disable in Azure Portal"
+            Write-Output $_
+            Write-Warning "Disabling $DisplayName public network access failed. Disable in Azure Portal"
+        }
+    }
+}
+
 function Set-NmeSubnetConfig {
     # Set-AzVirtualNetworkSubnetConfig replaces the whole subnet definition with only the parameters
     # supplied, so any NSG, route table or delegation on the subnet has to be passed back in or it is
@@ -1683,21 +1738,7 @@ if ($NmeCclKeyVaultName) {
 }
 
 # check if deny rule for sql exists
-$SqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeSqlServerName
-$ServerRules = Get-AzSqlServerVirtualNetworkRule -ServerName $NmeSqlServerName -ResourceGroupName $NmeRg 
-if ($SqlServer.PublicNetworkAccess -eq 'Disabled') {
-    Write-Output "SQL public access already disabled"
-}
-else {
-    Write-Output "Disabling SQL public access"
-    if ($ServerRules.VirtualNetworkSubnetId -notcontains $PrivateEndpointSubnet.id){
-        $PrivateEndpointRule = New-AzSqlServerVirtualNetworkRule -VirtualNetworkRuleName 'Allow private endpoint subnet' -VirtualNetworkSubnetId $PrivateEndpointSubnet.id -ServerName $NmeSqlServerName -ResourceGroupName $NmeRg
-    }
-    # New-AzSqlServerVirtualNetworkRule -VirtualNetworkRuleName 'Allow app service subnet' -VirtualNetworkSubnetId $AppServiceSubnet.id -ServerName $NmeSqlServerName -ResourceGroupName $NmeRg
-    if ($SqlServer.PublicNetworkAccess -eq 'Enabled'){
-        $DenyPublicSql = Set-AzSqlServer -ServerName $NmeSqlServerName -ResourceGroupName $NmeRg -PublicNetworkAccess "Disabled"
-    }
-}
+Disable-NmeSqlPublicAccess -ServerName $NmeSqlServerName -ResourceGroupName $NmeRg -PrivateEndpointSubnetId $PrivateEndpointSubnet.id -DisplayName 'SQL'
 
 if ($MakeSaStoragePrivate -eq 'True') {
     # check if deny rule for storage exists (resolved in Set-NmeVars via tag, then name pattern, then the NMW_RESOURCE fallback tag)
@@ -1747,44 +1788,7 @@ if ($NmeRtiStorageAccountName) {
     }
 }
 if ($NmeRtiSqlServerName) {
-    $RtiSqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeRtiSqlServerName
-    $RtiServerRules = Get-AzSqlServerVirtualNetworkRule -ServerName $NmeRtiSqlServerName -ResourceGroupName $NmeRg 
-    if ($RtiSqlServer.PublicNetworkAccess -eq 'Disabled') {
-        Write-Output "RTI SQL public access already disabled"
-    }
-    else {
-        Write-Output "Disabling RTI SQL public access"
-        if ($RtiServerRules.VirtualNetworkSubnetId -notcontains $PrivateEndpointSubnet.id){
-            $PrivateEndpointRule = New-AzSqlServerVirtualNetworkRule -VirtualNetworkRuleName 'Allow private endpoint subnet' -VirtualNetworkSubnetId $PrivateEndpointSubnet.id -ServerName $NmeRtiSqlServerName -ResourceGroupName $NmeRg
-        }
-        # New-AzSqlServerVirtualNetworkRule -VirtualNetworkRuleName 'Allow app service subnet' -VirtualNetworkSubnetId $AppServiceSubnet.id -ServerName $NmeRtiSqlServerName -ResourceGroupName $NmeRg
-        if ($RtiSqlServer.PublicNetworkAccess -eq 'Enabled'){
-
-            try {
-                $DenyPublicSql = Set-AzSqlServer -ServerName $NmeRtiSqlServerName -ResourceGroupName $NmeRg -PublicNetworkAccess Disabled
-            }
-            catch {
-                try {
-                    if ($RtiSqlServer.Administrators.Sid.guid -eq $RtiSqlServer.Administrators.login) {
-                        # workaround for app id set as admin
-                        $AppName = GetEntAppName
-                        Set-AzSqlServerActiveDirectoryAdministrator -ResourceGroupName $NmeRg -ServerName $NmeRtiSqlServerName -DisplayName $AppName
-                        $DenyPublicSql = Set-AzSqlServer -ServerName $NmeRtiSqlServerName -ResourceGroupName $NmeRg -PublicNetworkAccess Disabled
-                    }
-                    else {
-                        Write-Output "Disabling RTI SQL public network access failed. Disable in Azure Portal"
-                        write-output $_
-                        Write-Warning "Disabling RTI SQL public network access failed. Disable in Azure Portal"
-                    }
-                }
-                catch {   
-                    Write-Output "Disabling RTI SQL public network access failed. Disable in Azure Portal"
-                    write-output $_
-                    Write-Warning "Disabling RTI SQL public network access failed. Disable in Azure Portal"
-                }
-            }
-        }
-    }
+    Disable-NmeSqlPublicAccess -ServerName $NmeRtiSqlServerName -ResourceGroupName $NmeRg -PrivateEndpointSubnetId $PrivateEndpointSubnet.id -DisplayName 'RTI SQL'
 }
 if ($NmeRtiKeyVaultName) {
     $RtiKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -VaultName $NmeRtiKeyVaultName
@@ -1818,43 +1822,7 @@ if ($NmeIiKeyVaultName) {
 }
 # make intune insights sql server private
 if ($NmeIiSqlServerName) {
-    $IiSqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeIiSqlServerName
-    $IiServerRules = Get-AzSqlServerVirtualNetworkRule -ServerName $NmeIiSqlServerName -ResourceGroupName $NmeRg 
-    if ($IiSqlServer.PublicNetworkAccess -eq 'Disabled') {
-        Write-Output "Intune Insights SQL public access already disabled"
-    }
-    else {
-        Write-Output "Disabling Intune Insights SQL public access"
-        if ($IiServerRules.VirtualNetworkSubnetId -notcontains $PrivateEndpointSubnet.id){
-            $PrivateEndpointRule = New-AzSqlServerVirtualNetworkRule -VirtualNetworkRuleName 'Allow private endpoint subnet' -VirtualNetworkSubnetId $PrivateEndpointSubnet.id -ServerName $NmeIiSqlServerName -ResourceGroupName $NmeRg
-        }
-        # New-AzSqlServerVirtualNetworkRule -VirtualNetworkRuleName 'Allow app service subnet' -VirtualNetworkSubnetId $AppServiceSubnet.id -ServerName $NmeIiSqlServerName -ResourceGroupName $NmeRg
-        if ($IiSqlServer.PublicNetworkAccess -eq 'Enabled'){
-            try {
-                $DenyPublicSql = Set-AzSqlServer -ServerName $NmeIiSqlServerName -ResourceGroupName $NmeRg -PublicNetworkAccess "Disabled"
-            }
-            catch {
-                try {
-                    if ($IiSqlServer.Administrators.Sid.guid -eq $IiSqlServer.Administrators.login) {
-                        # workaround for app id set as admin
-                        $AppName = GetEntAppName
-                        Set-AzSqlServerActiveDirectoryAdministrator -ResourceGroupName $NmeRg -ServerName $NmeIiSqlServerName -DisplayName $AppName
-                        $DenyPublicSql = Set-AzSqlServer -ServerName $NmeIiSqlServerName -ResourceGroupName $NmeRg -PublicNetworkAccess Disabled
-                    }
-                    else {
-                        Write-Output "Disabling Intune Insights SQL public network access failed. Disable in Azure Portal"
-                        write-output $_
-                        Write-Warning "Disabling Intune Insights SQL public network access failed. Disable in Azure Portal"
-                    }
-                }
-                catch {   
-                    Write-Output "Disabling Intune Insights SQL public network access failed. Disable in Azure Portal"
-                    write-output $_
-                    Write-Warning "Disabling Intune Insights SQL public network access failed. Disable in Azure Portal"
-                }
-            }
-        }
-    }
+    Disable-NmeSqlPublicAccess -ServerName $NmeIiSqlServerName -ResourceGroupName $NmeRg -PrivateEndpointSubnetId $PrivateEndpointSubnet.id -DisplayName 'Intune Insights SQL'
 }
 
 
