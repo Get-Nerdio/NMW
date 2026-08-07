@@ -561,12 +561,6 @@ if ($NmeWebApp.virtualNetworkSubnetId){
 }
 
 
-if ($PeerVnetIds -eq 'All') {
-    $VnetIds = Get-AzVirtualNetwork | ? {if ($_.tag){$True}}| Where-Object {$_.tag["$Prefix`_OBJECT_TYPE"] -eq 'LINKED_NETWORK'} -ErrorAction SilentlyContinue | Where-Object id -ne $vnet.id | Select-Object -ExpandProperty Id
-}
-else {
-    $VnetIds = if ($PeerVnetIds) { $PeerVnetIds -split ',' } else { @() }
-}
 # set resource group for dns zones
 if ($SkipDNS -eq 'True') {
     Write-Output "SkipDNS is enabled - skipping all DNS zone operations"
@@ -794,6 +788,21 @@ if ($VnetLocation -ne $NmeRegion) {
 # Capture the VNet's resource group so later lookups are unambiguous - an existing VNet may live in
 # a different resource group than NME, and fetching by name alone can match VNets in other groups.
 $VnetRg = $VNet.ResourceGroupName
+
+# Resolved once here, after $VNet exists: the "exclude the private endpoint VNet itself" filter
+# below needs $vnet.id, and this used to run before $VNet was assigned, so the filter silently
+# excluded nothing. If this VNet is also linked in NME it would then land in the peer list and
+# the DNS zone link loops would try to link it to a zone it was already linked to.
+if ($PeerVnetIds -eq 'All') {
+    $VnetIds = Get-AzVirtualNetwork |
+        Where-Object { $null -ne $_.Tag } |
+        Where-Object { $_.Tag["$Prefix`_OBJECT_TYPE"] -eq 'LINKED_NETWORK' } |
+        Where-Object { $_.Id -ne $VNet.Id } |
+        Select-Object -ExpandProperty Id
+}
+else {
+    $VnetIds = if ($PeerVnetIds) { $PeerVnetIds -split ',' } else { @() }
+}
 
 #region create DNS zones and links
 if ($SkipDNS -ne 'True') {
@@ -1467,14 +1476,8 @@ if ($NmeRtiKeyVaultName) {
 
 # region create private link peering
 if ($PeerVnetIds) {
-    Write-Output "Peering vnets" 
-    $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $VnetRg 
-    if ($PeerVnetIds -eq 'All') {
-        $VnetIds = Get-AzVirtualNetwork | ? {if ($_.tag){$True}}| Where-Object {$_.tag["$Prefix`_OBJECT_TYPE"] -eq 'LINKED_NETWORK'} -ErrorAction SilentlyContinue | Where-Object id -ne $vnet.id | Select-Object -ExpandProperty Id
-    }
-    else {
-        $VnetIds = $PeerVnetIds -split ','
-    }
+    Write-Output "Peering vnets"
+    $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $VnetRg
     foreach ($id in $VnetIds) {
         Write-Output "Peering with vnet $id"
         $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $VnetRg -ErrorAction SilentlyContinue 
