@@ -952,6 +952,36 @@ function New-NmeStoragePrivateEndpoint {
     return $Endpoint
 }
 
+function Test-NmePrivateDnsResolution {
+    # Diagnostic only - never blocks. Runs before the make-private region so a missing private DNS
+    # record is reported *before* public access is disabled, which is the point at which it stops
+    # being recoverable from inside Nerdio Manager.
+    #
+    # Deliberately does NOT use Resolve-DnsName. This script executes in the Azure Automation
+    # sandbox, which sits outside the VNet and therefore does not use the private DNS zones linked
+    # to it - a lookup from here would fail even on a correctly configured deployment. Instead it
+    # asks Azure whether the private DNS zone actually contains an A record for the resource, which
+    # is what the private endpoint's DNS zone group is responsible for creating.
+    param(
+        [Parameter(Mandatory=$true)][string]$ZoneName,
+        [Parameter(Mandatory=$true)][string]$ZoneResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$RecordName,   # the resource's short name, e.g. the vault name
+        [Parameter(Mandatory=$true)][string]$DisplayName   # e.g. "Nerdio Manager key vault"
+    )
+    try {
+        $RecordSet = Get-AzPrivateDnsRecordSet -ResourceGroupName $ZoneResourceGroupName -ZoneName $ZoneName -Name $RecordName -RecordType A -ErrorAction SilentlyContinue
+        if ($RecordSet -and @($RecordSet.Records).Count -gt 0) {
+            return $true
+        }
+        Write-Warning "No A record for '$RecordName' was found in private DNS zone '$ZoneName' (resource group '$ZoneResourceGroupName') for the $DisplayName. This record is normally created within a minute or two of the private endpoint being provisioned. This script is about to disable public network access on the $DisplayName; if the record has not propagated yet, the next scripted action run may not be able to reach it. The recovery path is to re-enable public network access on the $DisplayName in the Azure Portal."
+        return $false
+    }
+    catch {
+        Write-Verbose "Test-NmePrivateDnsResolution: unable to check private DNS zone '$ZoneName' for record '$RecordName' ($($_.Exception.Message)). Treating this check as passed since it is diagnostic only."
+        return $true
+    }
+}
+
 function Set-NmeSubnetConfig {
     # Set-AzVirtualNetworkSubnetConfig replaces the whole subnet definition with only the parameters
     # supplied, so any NSG, route table or delegation on the subnet has to be passed back in or it is
@@ -1723,6 +1753,9 @@ if ($PrivateEndpointSubnet.PrivateEndpointNetworkPolicies -eq 'Enabled') {
     Write-Output "Network policies already enabled"
 } else {
     Write-Output "Enabling network policies"
+    if ($PrivateEndpointSubnet.NetworkSecurityGroup.Id) {
+        Write-Warning "Enabling privateEndpointNetworkPolicies on subnet '$($PrivateEndpointSubnet.Name)' starts enforcing network security group '$($PrivateEndpointSubnet.NetworkSecurityGroup.Id.Split('/')[-1])' rules against the private endpoints in this subnet."
+    }
     try {
         $VNet = Set-NmeSubnetConfig -VirtualNetwork $VNet -SubnetName $PrivateEndpointSubnetName -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Enabled
     }
@@ -1831,6 +1864,83 @@ if ($NmeRtiWebAppName) {
 # no effect here. NSG and UDR support on a VNet integration subnet does not depend on it. This
 # previously printed "Enabling network policies" and then did nothing, because the only statement in
 # the branch was commented out.
+#endregion
+
+#region private DNS and network preflight checks
+# This region only reports - it never blocks, throws or alters control flow. It runs after private
+# endpoints and DNS zone groups have been created but before the make-private region below disables
+# public access on the key vault(s) and sql server(s), which is the point after which recovery
+# requires the Azure Portal rather than another run of this script.
+
+if (-not $SkipDNS) {
+    Write-Output "Checking private DNS records before disabling public access"
+    $DnsCheckFailures = 0
+    if ($existingDNSZonesSubId) {
+        Write-Output "Setting context to subscription $existingDNSZonesSubId to check private DNS records"
+        $context = Set-AzContext -Subscription $existingDNSZonesSubId
+    }
+    if (-not (Test-NmePrivateDnsResolution -ZoneName $KeyVaultDnsZoneName -ZoneResourceGroupName $DnsRg -RecordName $KeyVaultName -DisplayName 'Nerdio Manager key vault')) { $DnsCheckFailures++ }
+    if ($NmeCclKeyVaultName) {
+        if (-not (Test-NmePrivateDnsResolution -ZoneName $KeyVaultDnsZoneName -ZoneResourceGroupName $DnsRg -RecordName $NmeCclKeyVaultName -DisplayName 'CCL key vault')) { $DnsCheckFailures++ }
+    }
+    if ($NmeIiKeyVaultName) {
+        if (-not (Test-NmePrivateDnsResolution -ZoneName $KeyVaultDnsZoneName -ZoneResourceGroupName $DnsRg -RecordName $NmeIiKeyVaultName -DisplayName 'Intune Insights key vault')) { $DnsCheckFailures++ }
+    }
+    if ($NmeRtiKeyVaultName) {
+        if (-not (Test-NmePrivateDnsResolution -ZoneName $KeyVaultDnsZoneName -ZoneResourceGroupName $DnsRg -RecordName $NmeRtiKeyVaultName -DisplayName 'RTI key vault')) { $DnsCheckFailures++ }
+    }
+    if (-not (Test-NmePrivateDnsResolution -ZoneName $SqlDnsZoneName -ZoneResourceGroupName $DnsRg -RecordName $NmeSqlServerName -DisplayName 'primary SQL server')) { $DnsCheckFailures++ }
+    if ($NmeIiSqlServerName) {
+        if (-not (Test-NmePrivateDnsResolution -ZoneName $SqlDnsZoneName -ZoneResourceGroupName $DnsRg -RecordName $NmeIiSqlServerName -DisplayName 'Intune Insights SQL server')) { $DnsCheckFailures++ }
+    }
+    if ($NmeRtiSqlServerName) {
+        if (-not (Test-NmePrivateDnsResolution -ZoneName $SqlDnsZoneName -ZoneResourceGroupName $DnsRg -RecordName $NmeRtiSqlServerName -DisplayName 'RTI SQL server')) { $DnsCheckFailures++ }
+    }
+    if ($existingDNSZonesSubId) {
+        Write-Output "Setting context to subscription $NmeSubscriptionId"
+        $context = Set-AzContext -Subscription $NmeSubscriptionId
+    }
+    if ($DnsCheckFailures -gt 0) {
+        Write-Warning "$DnsCheckFailures private DNS record check(s) above did not find the expected record before this script disables public access on the key vault(s) and/or SQL server(s). You may want to abort this run (cancel the job) and re-run once the records exist, rather than let it proceed to disabling public access."
+    }
+}
+
+# NSG and route table checks run regardless of SkipDNS - they concern the private endpoint and app
+# service subnets, not DNS. This script does not create, modify, or inspect the rules of any NSG or
+# route table; it only reports what is attached so the customer can review it themselves.
+Write-Output "Checking NSGs and route tables on the private endpoint and app service subnets"
+$VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $VnetRg
+$PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
+$AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet
+$NetworkChecksClean = $true
+
+if ($PrivateEndpointSubnet.NetworkSecurityGroup.Id) {
+    $NetworkChecksClean = $false
+    $PeNsgName = $PrivateEndpointSubnet.NetworkSecurityGroup.Id.Split('/')[-1]
+    Write-Warning "The private endpoint subnet '$($PrivateEndpointSubnet.Name)' ($($PrivateEndpointSubnet.AddressPrefix)) has network security group '$PeNsgName' attached. This script did not create this NSG and has not inspected its rules. This script has set privateEndpointNetworkPolicies to Enabled on this subnet, which is the flag that decides whether NSG rules are applied to private endpoints in it - rules that were previously inert on this subnet are now enforced. Before public access is disabled, verify that '$PeNsgName' permits traffic from the app service subnet range ($($AppServiceSubnet.AddressPrefix)) to the private endpoint subnet range ($($PrivateEndpointSubnet.AddressPrefix)) on TCP 443."
+}
+
+if ($AppServiceSubnet.NetworkSecurityGroup.Id) {
+    $NetworkChecksClean = $false
+    $AppNsgName = $AppServiceSubnet.NetworkSecurityGroup.Id.Split('/')[-1]
+    Write-Warning "The app service subnet '$($AppServiceSubnet.Name)' has network security group '$AppNsgName' attached. An NSG on the VNet integration subnet applies to outbound traffic unconditionally - no policy flag gates it - so a deny rule in '$AppNsgName' covering the private endpoint subnet range ($($PrivateEndpointSubnet.AddressPrefix)) breaks the same path from the app service to the private endpoints."
+}
+
+if ($PrivateEndpointSubnet.RouteTable.Id) {
+    $NetworkChecksClean = $false
+    $PeRouteTableName = $PrivateEndpointSubnet.RouteTable.Id.Split('/')[-1]
+    Write-Warning "The private endpoint subnet '$($PrivateEndpointSubnet.Name)' has route table '$PeRouteTableName' attached. A user-defined route more specific than 0.0.0.0/0 that covers the private endpoint subnet range ($($PrivateEndpointSubnet.AddressPrefix)) will divert private endpoint traffic to whatever next hop it specifies (for example an NVA). A plain 0.0.0.0/0 route is overridden by the more specific system route for a private endpoint and is not the concern."
+}
+
+if ($AppServiceSubnet.RouteTable.Id) {
+    $NetworkChecksClean = $false
+    $AppRouteTableName = $AppServiceSubnet.RouteTable.Id.Split('/')[-1]
+    Write-Warning "The app service subnet '$($AppServiceSubnet.Name)' has route table '$AppRouteTableName' attached. A user-defined route more specific than 0.0.0.0/0 that covers the private endpoint subnet range ($($PrivateEndpointSubnet.AddressPrefix)) will divert traffic from the app service to the private endpoints to whatever next hop it specifies (for example an NVA). A plain 0.0.0.0/0 route is overridden by the more specific system route for a private endpoint and is not the concern."
+}
+
+if ($NetworkChecksClean) {
+    Write-Output "No NSGs or route tables found on the private endpoint or app service subnets."
+}
 #endregion
 
 #region make resources private
