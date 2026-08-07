@@ -804,6 +804,32 @@ else {
     $VnetIds = if ($PeerVnetIds) { $PeerVnetIds -split ',' } else { @() }
 }
 
+function Get-NmePeerVnetLinkName {
+    # Private DNS zone link names must be stable across runs: naming them by an index that restarts
+    # at 0 each run meant a peer VNet added later reused an existing name that pointed at a different
+    # VNet, and Azure rejected it. Deriving the name from the peer VNet makes it idempotent.
+    param(
+        [Parameter(Mandatory=$true)][string]$BaseName,
+        [Parameter(Mandatory=$true)][string]$VnetResourceId
+    )
+    $PeerVnetName = $VnetResourceId.Split('/')[-1]
+    $LinkName = "$BaseName-$PeerVnetName"
+    # Azure caps private DNS zone virtual network link names at 80 characters. If the composed name
+    # is too long, truncate and append a short hash of the full resource id so two long VNet names
+    # that share a prefix still produce distinct names.
+    if ($LinkName.Length -gt 80) {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $Suffix = ([System.BitConverter]::ToString(
+                $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($VnetResourceId))
+            ).Replace('-', '')).Substring(0, 8)
+        }
+        finally { $sha256.Dispose() }
+        $LinkName = $LinkName.Substring(0, 80 - ($Suffix.Length + 1)) + "-$Suffix"
+    }
+    return $LinkName
+}
+
 #region create DNS zones and links
 if ($SkipDNS -ne 'True') {
     # Create and link private dns zone for key vault
@@ -930,10 +956,8 @@ if ($SkipDNS -ne 'True') {
         $MissingLinks = $VnetIds | Where-Object { $BlobStoragePrivateDnsZoneLink.VirtualNetworkId -notcontains $_ }
         if ($MissingLinks) {
             Write-Output "Linking Private DNS Zone for Blob Storage to peer vnets"
-            $i = 0
             foreach ($vnetId in $MissingLinks) {
-                $BlobStoragePrivateDnsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $StorageDnsZoneName -Name ($BlobStoragePrivateDnsZoneLinkName + $i) -VirtualNetworkId $vnetId
-                $i ++   
+                $BlobStoragePrivateDnsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $StorageDnsZoneName -Name (Get-NmePeerVnetLinkName -BaseName $BlobStoragePrivateDnsZoneLinkName -VnetResourceId $vnetId) -VirtualNetworkId $vnetId
             }
         }
         if ($MakeAppServicePrivate -eq 'true'){
@@ -941,10 +965,8 @@ if ($SkipDNS -ne 'True') {
             $AppServiceMissingLinks = $VnetIds | Where-Object { $AppServicePrviateDnsZoneLink.VirtualNetworkId -notcontains $_ }
             if ($AppServiceMissingLinks) {
                 Write-Output "Linking Private DNS Zone for App Service to peer vnets"
-                $i = 0
                 foreach ($vnetId in $AppServiceMissingLinks) {
-                    $AppServicePrviateDnsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $AppServiceDnsZoneName -Name ($AppServiceZoneLinkName + $i) -VirtualNetworkId $vnetId
-                    $i ++   
+                    $AppServicePrviateDnsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $AppServiceDnsZoneName -Name (Get-NmePeerVnetLinkName -BaseName $AppServiceZoneLinkName -VnetResourceId $vnetId) -VirtualNetworkId $vnetId
                 }
             }
         }
