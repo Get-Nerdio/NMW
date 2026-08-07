@@ -867,7 +867,9 @@ if ($VNet) {
     }
  
     If ($vnetUpdated){
-        $VNet | Set-AzVirtualNetwork
+        # Capture the result rather than discarding it: Set-AzVirtualNetwork returns the updated VNet,
+        # and keeping it means the rest of the script can work from one object instead of re-fetching.
+        $VNet = $VNet | Set-AzVirtualNetwork
     }
  
 } else {
@@ -1080,9 +1082,11 @@ if (-not $SkipDNS) {
 
 
 #region create private endpoints
-$VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $VnetRg -ErrorAction SilentlyContinue
+# $VNet is already current here - nothing between its creation/resolution above and this point
+# modifies it - so it is not re-fetched. Get-AzVirtualNetworkSubnetConfig reads the in-memory object
+# and costs no API call.
 $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
-$AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
+$AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet
  
 # check if keyvault private endpoint created
 $KeyVault = Get-AzKeyVault -VaultName $KeyVaultName -ErrorAction SilentlyContinue
@@ -1387,7 +1391,6 @@ if ($AppServicePrivateEndpoint) {
 else {
     Write-Output "Configuring app service service connection and private endpoint"
     $AppServiceResourceId = $AppService.id
-    $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
     $AppServiceServiceConnection = New-AzPrivateLinkServiceConnection -Name $AppServiceServiceConnectionName -PrivateLinkServiceId $AppServiceResourceId -GroupId sites 
     $AppServicePrivateEndpoint = New-AzPrivateEndpoint -Name "$AppServicePrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $AppServiceServiceConnection 
 }
@@ -1416,7 +1419,6 @@ if ($NmeCclWebAppName) {
     else {
         Write-Output "Configuring CCL app service service connection and private endpoint"
         $CclAppServiceResourceId = $CclAppService.id
-        $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
         $CclAppServiceServiceConnection = New-AzPrivateLinkServiceConnection -Name $CclAppServiceServiceConnectionName -PrivateLinkServiceId $CclAppServiceResourceId -GroupId sites 
         $CclAppServicePrivateEndpoint = New-AzPrivateEndpoint -Name "$CclAppServicePrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $CclAppServiceServiceConnection 
     }
@@ -1593,10 +1595,11 @@ if ($NmeRtiKeyVaultName) {
 # region create private link peering
 if ($PeerVnetIds) {
     Write-Output "Peering vnets"
-    $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $VnetRg
     foreach ($id in $VnetIds) {
         Write-Output "Peering with vnet $id"
-        $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $VnetRg -ErrorAction SilentlyContinue 
+        # Deliberate refresh on every iteration: Add-AzVirtualNetworkPeering below mutates the VNet,
+        # so the copy from the previous iteration is stale and its etag would be rejected.
+        $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $VnetRg -ErrorAction SilentlyContinue
         $Resource = Get-AzResource -ResourceId $id
         $PeerVnet = Get-AzVirtualNetwork -Name $Resource.Name -ResourceGroupName $Resource.ResourceGroupName
         # check if inbound peering exists
@@ -1625,7 +1628,8 @@ if ($PeerVnetIds) {
 #region app service vnet integration
 
 Write-Output "Add VNet service endpoints"
-$VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $VnetRg 
+# Deliberate refresh: the peering region above mutates the VNet when PeerVnetIds is supplied.
+$VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $VnetRg
 $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
 $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
 
@@ -1666,7 +1670,7 @@ if ($PrivateEndpointSubnet.PrivateEndpointNetworkPolicies -eq 'Enabled') {
 }
 
 
-$VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $VnetRg 
+# Set-NmeSubnetConfig returns the updated VNet, so $VNet is current here without a re-fetch.
 $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet
 
 # Check if subnet delegation created
