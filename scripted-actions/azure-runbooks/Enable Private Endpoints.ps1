@@ -112,6 +112,26 @@ endpoint vnet.
  
 $ErrorActionPreference = 'Stop'
 
+# Explicit module check rather than #Requires -Modules. A #Requires failure inside the Azure
+# Automation sandbox surfaces as an opaque error that does not name the missing module, and pinning
+# minimum versions is risky across commercial and US Gov, where available module versions differ.
+# Microsoft.Graph.Applications is deliberately not in this list: it is only needed by the
+# GetEntAppName recovery path, which installs it on demand.
+$RequiredModules = @(
+    'Az.Accounts'
+    'Az.Resources'
+    'Az.KeyVault'
+    'Az.Sql'
+    'Az.Storage'
+    'Az.Websites'
+    'Az.Network'
+    'Az.Automation'
+)
+$MissingModules = @($RequiredModules | Where-Object { -not (Get-Module -ListAvailable -Name $_) })
+if ($MissingModules.Count) {
+    Throw "This script requires the following PowerShell modules, which are not available in this Automation account: $($MissingModules -join ', '). Add them to the Nerdio Manager scripted actions automation account (Modules -> Browse gallery) and re-run this script."
+}
+
 # Set variables
 function Set-NmeVars {
     param(
@@ -160,7 +180,7 @@ function Set-NmeVars {
         # three of them ran an unfiltered Get over the whole resource group and bound an arbitrary
         # resource as "the RTI resource" - do not re-add them.
         if ($key){
-            $SqlServer = Get-AzSqlServer -ResourceGroupName $nmerg | ? ServerName -NotMatch '-secondary' | Where-Object {$_.tags[$key] -ne 'INTUNE_INSIGHTS_DEPLOYMENT_RESOURCE' -and $_.tags[$key] -ne 'EIDO_DEPLOYMENT_RESOURCE' -and $_.tags[$key] -ne 'REAL_TIME_INSIGHTS_DEPLOYMENT_RESOURCE' -and $_.tags[$key] -ne'NERDIO_COPILOT_DEPLOYMENT_RESOURCE'}
+            $SqlServer = Get-AzSqlServer -ResourceGroupName $nmerg | Where-Object ServerName -NotMatch '-secondary' | Where-Object {$_.tags[$key] -ne 'INTUNE_INSIGHTS_DEPLOYMENT_RESOURCE' -and $_.tags[$key] -ne 'EIDO_DEPLOYMENT_RESOURCE' -and $_.tags[$key] -ne 'REAL_TIME_INSIGHTS_DEPLOYMENT_RESOURCE' -and $_.tags[$key] -ne'NERDIO_COPILOT_DEPLOYMENT_RESOURCE'}
         }
     }
     # Validate and assign for both the tag-based and fallback lookups. This assignment used to live
@@ -172,7 +192,7 @@ function Set-NmeVars {
     $script:NmeSqlServerName = @($SqlServer)[0].ServerName
     # look for secondary sql server with tag "$NmeResourceTagName" and value "SECONDARY_SQL_SERVER"
     $SqlSecondary = Get-AzSqlServer -ResourceGroupName $nmerg | Where-Object {$_.tags[$NmeResourceTagName] -eq 'SECONDARY_SQL_SERVER'}
-    if (!($SqlSecondary)){ $SqlSecondary = Get-AzSqlServer -ResourceGroupName $nmerg | ? ServerName -Match '-secondary' }
+    if (!($SqlSecondary)){ $SqlSecondary = Get-AzSqlServer -ResourceGroupName $nmerg | Where-Object ServerName -Match '-secondary' }
     if ($SqlSecondary) {
         $script:NmeSqlSecondaryServerName = $SqlSecondary.ServerName
     }
@@ -529,7 +549,7 @@ Function Check-LastRunResults {
             if ($JobHash -eq $ThisScriptHash){
                 Write-Output "Output of previous script run:"
                 $JobOutput = Get-AzAutomationJobOutput -Id $details.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
-                $JobOutput | select summary -ExpandProperty summary
+                $JobOutput | Select-Object summary -ExpandProperty summary
 
                 Write-Output "App Service restarted after running this script."
                 # How much of the cooldown window is left, based on how long ago the app was actually modified.
@@ -537,7 +557,7 @@ Function Check-LastRunResults {
                 if ($WaitMinutes -gt 0) {
                     Write-Output "If you need to re-run the script, please wait $WaitMinutes minutes and try again."
                 }
-                $joboutput| Where-Object type -eq warning | select summary -ExpandProperty summary | write-warning
+                $joboutput| Where-Object type -eq warning | Select-Object summary -ExpandProperty summary | write-warning
                 Exit
             }
         }
@@ -796,7 +816,7 @@ if ($VNet) {
     if ($VNet.Count -gt 1) {
         Throw "Found more than one VNet with name $PrivateLinkVnetName. Please remove any VNets no longer in use or use a unique name."
     }
-    Write-Output ("VNet {0} found in resource group {1}." -f $vnet.Name, $vnet.ResourceGroupName)
+    Write-Output ("VNet {0} found in resource group {1}." -f $VNet.Name, $VNet.ResourceGroupName)
  
     $vnetUpdated = $false
     # Check if subnet created
@@ -843,7 +863,7 @@ if ($VnetLocation -ne $NmeRegion) {
 $VnetRg = $VNet.ResourceGroupName
 
 # Resolved once here, after $VNet exists: the "exclude the private endpoint VNet itself" filter
-# below needs $vnet.id, and this used to run before $VNet was assigned, so the filter silently
+# below needs $VNet.id, and this used to run before $VNet was assigned, so the filter silently
 # excluded nothing. If this VNet is also linked in NME it would then land in the peer list and
 # the DNS zone link loops would try to link it to a zone it was already linked to.
 if ($PeerVnetIds -eq 'All') {
@@ -894,18 +914,18 @@ if ($SkipDNS -ne 'True') {
         Write-Output "Found Private DNS Zone for Key Vault"
         #check for linked zone
         $KeyVaultZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $KeyVaultDnsZoneName -ErrorAction SilentlyContinue
-        if ($KeyVaultZoneLink.VirtualNetworkId -contains $vnet.id) {
+        if ($KeyVaultZoneLink.VirtualNetworkId -contains $VNet.id) {
             Write-Output "Private DNS Zone for Key Vault already linked to vnet"
         }
         else {
             Write-Output "Linking Private DNS Zone for Key Vault to vnet"
-            $KeyVaultZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $KeyVaultDnsZoneName -Name $KeyVaultZoneLinkName -VirtualNetworkId $vnet.Id
+            $KeyVaultZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $KeyVaultDnsZoneName -Name $KeyVaultZoneLinkName -VirtualNetworkId $VNet.Id
         }
     }
     else {
         Write-Output "Creating Private DNS Zones and VNet link for Key Vault"
         $KeyVaultDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name $KeyVaultDnsZoneName
-        $KeyVaultZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $KeyVaultDnsZoneName -Name $KeyVaultZoneLinkName -VirtualNetworkId $vnet.Id
+        $KeyVaultZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $KeyVaultDnsZoneName -Name $KeyVaultZoneLinkName -VirtualNetworkId $VNet.Id
     }
 
     # Create and link private dns zone for sql 
@@ -913,36 +933,36 @@ if ($SkipDNS -ne 'True') {
         Write-Output "Found Private DNS Zone for SQL"
         # check for linked zone
         $SqlZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $SqlDnsZoneName -ErrorAction SilentlyContinue
-        if ($SqlZoneLink.VirtualNetworkId -contains $vnet.id) {
+        if ($SqlZoneLink.VirtualNetworkId -contains $VNet.id) {
             Write-Output "Private DNS Zone for SQL already linked to vnet"
         }
         else {
             Write-Output "Linking Private DNS Zone for SQL to vnet"
-            $SqlZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $SqlDnsZoneName -Name $SqlZoneLinkName -VirtualNetworkId $vnet.Id
+            $SqlZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $SqlDnsZoneName -Name $SqlZoneLinkName -VirtualNetworkId $VNet.Id
         }
     }
     else {
         Write-Output "Creating Private DNS Zones and VNet link for SQL"
         $SqlDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name $SqlDnsZoneName
-        $SqlZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $SqlDnsZoneName -Name $SqlZoneLinkName -VirtualNetworkId $vnet.Id
+        $SqlZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $SqlDnsZoneName -Name $SqlZoneLinkName -VirtualNetworkId $VNet.Id
     }
 
     if ($StorageDnsZone) {
         Write-Output "Found Private DNS Zone for Storage"
         # check for linked zone
         $StorageZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $StorageDnsZoneName -ErrorAction SilentlyContinue
-        if ($StorageZoneLink.VirtualNetworkId -contains $vnet.id) {
+        if ($StorageZoneLink.VirtualNetworkId -contains $VNet.id) {
             Write-Output "Private DNS Zone for Storage already linked to vnet"
         }
         else {
             Write-Output "Linking Private DNS Zone for Storage to vnet"
-            $StorageZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $StorageDnsZoneName -Name $BlobZoneLinkName -VirtualNetworkId $vnet.Id
+            $StorageZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $StorageDnsZoneName -Name $BlobZoneLinkName -VirtualNetworkId $VNet.Id
         }
     }
     else {
         Write-Output "Creating Private DNS Zones and VNet link for Storage"
         $StorageDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name $StorageDnsZoneName
-        $StorageZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $StorageDnsZoneName -Name $BlobZoneLinkName -VirtualNetworkId $vnet.Id
+        $StorageZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $StorageDnsZoneName -Name $BlobZoneLinkName -VirtualNetworkId $VNet.Id
     }
 
     # Real Time Insights storage account uses the table storage API, so it needs its own private DNS zone
@@ -951,18 +971,18 @@ if ($SkipDNS -ne 'True') {
             Write-Output "Found Private DNS Zone for Table Storage"
             # check for linked zone
             $TableZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $TableDnsZoneName -ErrorAction SilentlyContinue
-            if ($TableZoneLink.VirtualNetworkId -contains $vnet.id) {
+            if ($TableZoneLink.VirtualNetworkId -contains $VNet.id) {
                 Write-Output "Private DNS Zone for Table Storage already linked to vnet"
             }
             else {
                 Write-Output "Linking Private DNS Zone for Table Storage to vnet"
-                $TableZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $TableDnsZoneName -Name $RtiTableStoragePrivateDnsZoneLinkName -VirtualNetworkId $vnet.Id
+                $TableZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $TableDnsZoneName -Name $RtiTableStoragePrivateDnsZoneLinkName -VirtualNetworkId $VNet.Id
             }
         }
         else {
             Write-Output "Creating Private DNS Zones and VNet link for Table Storage"
             $TableDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name $TableDnsZoneName
-            $TableZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $TableDnsZoneName -Name $RtiTableStoragePrivateDnsZoneLinkName -VirtualNetworkId $vnet.Id
+            $TableZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $TableDnsZoneName -Name $RtiTableStoragePrivateDnsZoneLinkName -VirtualNetworkId $VNet.Id
         }
     }
 
@@ -971,18 +991,18 @@ if ($SkipDNS -ne 'True') {
         Write-Output "Found Private DNS Zone for Automation"
         # check for linked zone
         $AutomationZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $AutomationDnsZoneName -ErrorAction SilentlyContinue
-        if ($AutomationZoneLink.VirtualNetworkId -contains $vnet.id) {
+        if ($AutomationZoneLink.VirtualNetworkId -contains $VNet.id) {
             Write-Output "Private DNS Zone for Automation already linked to vnet"
         }
         else {
             Write-Output "Linking Private DNS Zone for Automation to VNet"
-            $AutomationZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $AutomationDnsZoneName -Name $AutomationZoneLinkName -VirtualNetworkId $vnet.Id
+            $AutomationZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $AutomationDnsZoneName -Name $AutomationZoneLinkName -VirtualNetworkId $VNet.Id
         }
     }
     else {
         Write-Output "Creating Private DNS Zones and VNet link for Automation"
         $AutomationDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name $AutomationDnsZoneName
-        $AutomationZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $AutomationDnsZoneName -Name $AutomationZoneLinkName -VirtualNetworkId $vnet.Id
+        $AutomationZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $AutomationDnsZoneName -Name $AutomationZoneLinkName -VirtualNetworkId $VNet.Id
     }
 
     # Create and link private dns zone for app service
@@ -990,18 +1010,18 @@ if ($SkipDNS -ne 'True') {
         Write-Output "Found Private DNS Zone for App Service"
         # check for linked zone
         $AppServiceZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $AppServiceDnsZoneName -ErrorAction SilentlyContinue
-        if ($AppServiceZoneLink.VirtualNetworkId -contains $vnet.id) {
+        if ($AppServiceZoneLink.VirtualNetworkId -contains $VNet.id) {
             Write-Output "Private DNS Zone for App Service already linked to vnet"
         }
         else {
             Write-Output "Linking Private DNS Zone for App Service to vnet"
-            $AppServiceZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $AppServiceDnsZoneName -Name $AppServiceZoneLinkName -VirtualNetworkId $vnet.Id
+            $AppServiceZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $AppServiceDnsZoneName -Name $AppServiceZoneLinkName -VirtualNetworkId $VNet.Id
         }
     }
     else {
         Write-Output "Creating Private DNS Zones for App Service"
         $AppServiceDnsZone = New-AzPrivateDnsZone -ResourceGroupName $NmeRg -Name $AppServiceDnsZoneName
-        $AppServiceZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $AppServiceDnsZoneName -Name $AppServiceZoneLinkName -VirtualNetworkId $vnet.Id
+        $AppServiceZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $AppServiceDnsZoneName -Name $AppServiceZoneLinkName -VirtualNetworkId $VNet.Id
     }
 
     if ($PeerVnetIds) {
@@ -1561,16 +1581,16 @@ if ($PeerVnetIds) {
         }
         else {
             Write-Output "Creating inbound peering"
-            $InboundPeering = Add-AzVirtualNetworkPeering -Name "$($PeerVnet.name)-$PrivateLinkVnetName" -VirtualNetwork $PeerVnet -RemoteVirtualNetworkId $vnet.id 
+            $InboundPeering = Add-AzVirtualNetworkPeering -Name "$($PeerVnet.name)-$PrivateLinkVnetName" -VirtualNetwork $PeerVnet -RemoteVirtualNetworkId $VNet.id 
         }
         # check if outbound peering exists
-        $OutboundPeering = Get-AzVirtualNetworkPeering -Name "$PrivateLinkVnetName-$($PeerVnet.name)" -VirtualNetworkName $vnet.Name -ResourceGroupName $Vnet.ResourceGroupName -ErrorAction SilentlyContinue
+        $OutboundPeering = Get-AzVirtualNetworkPeering -Name "$PrivateLinkVnetName-$($PeerVnet.name)" -VirtualNetworkName $VNet.Name -ResourceGroupName $VNet.ResourceGroupName -ErrorAction SilentlyContinue
         if ($OutboundPeering) {
             Write-Output "Outbound peering exists"
         }
         else {
             Write-Output "Creating outbound peering"
-            $OutboundPeering = Add-AzVirtualNetworkPeering -Name "$PrivateLinkVnetName-$($PeerVnet.name)" -VirtualNetwork $vnet -RemoteVirtualNetworkId $id
+            $OutboundPeering = Add-AzVirtualNetworkPeering -Name "$PrivateLinkVnetName-$($PeerVnet.name)" -VirtualNetwork $VNet -RemoteVirtualNetworkId $id
         }
     }
 }
@@ -1632,7 +1652,7 @@ if ($AppSubnetDelegation.ServiceName -eq 'Microsoft.Web/serverFarms') {
 else {
     Write-Output "Delegate app service subnet to webfarms"
     $AppServiceSubnet | Add-AzDelegation -Name $WebAppSubnetDelegationName -ServiceName "Microsoft.Web/serverFarms" | Out-Null
-    $vnet = Set-AzVirtualNetwork -VirtualNetwork $VNet
+    $VNet = Set-AzVirtualNetwork -VirtualNetwork $VNet
 }
 
 $webApp = Get-AzResource -Id $NmeWebApp.id 
