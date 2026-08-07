@@ -11,9 +11,15 @@ If other NME components, such as Intune Insights, Cost Calculator, or Real Time 
 be added to the private network with private endpoints. The script can be re-run to add additional components to the
 private networking.
 
-The MakeAppServicePrivate parameter can be set to 'true' to further limit access to the app service to clients on the 
-private network or peered networks. Supplying ResourceIds for one ore more existing networks will cause those networks 
-to be peered to the new private network. 
+The MakeAppServicePrivate parameter can be set to 'true' to further limit access to the app service to clients on the
+private network or peered networks. Supplying ResourceIds for one ore more existing networks will cause those networks
+to be peered to the new private network. Note that MakeAppServicePrivate governs the primary Nerdio Manager app service
+only. If the Cost Calculator (CCL) is deployed, its web app is always made private, regardless of this parameter: the
+only thing that communicates with it is the primary Nerdio Manager web app, over the private network. The Intune
+Insights and Real Time Insights web apps get private endpoints but are not made private by this script.
+
+This script never re-enables public network access on anything. Setting MakeAppServicePrivate back to 'false' on a
+later run leaves the app service private; re-enable public access in the Azure Portal if that is what you want.
 
 If the VNet and Subnets already exist, the existing resources will be used and address ranges will not be changed. 
 If they do not exist, they will be created. Names for resources created by this script, such as private endpoint names, 
@@ -1390,12 +1396,8 @@ if ($NmeCclWebAppName) {
     } else {
         Write-Output "Skipping CCL App Service DNS zone group configuration (SkipDNS enabled)"
     }
-    $NmeCclWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeCclWebAppName
-    $cclwebapp = Get-AzResource -Id $NmeCclWebApp.id
-    $cclwebapp.Properties.publicNetworkAccess = "Disabled"
-    $cclwebapp | Set-AzResource -Force | Out-Null
 }
-# add section for NmeiiWebApp 
+# add section for NmeiiWebApp
 if ($NmeIiWebAppName) {
     $IiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeIiWebAppName
     # check if intune insights app service private endpoint is created
@@ -1669,6 +1671,22 @@ if ($NmeCclWebAppName) {
         $CclWebApp.Properties.virtualNetworkSubnetId = $AppServiceSubnet.id
         $CclWebApp.Properties.vnetRouteAllEnabled = 'false'
         $CclWebApp = $CclWebApp | Set-AzResource -Force
+    }
+
+    # The Cost Calculator web app is always made private, regardless of MakeAppServicePrivate.
+    # Nothing but the primary Nerdio Manager web app talks to it, and that traffic goes over the
+    # private network once the private endpoint and VNet integration above are in place - so
+    # there is no scenario in which it needs to be reachable from the internet. This runs after
+    # VNet integration deliberately: locking it down first would have cut off public access while
+    # the private path was still being built.
+    $CclWebApp = Get-AzResource -Id $NmeCclWebApp.id
+    if ($CclWebApp.Properties.publicNetworkAccess -eq 'Disabled') {
+        Write-Output "CCL app service public access already disabled"
+    }
+    else {
+        Write-Output "Disabling CCL app service public access"
+        $CclWebApp.Properties.publicNetworkAccess = "Disabled"
+        $CclWebApp | Set-AzResource -Force | Out-Null
     }
 }
 
