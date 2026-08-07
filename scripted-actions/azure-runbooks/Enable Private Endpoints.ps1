@@ -470,6 +470,17 @@ if ($NmeWebApp.DefaultHostName -match "azurewebsites.us") {
 # (management.azure.com / management.usgovcloudapi.net) is not made private by this script. See the
 # notes block at the top.
 
+# Storage sub-resource -> private DNS zone. One private endpoint can serve exactly one sub-resource,
+# so covering an additional sub-resource means an additional endpoint, not an additional zone config
+# on an existing one. Keeping the mapping in one place is what makes that a one-line change: the
+# Real Time Insights table-zone bug existed because each storage endpoint hardcoded 'blob' and a
+# single zone config. Queue and file are not covered because nothing in NME requests them today; to
+# add one, add its zone name to the cloud if/else above and an entry here.
+$StorageSubresourceDnsZoneNames = @{
+    blob  = $StorageDnsZoneName
+    table = $TableDnsZoneName
+}
+
 
 # Looks up a job parameter by name, case-insensitively, since $job.JobParameters is a
 # dictionary and NME's parameter casing can vary between execution modes.
@@ -664,6 +675,15 @@ else {
         $TableDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name $TableDnsZoneName -ErrorAction SilentlyContinue
     }
     $AppServiceDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name $AppServiceDnsZoneName -ErrorAction SilentlyContinue
+}
+
+# Storage sub-resource -> resolved private DNS zone object, built once the zone objects above are
+# resolved (rather than a second Get-AzPrivateDnsZone lookup inside the helper). $TableDnsZone is
+# only resolved when $NmeRtiStorageAccountName is set, so it may be $null here - that matches
+# today's behavior, since nothing but the RTI account uses the table zone.
+$StorageSubresourceDnsZones = @{
+    blob  = $StorageDnsZone
+    table = $TableDnsZone
 }
 
 #### helper functions ####
@@ -873,6 +893,63 @@ function Set-NmeSqlBaseline {
     catch {
         Write-Warning "Unable to set the minimum TLS version to 1.2 on $DisplayName server '$ServerName': $($_.Exception.Message). Set it in the Azure Portal if required."
     }
+}
+
+function New-NmeStoragePrivateEndpoint {
+    # This function depends on script scope: it reads $ExistingPrivateEndpoints, $NmeRg,
+    # $VnetLocation, $PrivateEndpointSubnet, $SkipDNS, $StorageSubresourceDnsZoneNames and
+    # $StorageSubresourceDnsZones, all of which must be set before this function is called.
+    param(
+        [Parameter(Mandatory=$true)]$StorageAccount,          # the object from Get-AzStorageAccount
+        [Parameter(Mandatory=$true)][string]$Subresource,     # 'blob' or 'table'
+        [Parameter(Mandatory=$true)][string]$PrivateEndpointName,
+        [Parameter(Mandatory=$true)][string]$ServiceConnectionName,
+        [Parameter(Mandatory=$true)][string]$DnsZoneGroupName,
+        [Parameter(Mandatory=$true)][string]$DisplayName      # e.g. 'scripted actions', 'CCL', 'DPS', 'RTI'
+    )
+    if (-not $StorageSubresourceDnsZoneNames.ContainsKey($Subresource)) {
+        Throw "New-NmeStoragePrivateEndpoint: internal error - no DNS zone name is mapped for storage sub-resource '$Subresource'. Add it to `$StorageSubresourceDnsZoneNames."
+    }
+    $ZoneName = $StorageSubresourceDnsZoneNames[$Subresource]
+    $Zone = $StorageSubresourceDnsZones[$Subresource]
+
+    $Endpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $StorageAccount.Id }
+    if ($Endpoint) {
+        Write-Output "Found $DisplayName storage private endpoint"
+        # Earlier versions of this script created some storage endpoints with a hardcoded sub-resource that
+        # did not always match the account's actual storage API (see the Real Time Insights table-zone bug).
+        # A private endpoint's sub-resource (groupId) cannot be changed in place - it has to be recreated.
+        $GroupIds = $Endpoint.PrivateLinkServiceConnections.GroupIds
+        if ($GroupIds -notcontains $Subresource) {
+            Write-Warning "The existing $DisplayName storage private endpoint '$($Endpoint.Name)' uses the '$($GroupIds -join ',')' sub-resource, but $DisplayName requires the '$Subresource' sub-resource. $Subresource storage traffic will continue to use the public endpoint. A private endpoint's sub-resource cannot be changed in place: delete the private endpoint '$($Endpoint.Name)' in the Azure Portal and re-run this script to have it recreated correctly."
+        }
+    }
+    else {
+        Write-Output "Configuring $DisplayName storage service connection and private endpoint"
+        $ServiceConnection = New-AzPrivateLinkServiceConnection -Name $ServiceConnectionName -PrivateLinkServiceId $StorageAccount.Id -GroupId $Subresource
+        $Endpoint = New-AzPrivateEndpoint -Name $PrivateEndpointName -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ServiceConnection
+    }
+
+    if ($SkipDNS) {
+        Write-Output "Skipping $DisplayName storage DNS zone group configuration (SkipDNS enabled)"
+        return $Endpoint
+    }
+
+    $DnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $Endpoint.Name -ErrorAction SilentlyContinue
+    if ($DnsZoneGroup) {
+        Write-Output "Found $DisplayName storage DNS zone group"
+        # Earlier versions of this script linked some zone groups to the wrong zone for the account's sub-resource
+        if ($DnsZoneGroup.PrivateDnsZoneConfigs.PrivateDnsZoneId -notcontains $Zone.ResourceId) {
+            Write-Warning "The existing $DisplayName storage DNS zone group '$($DnsZoneGroup.Name)' is not linked to the '$ZoneName' private DNS zone, so $DisplayName $Subresource storage will not resolve to the private endpoint. Delete the private endpoint '$($Endpoint.Name)' in the Azure Portal and re-run this script to have the endpoint and its DNS zone group recreated correctly."
+        }
+    }
+    else {
+        Write-Output "Configuring $DisplayName storage DNS zone group"
+        $Config = New-AzPrivateDnsZoneConfig -Name $ZoneName -PrivateDnsZoneId $Zone.ResourceId
+        $DnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $Endpoint.Name -Name $DnsZoneGroupName -PrivateDnsZoneConfig $Config
+    }
+
+    return $Endpoint
 }
 
 function Set-NmeSubnetConfig {
@@ -1375,88 +1452,26 @@ if ($NmeScriptedActionsAccountName) {
         if (-not $ScriptedActionsStorageAccount) {
             throw "No scripted actions storage account found in resource group $NmeRg. Please add the tag '$NmeResourceTagName' with value 'CUSTOM_SCRIPTS_STORAGE_ACCOUNT' to the scripted actions storage account used by Nerdio Manager and rerun this script."
         }
-        # check if scripted action storage account private endpoint is created
-        $ScriptedActionsStoragePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $ScriptedActionsStorageAccount.Id }
-        if ($ScriptedActionsStoragePrivateEndpoint) {
-            Write-Output "Found scripted actions storage private endpoint"
-        } 
-        else {
-            Write-Output "Configuring scripted actions storage service connection and private endpoint"
-            $ScriptedActionsStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $SaStorageServiceConnectionName -PrivateLinkServiceId $ScriptedActionsStorageAccount.Id -GroupId blob 
-            $ScriptedActionsStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$ScriptedActionsStoragePrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ScriptedActionsStorageServiceConnection 
-        }
-        # check if scripted action storage account dns zone group created
-        if (-not $SkipDNS) {
-            $ScriptedActionsStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsStoragePrivateEndpoint.Name -ErrorAction SilentlyContinue
-            if ($ScriptedActionsStorageDnsZoneGroup) {
-                Write-Output "Found scripted actions storage DNS zone group"
-            } else {
-                Write-Output "Configuring scripted actions storage DNS zone group"
-                $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
-                $ScriptedActionsStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsStoragePrivateEndpoint.Name -Name $SaStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
-            }
-        } else {
-            Write-Output "Skipping scripted actions storage DNS zone group configuration (SkipDNS enabled)"
-        }
-
+        New-NmeStoragePrivateEndpoint -StorageAccount $ScriptedActionsStorageAccount -Subresource blob `
+            -PrivateEndpointName $ScriptedActionsStoragePrivateEndpointName -ServiceConnectionName $SaStorageServiceConnectionName `
+            -DnsZoneGroupName $SaStoragePrivateDnsZoneGroupName -DisplayName 'scripted actions' | Out-Null
     }
 }
 
 if ($NmeCclStorageAccountName) {
     # Get ccl storage account
     $NmeCclStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeCclStorageAccountName
-    # check if ccl storage account private endpoint is created
-    $CclStoragePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $NmeCclStorageAccount.Id }
-    if ($CclStoragePrivateEndpoint) {
-        Write-Output "Found CCL storage private endpoint"
-    } 
-    else {
-        Write-Output "Configuring CCL storage service connection and private endpoint"
-        $CclStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $CclStorageServiceConnectionName -PrivateLinkServiceId $NmeCclStorageAccount.Id -GroupId blob 
-        $CclStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$CclStoragePrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $CclStorageServiceConnection 
-    }
-    # check if ccl storage account dns zone group created
-    if (-not $SkipDNS) {
-        $CclStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $CclStoragePrivateEndpoint.Name -ErrorAction SilentlyContinue
-        if ($CclStorageDnsZoneGroup) {
-            Write-Output "Found CCL storage DNS zone group"
-        } else {
-            Write-Output "Configuring CCL storage DNS zone group"
-            $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
-            $CclStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $CclStoragePrivateEndpoint.Name -Name $CclStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
-        }
-    } else {
-        Write-Output "Skipping CCL storage DNS zone group configuration (SkipDNS enabled)"
-    }
-
+    New-NmeStoragePrivateEndpoint -StorageAccount $NmeCclStorageAccount -Subresource blob `
+        -PrivateEndpointName $CclStoragePrivateEndpointName -ServiceConnectionName $CclStorageServiceConnectionName `
+        -DnsZoneGroupName $CclStoragePrivateDnsZoneGroupName -DisplayName 'CCL' | Out-Null
 }
 
 if ($NmeDpsStorageAccountName) {
     # Get dps storage account
     $NmeDpsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeDpsStorageAccountName
-    # check if dps storage account private endpoint is created
-    $DpsStoragePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $NmeDpsStorageAccount.Id }
-    if ($DpsStoragePrivateEndpoint) {
-        Write-Output "Found DPS storage private endpoint"
-    } 
-    else {
-        Write-Output "Configuring DPS storage service connection and private endpoint"
-        $DpsStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $DpsStorageServiceConnectionName -PrivateLinkServiceId $NmeDpsStorageAccount.Id -GroupId blob 
-        $DpsStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$DpsStoragePrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $DpsStorageServiceConnection 
-    }
-    # check if dps storage account dns zone group created
-    if (-not $SkipDNS) {
-        $DpsStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $DpsStoragePrivateEndpoint.Name -ErrorAction SilentlyContinue
-        if ($DpsStorageDnsZoneGroup) {
-            Write-Output "Found DPS storage DNS zone group"
-        } else {
-            Write-Output "Configuring DPS storage DNS zone group"
-            $Config = New-AzPrivateDnsZoneConfig -Name $StorageDnsZoneName -PrivateDnsZoneId $StorageDnsZone.ResourceId
-            $DpsStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $DpsStoragePrivateEndpoint.Name -Name $DpsStoragePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
-        }
-    } else {
-        Write-Output "Skipping DPS storage DNS zone group configuration (SkipDNS enabled)"
-    }
+    New-NmeStoragePrivateEndpoint -StorageAccount $NmeDpsStorageAccount -Subresource blob `
+        -PrivateEndpointName $DpsStoragePrivateEndpointName -ServiceConnectionName $DpsStorageServiceConnectionName `
+        -DnsZoneGroupName $DpsStoragePrivateDnsZoneGroupName -DisplayName 'DPS' | Out-Null
 }
 else {
     Write-Warning "Unable to find DPS storage account. Skipping private endpoint creation. You will need to manually create the private endpoint for the storage account."
@@ -1606,41 +1621,9 @@ if ($NmeRtiSqlServerName) {
 if ($NmeRtiStorageAccountName) {
     # Get rti storage account
     $NmeRtiStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeRtiStorageAccountName
-    # check if rti storage account private endpoint is created
-    $RtiStoragePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $NmeRtiStorageAccount.Id }
-    if ($RtiStoragePrivateEndpoint) {
-        Write-Output "Found RTI storage private endpoint"
-        # Earlier versions of this script created this endpoint with the 'blob' sub-resource. RTI uses the
-        # table storage API, so a blob-only endpoint leaves table traffic resolving to the public endpoint.
-        # A private endpoint's sub-resource (groupId) cannot be changed in place - it has to be recreated.
-        $RtiStorageGroupIds = $RtiStoragePrivateEndpoint.PrivateLinkServiceConnections.GroupIds
-        if ($RtiStorageGroupIds -notcontains 'table') {
-            Write-Warning "The existing RTI storage private endpoint '$($RtiStoragePrivateEndpoint.Name)' uses the '$($RtiStorageGroupIds -join ',')' sub-resource, but Real Time Insights requires the 'table' sub-resource. Table storage traffic will continue to use the public endpoint. A private endpoint's sub-resource cannot be changed in place: delete the private endpoint '$($RtiStoragePrivateEndpoint.Name)' in the Azure Portal and re-run this script to have it recreated correctly."
-        }
-    }
-    else {
-        Write-Output "Configuring RTI storage service connection and private endpoint"
-        # RTI storage account uses the table storage API only
-        $RtiStorageServiceConnection = New-AzPrivateLinkServiceConnection -Name $RtiStorageServiceConnectionName -PrivateLinkServiceId $NmeRtiStorageAccount.Id -GroupId table
-        $RtiStoragePrivateEndpoint = New-AzPrivateEndpoint -Name "$RtiStoragePrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $RtiStorageServiceConnection
-    }
-    # check if rti storage account dns zone group created
-    if (-not $SkipDNS) {
-        $RtiStorageDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $RtiStoragePrivateEndpoint.Name -ErrorAction SilentlyContinue
-        if ($RtiStorageDnsZoneGroup) {
-            Write-Output "Found RTI storage DNS zone group"
-            # Earlier versions of this script linked this zone group to the blob zone instead of the table zone
-            if ($RtiStorageDnsZoneGroup.PrivateDnsZoneConfigs.PrivateDnsZoneId -notcontains $TableDnsZone.ResourceId) {
-                Write-Warning "The existing RTI storage DNS zone group '$($RtiStorageDnsZoneGroup.Name)' is not linked to the '$TableDnsZoneName' private DNS zone, so RTI table storage will not resolve to the private endpoint. Delete the private endpoint '$($RtiStoragePrivateEndpoint.Name)' in the Azure Portal and re-run this script to have the endpoint and its DNS zone group recreated correctly."
-            }
-        } else {
-            Write-Output "Configuring RTI storage DNS zone group"
-            $Config = New-AzPrivateDnsZoneConfig -Name $TableDnsZoneName -PrivateDnsZoneId $TableDnsZone.ResourceId
-            $RtiStorageDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $RtiStoragePrivateEndpoint.Name -Name $RtiStorageDnsZoneGroupName -PrivateDnsZoneConfig $Config
-        }
-    } else {
-        Write-Output "Skipping RTI storage DNS zone group configuration (SkipDNS enabled)"
-    }
+    New-NmeStoragePrivateEndpoint -StorageAccount $NmeRtiStorageAccount -Subresource table `
+        -PrivateEndpointName $RtiStoragePrivateEndpointName -ServiceConnectionName $RtiStorageServiceConnectionName `
+        -DnsZoneGroupName $RtiStorageDnsZoneGroupName -DisplayName 'RTI' | Out-Null
 }
 # add private endpoint for real time insights key vault
 if ($NmeRtiKeyVaultName) {
