@@ -25,44 +25,45 @@ from the defaults specified here.
 ##### Required Variables #####
 
 $client_secret = $SecureVars.ClientSecret # Set this variable in NMW under Settings -> Nerdio Integrations
-$app_url = 'https://nwm-app-XXXXXXXXXXXX.azurewebsites.net' # no trailing slash
-$client_id = 'XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX'
-$scope = 'api://XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX/.default'
-$tenant_id ='XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX'
+$app_url = '' # no trailing slash
+$client_id = ''
+$scope = ''
+$tenant_id =''
 
-$SubscriptionId = 'XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX'
-$ResourceGroupName = "YourResourceGroup"
+$SubscriptionId = ''
+$ResourceGroupName = ''
 
-$VnetName = 'YourVNet'
-$SubnetName = 'YourSubnet' # subnet where AVD hosts will be provisioned
-$RegionName = "YourRegion" # e.g. "northcentralus"
+$VnetName = ''
+$NetworkResourceGroupName = ''
+$SubnetName = '' # subnet where AVD hosts will be provisioned
+$RegionName = "" # e.g. "eastus2"
 
 
 ##### Additional Variables #####
 
-$WindowsVersion = 'microsoftwindowsdesktop/office-365/20h2-evd-o365pp/latest' # Version of windows to use in desktop image and host pool
-$ImageVmSize = 'Standard_D2s_v3'
+$WindowsVersion = 'microsoftwindowsdesktop/office-365/win11-24h2-avd-m365/latest' # Version of windows to use in desktop image and host pool
+$ImageVmSize = 'Standard_D2as_v4'
 
-$WorkspaceName = "WVD Workspace"
-$WorkspaceFriendlyName = "Windows Virtual Desktops"
-$WorkspaceDescription = ""
-
+$WorkspaceName = "" # Make sure you don't use spaces!
+$WorkspaceFriendlyName = "Windows 11 Remote Desktop"
+$WorkspaceDescription = "Access to your personal Windows 11 remote desktop"
 $AdConfigId = $null # The id of the AD Configuration to use for the desktop image and host pool VMs. Will use the default config if none specified.
 
-$DesktopImageName = "GoldenImage"
+
+$DesktopImageName = "" #No spaces!
 $ImageStorageType = 'StandardSSD_LRS'
 
 $TimeZone = "Eastern Standard Time"
 
-$HostPoolName = "Host Pool"
+$HostPoolName = "" #No spaces!
 $HostPoolDescription = ""
 $ScriptedActionIDs = @() # List of Scripted Actions (by id) to be run on the image. Can be used to install software. E.g.: $ScriptedActionIDs = @(35, 36)
 
 $UserUPNs = @() # Users to assign to the new host pool. E.g.: $UserUPNs =  @('first_user@domain.com', 'second_user@domain.com', 'third_user@domain.com')
 
-$HostVmPrefix = "WVDHOST"
-$HostVmSize = "Standard_D2s_v3"
-$HostVmStorageType = 'StandardSSD_LRS'
+$HostVmPrefix = "AVD"
+$HostVmSize = "Standard_D16as_v4"
+$HostVmStorageType = 'Premium_LRS'
 $HostVmDiskSize = 128
 $hasEphemeralOSDisk = $false
 $BaseHostPoolCapacity = 1
@@ -127,9 +128,8 @@ $NewDesktopImageBody = @"
         "vmSize": "$ImageVmSize",
         "storageType": "$ImageStorageType",
         "diskSize": 128,
-        "networkId": "/subscriptions/$SubscriptionId/ResourceGroups/$ResourceGroupName/providers/Microsoft.Network/virtualNetworks/$VnetName",
+        "networkId": "/subscriptions/$SubscriptionId/ResourceGroups/$NetworkResourceGroupName/providers/Microsoft.Network/virtualNetworks/$VnetName",
         "subnet": "$SubnetName",
-        "adConfigId": $AdConfigId,
         "description": "image description",
         "noImageObjectRequired": false,
         "enableTimezoneRedirection": true,
@@ -168,7 +168,7 @@ $NewHostPoolBody = @"
     "name": "$WorkspaceName"
   },
   "pooledParams": {
-    "isDekstop": true,
+    "isDesktop": true,
     "isSingleUser": false
   },
   "description": "$HostPoolDescription"
@@ -191,17 +191,25 @@ if ($UserUPNs)
     Invoke-RestMethod "$app_url/api/v1/arm/hostpool/$SubscriptionId/$ResourceGroupName/$HostPoolName/assign" -Method Post -Headers $headers -body $AssignUserBody
 
 }
+$AutoScaleEnableBody = @"
+{
+    "isEnabled": true
+    }
+ 
+"@
 
+Invoke-RestMethod "$app_url/api/v1/arm/hostpool/$SubscriptionId/$ResourceGroupName/$HostPoolName/auto-scale" -Method Patch -Headers $headers -Body $AutoScaleEnableBody
 $AutoScaleConfigBody = @"
 {
     "isEnabled": true,
+    "timezoneId" : "Eastern Standard Time",
     "vmTemplate": {
         "prefix": "$HostVmPrefix",
         "size": "$HostVmSize",
         "image": "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Compute/virtualmachines/$DesktopImageName",
         "storageType": "$HostVmStorageType",
         "resourceGroupId": "$((Get-AzResourceGroup -Name $ResourceGroupName).resourceid)",
-        "networkId": "$((Get-AzVirtualNetwork -Name $vnetname -ResourceGroupName $ResourceGroupName).id)",
+        "networkId": "$((Get-AzVirtualNetwork -Name $vnetname -ResourceGroupName $NetworkResourceGroupName).id)",
         "subnet": "$SubnetName",
         "diskSize": $HostVmDiskSize,
         "hasEphemeralOSDisk": $($hasEphemeralOSDisk | ConvertTo-Json)
@@ -266,15 +274,8 @@ $AutoScaleConfigBody = @"
                             "message":  "Sorry for the interruption. We are doing some housekeeping and need you to log out. You can log in right away to continue working. We will be terminating your session in 10 minutes if you haven\u0027t logged out by then."
                         },
     "autoHeal":  {
-                        "enable":  true,
-                        "config":  {
-                                    "wvdStatuses":  ["Unavailable"],
-                                    "sessionCriteria":  "WithoutActive",
-                                    "staleHeartbeatMinutes":  null,
-                                    "restartAttempts":  2,
-                                    "waitMinutes":  10,
-                                    "finalAction":  "DeleteHost"
-                                }
+                        "enable":  false,
+                        "config":  null
                     }
 }
 "@
@@ -283,3 +284,11 @@ Invoke-RestMethod "$app_url/api/v1/arm/hostpool/$SubscriptionId/$ResourceGroupNa
 
 
 $ASconfig = Invoke-RestMethod "$app_url/api/v1/arm/hostpool/$SubscriptionId/$ResourceGroupName/$HostPoolName/auto-scale" -Method Get -Headers $headers
+    $RDPConfigBody = @"
+{
+  "configurationName": null,
+  "rdpProperties": "drivestoredirect:s:*;audiomode:i:0;videoplaybackmode:i:1;redirectclipboard:i:1;redirectprinters:i:1;devicestoredirect:s:*;redirectcomports:i:1;redirectsmartcards:i:1;usbdevicestoredirect:s:*;enablecredsspsupport:i:1;redirectwebauthn:i:1;use multimon:i:1;enablerdsaadauth:i:1;autoreconnection enabled:i:1;bandwidthautodetect:i:1;networkautodetect:i:1;compression:i:1;audiocapturemode:i:1;encode redirected video capture:i:1;redirected video capture encoding quality:i:1;camerastoredirect:s:*;redirectlocation:i:1;targetisaadjoined:i:1"
+}
+"@
+Invoke-RestMethod "$app_url/api/v1/arm/hostpool/$SubscriptionId/$ResourceGroupName/$HostPoolName/rdp" -Method Put -Headers $headers -Body $RDPConfigBody
+$RDPConfig = Invoke-RestMethod "$app_url/api/v1/arm/hostpool/$SubscriptionId/$ResourceGroupName/$HostPoolName/rdp" -Method Get -Headers $headers
