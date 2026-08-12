@@ -1,6 +1,7 @@
-﻿#description: Restrict access to the sql database and keyvault used by Nerdio Manager. 
+﻿#description: Restrict access to the sql database and keyvault used by Nerdio Manager.
 #tags: Nerdio, Preview
- 
+# test-run: BATCH1-attempt3-storage-acl-guard
+
 <# Notes:
  
 This script will add private endpoints and service endpoints to allow the Nerdio Manager app service to communicate
@@ -31,7 +32,8 @@ Storage accounts and sub-resources covered. Azure allows exactly one sub-resourc
 below is one endpoint. Anything not listed keeps resolving over the public endpoint even after this script runs, which
 is what makes this table worth checking when a new component is added:
 
- - Scripted actions storage account - blob only, and only when MakeSaStoragePrivate is true.
+ - Scripted actions storage account - blob only, and for both the Private and Restricted values of
+   CssaStorageAccount (not Public).
  - Cost Calculator (CCL) storage account - blob only.
  - Deployment/Provisioning (DPS) storage account - blob only.
  - Real Time Insights storage account - table only. Real Time Insights uses the table API and does not use blob, so
@@ -93,9 +95,14 @@ If the VNet and Subnets already exist, the existing resources will be used and a
 If they do not exist, they will be created. Names for resources created by this script, such as private endpoint names, 
 can be customized by cloning this script and editing the variables at the top of the script.
 
-If MakeSaStoragePrivate is True, the scripted actions storage account will be put on the private vnet. AVD VMs will need access to
-the storage account to run scripted actions. Use the PeerVnetIds parameter to peer the AVD vnet to the private
-endpoint vnet. This covers the blob sub-resource of that account only - see the storage sub-resource list above.
+The CssaStorageAccount parameter controls network access to the scripted actions storage account, and defaults to
+Restricted. Private and Restricted both put the account on the private vnet (blob sub-resource only - see the storage
+sub-resource list above); Public leaves it exactly as found, matching this script's old default behavior. Private also
+fully disables the account's public network access, so AVD VMs need PeerVnetIds (or another private endpoint) to reach
+it at all. Restricted leaves the public endpoint reachable but firewalls it to VNets tagged as linked to Nerdio Manager
+(LINKED_NETWORK) - found across every subscription this service principal can read, not just this one - whose subnet
+already has the Microsoft.Storage service endpoint enabled; a linked AVD VNet without that service endpoint enabled on
+its subnet will lose access to the storage account under Restricted, so enable it there before relying on the default.
  
 #>
  
@@ -141,10 +148,10 @@ endpoint vnet. This covers the blob sub-resource of that account only - see the 
     "IsRequired": false,
     "DefaultValue": ""
   },
-  "MakeSaStoragePrivate": {
-    "Description": "Make the scripted actions storage account private. AVD hosts require access to the scripted actions storage account, so making this storage account private will require peering the AVD VNets to the NME private VNet or using additional private endpoints to put the scripted actions storage account on the AVD VNets as well as the NME private VNet. This covers the blob sub-resource of that account only; Azure permits one sub-resource per private endpoint, so any other sub-resource would continue to resolve over the public endpoint.",
+  "CssaStorageAccount": {
+    "Description": "Controls network access to the scripted actions storage account. 'Restricted' (default): the account gets a private endpoint (blob sub-resource) and stays reachable on its public endpoint, but the public endpoint's firewall denies all traffic except from VNets tagged as linked to Nerdio Manager (LINKED_NETWORK) whose subnet already has the Microsoft.Storage service endpoint enabled - found across every subscription this service principal can read, not just this one. 'Public': no private endpoint, no firewall change - the account is left exactly as found, matching this script's old default behavior. 'Private': private endpoint plus public network access fully disabled, matching this script's previous default-parameter-off behavior - AVD hosts then need a private endpoint or VNet peering (see PeerVnetIds) to reach the account at all. This script never relaxes a more restrictive setting back to a less restrictive one on a later run: moving from Private to Restricted or Public requires re-enabling public network access on the storage account in the Azure Portal first.",
     "IsRequired": false,
-    "DefaultValue": "false"
+    "DefaultValue": "Restricted"
   },
   "PeerVnetIds": {
     "Description": "Optional. Values are 'All' or comma-separated list of Azure resource IDs of VNets to peer to private endpoint VNet. If 'All' then all linked VNets will be peered. The VNETs or their resource groups must be linked to Nerdio Manager in Settings->Azure environment. All VNets must be in the same subscription as Nerdio Manager. External VNets must be peered manually.",
@@ -212,10 +219,38 @@ function ConvertTo-NmeBoolean {
     }
 }
 
-$MakeSaStoragePrivate     = ConvertTo-NmeBoolean -Value $MakeSaStoragePrivate     -Name 'MakeSaStoragePrivate'
+# Three-valued equivalent of ConvertTo-NmeBoolean above, for CssaStorageAccount: 'Restricted' is the
+# default rather than throwing on blank, since NME may pass an empty string for a parameter left at
+# its default rather than the literal default value.
+function ConvertTo-NmeCssaStorageMode {
+    param(
+        [string]$Value,
+        [Parameter(Mandatory=$true)][string]$Name
+    )
+    if ([string]::IsNullOrWhiteSpace($Value)) { return 'Restricted' }
+    switch ($Value.Trim().ToLowerInvariant()) {
+        'restricted' { return 'Restricted' }
+        'public'     { return 'Public' }
+        'private'    { return 'Private' }
+        default { Throw "The $Name parameter must be Restricted, Public, or Private, but was '$Value'." }
+    }
+}
+
+$CssaStorageAccount       = ConvertTo-NmeCssaStorageMode -Value $CssaStorageAccount -Name 'CssaStorageAccount'
 $MakeAppServicePrivate    = ConvertTo-NmeBoolean -Value $MakeAppServicePrivate    -Name 'MakeAppServicePrivate'
 $MakeRtiAppServicePrivate = ConvertTo-NmeBoolean -Value $MakeRtiAppServicePrivate -Name 'MakeRtiAppServicePrivate'
 $SkipDNS                  = ConvertTo-NmeBoolean -Value $SkipDNS                  -Name 'SkipDNS'
+
+# Reject parameter combinations where one parameter silently discards another, before anything is
+# created. Both of these were previously accepted and then quietly ignored further down, which looks
+# like the script honored a setting it actually dropped - the worst kind of failure here, because the
+# run reports success while the DNS configuration is not what was asked for.
+if ($SkipDNS -and $ExistingDNSZonesRG) {
+    Throw "SkipDNS is true and ExistingDNSZonesRG is set to '$ExistingDNSZonesRG', but these are contradictory: SkipDNS skips every DNS operation, including linking existing zones, so ExistingDNSZonesRG would be ignored entirely. Set SkipDNS to false to use the existing zones in '$ExistingDNSZonesRG', or clear ExistingDNSZonesRG to confirm you are managing DNS yourself."
+}
+if ($ExistingDNSZonesSubId -and -not $ExistingDNSZonesRG) {
+    Throw "ExistingDNSZonesSubId is set to '$ExistingDNSZonesSubId' but ExistingDNSZonesRG is empty. The subscription id is only used to locate the resource group holding your existing private DNS zones, so on its own it would be ignored and this script would create new DNS zones in Nerdio Manager's own resource group instead. Set ExistingDNSZonesRG to the resource group holding the zones, or clear ExistingDNSZonesSubId."
+}
 
 # Set variables
 function Set-NmeVars {
@@ -587,6 +622,25 @@ function Get-NmeJobScriptText {
     }
 }
 
+# True only when this job is confirmed running in the older download mode (script fetched from
+# scriptUri) rather than Inline Script mode (full script body passed as ScriptBase64). Used to
+# warn before restricting the scripted actions storage account's public access, since that
+# storage account is also where Azure Automation fetches a download-mode job's own script body -
+# see the CssaStorageAccount switch below. Returns $false (not $null) on anything inconclusive,
+# so an unresolvable execution mode never triggers a warning it can't actually justify.
+function Test-NmeCurrentJobIsDownloadMode {
+    try {
+        $ThisJob = Get-AzAutomationJob -Id $PSPrivateMetadata['JobId'].Guid -ResourceGroupName $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
+        $ScriptBase64 = Get-NmeJobParameterValue -JobParameters $ThisJob.JobParameters -Name 'ScriptBase64'
+        $ScriptUri = Get-NmeJobParameterValue -JobParameters $ThisJob.JobParameters -Name 'scriptUri'
+        return ([string]::IsNullOrEmpty($ScriptBase64)) -and (-not [string]::IsNullOrEmpty($ScriptUri))
+    }
+    catch {
+        Write-Verbose "Test-NmeCurrentJobIsDownloadMode failed to resolve this job's execution mode: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 # Hashes script text after normalizing it, because the same script text can arrive with
 # different encodings depending on how it was retrieved (UTF8 BOM, CRLF vs LF line endings,
 # a trailing newline). An inline payload and the same script downloaded from storage are
@@ -760,15 +814,6 @@ else {
     $AppServiceDnsZone = Get-AzPrivateDnsZone -ResourceGroupName $DnsRg -Name $AppServiceDnsZoneName -ErrorAction SilentlyContinue
 }
 
-# Storage sub-resource -> resolved private DNS zone object, built once the zone objects above are
-# resolved (rather than a second Get-AzPrivateDnsZone lookup inside the helper). $TableDnsZone is
-# only resolved when $NmeRtiStorageAccountName is set, so it may be $null here - that matches
-# today's behavior, since nothing but the RTI account uses the table zone.
-$StorageSubresourceDnsZones = @{
-    blob  = $StorageDnsZone
-    table = $TableDnsZone
-}
-
 #### helper functions ####
 function GetEntAppName {
     # check if mggraph module installed
@@ -878,9 +923,24 @@ function Disable-NmeSqlPublicAccess {
         return
     }
     Write-Output "Disabling $DisplayName public access"
+    # Check for an existing rule BY NAME, not just by subnet id. New-AzSqlServerVirtualNetworkRule
+    # throws "Virtual Network Rule with name '...' already exists" if a rule with this literal name
+    # is already present on the server, regardless of which subnet it points at - unlike the Key
+    # Vault path just above this function's call sites (Add-AzKeyVaultNetworkRule), which is safe to
+    # call repeatedly. The old `-notcontains $PrivateEndpointSubnetId` check only asked "is our subnet
+    # already covered by some rule", so a stale same-named rule left pointing at a *different* subnet
+    # (e.g. a fixture VNet's private endpoint subnet from an earlier run against this same SQL server)
+    # would pass that check as "not covered" and then collide on the name when this tried to create a
+    # second rule. Found live (P1-18) on the first real second-run-against-a-different-VNet scenario.
     $ServerRules = Get-AzSqlServerVirtualNetworkRule -ServerName $ServerName -ResourceGroupName $ResourceGroupName
-    if ($ServerRules.VirtualNetworkSubnetId -notcontains $PrivateEndpointSubnetId) {
+    $ExistingRule = $ServerRules | Where-Object { $_.VirtualNetworkRuleName -eq 'Allow private endpoint subnet' } | Select-Object -First 1
+    if (-not $ExistingRule) {
         New-AzSqlServerVirtualNetworkRule -VirtualNetworkRuleName 'Allow private endpoint subnet' -VirtualNetworkSubnetId $PrivateEndpointSubnetId -ServerName $ServerName -ResourceGroupName $ResourceGroupName | Out-Null
+    }
+    elseif ($ExistingRule.VirtualNetworkSubnetId -ne $PrivateEndpointSubnetId) {
+        # Found → skip, same idiom as the rest of this script (P0-1): report the drift rather than
+        # silently leaving it, but do not delete/recreate a customer's existing rule automatically.
+        Write-Warning "$DisplayName already has a VNet rule named 'Allow private endpoint subnet' pointing at a different subnet ($($ExistingRule.VirtualNetworkSubnetId)) than this run's private endpoint subnet ($PrivateEndpointSubnetId). Not creating a duplicate - Azure rejects a second rule with the same name. This is harmless once public access is disabled (VNet rules are not evaluated for traffic arriving over a private endpoint), but if you need public access to remain enabled and reachable from the current private endpoint subnet, remove or rename the stale rule in the Azure Portal and re-run."
     }
     # An equivalent 'Allow app service subnet' rule was commented out at all three original call
     # sites; left out here deliberately. Traffic arriving over a private endpoint is not evaluated
@@ -1125,12 +1185,44 @@ function Invoke-NmeKuduCommand {
     # (not UTF8) below.
     $EncodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($ScriptText))
     $RemoteCommand = "powershell -NoProfile -EncodedCommand $EncodedCommand"
+
+    # Kudu's /api/command runs $RemoteCommand through cmd.exe, which enforces an ~8191-character total
+    # command-line length (CreateProcess's own limit is much higher; this is cmd.exe's own, lower one).
+    # Exceeding it is NOT reported as a clear error from Kudu: it returns HTTP 200 with ExitCode 1 and
+    # Error "The command line is too long.", which - unless the caller inspects those fields - looks
+    # identical to "the remote script ran and every target failed" (every result field blank). That is
+    # exactly what happened here: T01's connectivity gate failed on its first three live runs with a
+    # blank result for every target, and two earlier guesses (DNS/VNet-integration warm-up timing, then
+    # an unrelated Content-Type-header change) were tried and failed before Write-Verbose logging of
+    # the raw Response.Error surfaced this message. The immediate fix was trimming
+    # $RemoteScriptTemplate's payload size (see Test-NmeAppServiceConnectivity), but a real
+    # NME deployment can have longer FQDNs than this lab's, so fail clearly here too rather than risk
+    # the same silent-looking failure recurring for a customer with long resource names.
+    if ($RemoteCommand.Length -gt 8000) {
+        Throw "Invoke-NmeKuduCommand: the command to run on the app service worker is $($RemoteCommand.Length) characters, over the safe threshold for cmd.exe's command-line length limit (Kudu's /api/command runs commands through cmd.exe, which caps total command-line length at roughly 8191 characters). Sending it anyway would likely fail with Kudu returning ExitCode 1 and Error 'The command line is too long.', which the caller cannot distinguish from a real probe failure. This is almost always caused by long resource FQDNs multiplying across several targets; if this is the connectivity probe, consider it a sign this deployment's resource names are unusually long and would need protocol changes (e.g. writing the remote script to a temp file via Kudu's VFS API instead of -EncodedCommand) to support reliably."
+    }
+
     $Body = @{ command = $RemoteCommand; dir = 'site\wwwroot' } | ConvertTo-Json
-    $Headers = @{ Authorization = "Bearer $KuduToken"; 'Content-Type' = 'application/json' }
+    # Content-Type goes through -ContentType rather than $Headers - the idiomatic way to set it on
+    # Invoke-RestMethod. (This was tried as a fix for the failure described above before the real cause
+    # - command-line length - was found; keeping it since it is still correct practice, not because it
+    # was the fix.)
+    $Headers = @{ Authorization = "Bearer $KuduToken" }
 
     # Exceptions propagate to the caller - it decides what a failed Kudu call means (see the
     # connectivity gate below, which treats it as "could not run the probe", not as a failed probe).
-    $Response = Invoke-RestMethod -Method POST -Uri "https://$ScmHost/api/command" -Headers $Headers -Body $Body -TimeoutSec 180 -ErrorAction Stop
+    $Response = Invoke-RestMethod -Method POST -Uri "https://$ScmHost/api/command" -Headers $Headers -ContentType 'application/json' -Body $Body -TimeoutSec 180 -ErrorAction Stop
+
+    # Kudu's /api/command returns HTTP 200 even when the remote command itself failed (non-zero exit,
+    # or a cmd.exe-level rejection like the command-line-length case above) - ExitCode/Error are the
+    # only signal, and Invoke-RestMethod's -ErrorAction Stop above does not see either as an HTTP-level
+    # failure. Surface a non-zero exit as a real error rather than silently returning empty Output,
+    # which is what let the command-line-length bug look like "the probe ran and found nothing" for
+    # three live runs before Write-Verbose logging of these exact fields caught it.
+    if ($Response.ExitCode -ne 0) {
+        Throw "Invoke-NmeKuduCommand: the remote command on the app service worker exited with code $($Response.ExitCode): $($Response.Error)"
+    }
+
     return $Response.Output
 }
 
@@ -1159,6 +1251,33 @@ function Test-NmeAppServiceConnectivity {
     # so a single bad target (typo'd FQDN, a missing tool) cannot kill the loop and silently skip the
     # remaining targets. Emits exactly one '<fqdn>|<resolvedip>|<OK|FAIL>|<dns method>|<tcp method>'
     # line per target.
+    #
+    # DNS: tries each supplied DNS server in turn via `nameresolver <fqdn> <server>` until one returns
+    # something usable. Parsing approach matches NmeNetworkTest.ps1: keep lines that are not the
+    # "Server:" line and that end in an IPv4 address, trim, strip a leading "Addresses:" label, and
+    # take the first one. If nameresolver is missing or returns nothing usable, falls back to .NET DNS
+    # resolution, which cannot target a specific server (it uses whatever the worker is currently
+    # configured to use) and is therefore a weaker signal - reported as such via $dnsMethod ('dotnet').
+    #
+    # TCP: `tcpping <ip>:<port>` is tried first, since it's the tool Microsoft documents for testing
+    # outbound connectivity from an App Service worker. If it's missing or its output doesn't match,
+    # falls back to a raw TcpClient connect, whose behavior doesn't depend on a tool being present or
+    # on its output format.
+    #
+    # IMPORTANT - this template is embedded verbatim (via the __PLACEHOLDER__ substitutions below) into
+    # a command sent to the remote worker as `powershell -EncodedCommand <base64>`, executed through
+    # Kudu's /api/command endpoint, which runs it via cmd.exe. cmd.exe enforces an ~8191-character
+    # total command-line length; with realistic FQDNs for even 3 targets, the base64-encoded payload
+    # comfortably exceeds that once comments and blank lines are included, and Kudu's failure mode for
+    # an over-length command line is NOT an error it surfaces clearly - it returns HTTP 200 with
+    # ExitCode 1 and Error "The command line is too long.", which looks from the caller's side exactly
+    # like "the probe ran and found nothing reachable" (every result field blank) rather than "the
+    # request itself couldn't run". This bit T01 for real: two earlier (wrong) diagnoses - DNS/VNet
+    # warm-up timing, then an unrelated Content-Type header change - were tried and failed before the
+    # real cause was found via the diagnostic Write-Verbose calls in Invoke-NmeKuduCommand, which log
+    # the raw Response.Error. Keep this template comment-free and as short as correctness allows; do
+    # not "restore readability" by adding comments back inside the @' '@ block below. The commentary
+    # above (outside the string) is the right place for that.
     $RemoteScriptTemplate = @'
 $ErrorActionPreference = 'SilentlyContinue'
 $fqdns = @(__FQDNS__)
@@ -1167,14 +1286,10 @@ $dnsServers = @(__DNSSERVERS__)
 foreach ($fqdn in $fqdns) {
     $resolvedIp = ''
     $dnsMethod = ''
-    # Try each supplied DNS server in turn until one returns something usable.
     foreach ($dnsServer in $dnsServers) {
         try {
             $nrOutput = nameresolver $fqdn $dnsServer 2>$null
             if ($nrOutput) {
-                # Same parsing approach as NmeNetworkTest.ps1: keep lines that are not the "Server:"
-                # line and that end in an IPv4 address, trim, strip a leading "Addresses:" label, and
-                # take the first one.
                 $ips = ($nrOutput -split "`n" | Where-Object { $_ -notmatch 'Server:' -and $_ -match '\s*\d{1,3}(\.\d{1,3}){3}\s*$' } | ForEach-Object { $_.Trim() }) -replace 'Addresses:\s*', ''
                 $ips = @($ips | Where-Object { $_ })
                 if ($ips.Count -gt 0) {
@@ -1186,9 +1301,6 @@ foreach ($fqdn in $fqdns) {
         } catch {}
     }
     if (-not $resolvedIp) {
-        # nameresolver is missing or returned nothing usable. Fall back to .NET DNS resolution, which
-        # cannot target a specific server (it uses whatever the worker is currently configured to use)
-        # and is therefore a weaker signal than nameresolver - reported as such via $dnsMethod.
         try {
             $addr = [System.Net.Dns]::GetHostAddresses($fqdn) | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | Select-Object -First 1
             if ($addr) {
@@ -1197,14 +1309,11 @@ foreach ($fqdn in $fqdns) {
             }
         } catch {}
     }
-
     $tcpOk = $false
     $tcpMethod = ''
     if ($resolvedIp) {
         $port = $ports[$fqdn]
         try {
-            # tcpping is preferred because it is the tool Microsoft documents for testing outbound
-            # connectivity from an App Service worker.
             $tpOutput = tcpping "$($resolvedIp):$port" 2>$null
             if ($tpOutput -match 'Connected to') {
                 $tcpOk = $true
@@ -1212,8 +1321,6 @@ foreach ($fqdn in $fqdns) {
             }
         } catch {}
         if (-not $tcpMethod) {
-            # tcpping is missing or its output did not match - fall back to a raw socket connect,
-            # whose behavior does not depend on a tool being present or on its output format.
             try {
                 $client = New-Object System.Net.Sockets.TcpClient
                 $asyncResult = $client.BeginConnect($resolvedIp, [int]$port, $null, $null)
@@ -1282,13 +1389,36 @@ foreach ($fqdn in $fqdns) {
 }
 
 function Get-NmeConnectivityExpectedIps {
+    # CustomDnsConfigs is NOT a reliable source for a private endpoint's actual private IP - live
+    # testing (T01, P1-16) found it persistently empty (not just briefly, immediately after creation:
+    # still empty when re-checked several minutes later, well past any DNS-propagation window) on
+    # every endpoint in this deployment, key vault and sql alike, despite each having a fully correct
+    # private-dns-zone-group and a real A record already resolving to the right address. Azure does
+    # not populate this field for every private endpoint/resource-type combination - it is informational
+    # metadata about the DNS integration Azure itself set up, not a guaranteed property of the endpoint.
+    # The one value that is always present and authoritative once the endpoint exists is the private IP
+    # on its own network interface's IP configuration - fetched here as the fallback, and used first if
+    # CustomDnsConfigs is empty, since empty turned out to be the common case rather than the exception.
     param(
         [Parameter(Mandatory=$true)]$PrivateEndpoints,
         [Parameter(Mandatory=$true)][string]$PrivateLinkServiceId
     )
     $MatchedEndpoint = $PrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $PrivateLinkServiceId } | Select-Object -First 1
     if (-not $MatchedEndpoint) { return @() }
-    return @($MatchedEndpoint.CustomDnsConfigs.IpAddresses | Where-Object { $_ })
+    $Ips = @($MatchedEndpoint.CustomDnsConfigs.IpAddresses | Where-Object { $_ })
+    if ($Ips.Count -gt 0) { return $Ips }
+
+    $NicIps = @()
+    foreach ($NicRef in $MatchedEndpoint.NetworkInterfaces) {
+        try {
+            $Nic = Get-AzNetworkInterface -ResourceId $NicRef.Id -ErrorAction Stop
+            $NicIps += @($Nic.IpConfigurations | ForEach-Object { $_.PrivateIpAddress } | Where-Object { $_ })
+        }
+        catch {
+            Write-Verbose "Get-NmeConnectivityExpectedIps: could not read the network interface for private endpoint '$($MatchedEndpoint.Name)' ($($_.Exception.Message)); falling back to no expected IP for this target."
+        }
+    }
+    return @($NicIps | Where-Object { $_ })
 }
 
 #### main script ####
@@ -1309,19 +1439,56 @@ catch {
     $ExistingPrivateEndpoints = Get-AzPrivateEndpoint -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
 }
 
-# Check if vnet created
-$VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue
+# Check if vnet created. Nerdio Manager's own resource group is searched first, deliberately: a
+# subscription-wide lookup by name alone will happily bind an unrelated VNet that merely shares the
+# name, in a resource group belonging to a different deployment or a different team. That is not
+# hypothetical - it was found live on a shared test subscription, where an unrelated
+# 'nmw-private-vnet' in another resource group (created by someone else running this same script with
+# its default parameters, so it even had the same address range) was picked up by a greenfield run.
+# Only the region check below stopped it; had that VNet been in NME's region, this script would have
+# created every private endpoint, linked every DNS zone, and VNet-integrated Nerdio Manager into a
+# stranger's network. The >1-match Throw is no protection against it, because a single match in the
+# wrong resource group looks unambiguous.
+$VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
+if (-not $VNet) {
+    # Not in NME's resource group. An existing VNet elsewhere is explicitly supported (see the
+    # PrivateLinkVnetName parameter description), so fall back to a subscription-wide search - but
+    # say plainly which resource group the VNet came from, since that is the one case where this
+    # script operates on a network it does not own.
+    $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ErrorAction SilentlyContinue
+    if ($VNet -and @($VNet).Count -eq 1) {
+        Write-Warning "VNet '$PrivateLinkVnetName' was not found in Nerdio Manager's resource group '$NmeRg', but a VNet with that name exists in resource group '$($VNet.ResourceGroupName)'. This run will add private endpoints, DNS zone links and service endpoints to that VNet, and will VNet-integrate Nerdio Manager into it. If that is not the VNet you intended, stop and re-run with a VNet name that is unique to this deployment - a same-named VNet belonging to another deployment or team would otherwise be modified."
+    }
+}
 if ($VNet) {
-    if ($VNet.Count -gt 1) {
+    if (@($VNet).Count -gt 1) {
         Throw "Found more than one VNet with name $PrivateLinkVnetName. Please remove any VNets no longer in use or use a unique name."
     }
     Write-Output ("VNet {0} found in resource group {1}." -f $VNet.Name, $VNet.ResourceGroupName)
- 
+
+    # Region check runs here, before any subnet is added below, so a wrong-region VNet is rejected
+    # without this script having modified the customer's existing VNet at all. App Service regional
+    # VNet integration requires the VNet to be in the same region as the app service plan, so a
+    # mismatch can never succeed - confirmed live (T09), where the pre-fix behavior warned and
+    # carried on to create 16 private endpoints and 6 DNS zones before ARM rejected the integration
+    # with "Location <x> of virtual network <y> does not match requested location <z>". The
+    # VNet-creation branch below needs no equivalent check: it creates the VNet in $NmeRegion.
+    if ($VNet.Location -ne $NmeRegion) {
+        throw "The VNet '$PrivateLinkVnetName' is in region '$($VNet.Location)' but Nerdio Manager is deployed in '$NmeRegion'. App Service regional VNet integration requires the VNet to be in the same region as the app service plan, so this run cannot succeed. Use a VNet in the '$NmeRegion' region."
+    }
+
     $vnetUpdated = $false
     # Check if subnet created
     $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet -ErrorAction SilentlyContinue
     if ($PrivateEndpointSubnet) {
         Write-Output ("Subnet {0} found in VNet {1}." -f $PrivateEndpointSubnet.Name, $VNet.Name)
+        # A subnet delegated to another service cannot hold private endpoints, and this script has no
+        # safe way to remove someone else's delegation. Fail here rather than at the first
+        # New-AzPrivateEndpoint call, which is after the DNS zone region has already run.
+        $PeSubnetDelegations = @($PrivateEndpointSubnet.Delegations | Where-Object { $_.ServiceName })
+        if ($PeSubnetDelegations.Count) {
+            throw "The private endpoint subnet '$PrivateEndpointSubnetName' in VNet '$PrivateLinkVnetName' is delegated to $($PeSubnetDelegations.ServiceName -join ', '). A delegated subnet cannot host private endpoints. Use a subnet with no delegation for PrivateEndpointSubnetName, or remove the delegation, and re-run."
+        }
     } else {
         Write-Output "Creating private endpoint subnet"
         $PrivateEndpointSubnet = New-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnetRange -PrivateEndpointNetworkPoliciesFlag Disabled 
@@ -1333,6 +1500,34 @@ if ($VNet) {
     $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet -ErrorAction SilentlyContinue
     if ($AppServiceSubnet) {
         Write-Output ("Subnet {0} found in VNet {1}." -f $AppServiceSubnet.Name, $VNet.Name)
+
+        # Both of these conditions make the VNet-integration region below impossible, and both are
+        # knowable now - before the DNS zone and private endpoint regions do their work. The
+        # delegation case would otherwise surface as a failure on Add-AzDelegation (a subnet takes
+        # only one delegation); the size case as an ARM rejection when enabling integration.
+        $AppSubnetDelegations = @($AppServiceSubnet.Delegations | Where-Object { $_.ServiceName -and $_.ServiceName -ne 'Microsoft.Web/serverFarms' })
+        if ($AppSubnetDelegations.Count) {
+            throw "The app service subnet '$AppServiceSubnetName' in VNet '$PrivateLinkVnetName' is delegated to $($AppSubnetDelegations.ServiceName -join ', '), but App Service regional VNet integration requires it to be delegated to Microsoft.Web/serverFarms. A subnet supports only one delegation, so this script cannot add the required one. Use a different subnet for AppServiceSubnetName, or remove the conflicting delegation, and re-run."
+        }
+        $AppSubnetPrivateEndpoints = @($AppServiceSubnet.PrivateEndpoints | Where-Object { $_ })
+        if ($AppSubnetPrivateEndpoints.Count) {
+            throw "The app service subnet '$AppServiceSubnetName' in VNet '$PrivateLinkVnetName' contains private endpoints. App Service regional VNet integration requires a subnet delegated to Microsoft.Web/serverFarms, and a delegated subnet cannot also hold private endpoints. Use a dedicated, empty subnet for AppServiceSubnetName - it must be different from PrivateEndpointSubnetName - and re-run."
+        }
+        # Azure requires at least a /28 for regional VNet integration. Below that, integration is
+        # rejected outright; between /28 and /26 it works but leaves little headroom, which matters
+        # because the range cannot be widened later without removing every app's integration first
+        # (see the AppServiceSubnetRange parameter description).
+        # AddressPrefix is a List[string] on current Az.Network but has been a plain string on older
+        # versions, where indexing [0] would return the first character instead of the first prefix.
+        # Select-Object -First 1 gives the first prefix in either shape.
+        $AppSubnetPrefix = $AppServiceSubnet.AddressPrefix | Select-Object -First 1
+        $AppSubnetPrefixLength = [int](($AppSubnetPrefix -split '/')[1])
+        if ($AppSubnetPrefixLength -gt 28) {
+            throw "The app service subnet '$AppServiceSubnetName' in VNet '$PrivateLinkVnetName' is a /$AppSubnetPrefixLength. App Service regional VNet integration requires a /28 or larger, and a /26 is the Microsoft recommendation for the up-to-four Nerdio Manager apps that integrate into this subnet. Recreate the subnet with a larger range and re-run."
+        }
+        elseif ($AppSubnetPrefixLength -gt 26) {
+            Write-Warning "The app service subnet '$AppServiceSubnetName' is a /$AppSubnetPrefixLength. This meets the /28 minimum for App Service regional VNet integration but is below the recommended /26 - scale-out and in-place plan changes each temporarily double IP consumption, and up to four Nerdio Manager apps integrate into this one subnet. The range cannot be widened by re-running this script; the subnet would have to be recreated, which means removing the VNet integration from every app first."
+        }
     } else {
         Write-Output "Creating app service subnet"
         $AppServiceSubnet = New-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -AddressPrefix $AppServiceSubnetRange 
@@ -1353,12 +1548,11 @@ if ($VNet) {
     $VNet = New-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NmeRg -Location $NmeRegion -AddressPrefix $VnetAddressRange -Subnet $PrivateEndpointSubnet,$AppServiceSubnet
 }
 
-# Private endpoints must be created in the same region as the VNet holding their subnet, which is
-# not necessarily the region NME is deployed in when an existing VNet is supplied.
+# Private endpoints must be created in the same region as the VNet holding their subnet, which is not
+# necessarily the region NME is deployed in when an existing VNet is supplied. The mismatch case is
+# rejected in the existing-VNet branch above, before that VNet is touched; this just captures the
+# location for the New-AzPrivateEndpoint calls.
 $VnetLocation = $VNet.Location
-if ($VnetLocation -ne $NmeRegion) {
-    Write-Warning "The VNet '$PrivateLinkVnetName' is in region '$VnetLocation' but Nerdio Manager is deployed in '$NmeRegion'. Private endpoints will be created in '$VnetLocation' to match the VNet, but App Service regional VNet integration requires the VNet to be in the same region as the app service plan, so the VNet integration steps later in this script are likely to fail. Use a VNet in the '$NmeRegion' region."
-}
 # Capture the VNet's resource group so later lookups are unambiguous - an existing VNet may live in
 # a different resource group than NME, and fetching by name alone can match VNets in other groups.
 $VnetRg = $VNet.ResourceGroupName
@@ -1402,6 +1596,61 @@ function Get-NmePeerVnetLinkName {
         $LinkName = $LinkName.Substring(0, 80 - ($Suffix.Length + 1)) + "-$Suffix"
     }
     return $LinkName
+}
+
+function Get-NmeLinkedNetworkSubnetIds {
+    # Restricted mode allows the cssa storage account's public endpoint only from subnets belonging
+    # to VNets NME considers linked (tagged <prefix>_OBJECT_TYPE = LINKED_NETWORK), across every
+    # subscription this service principal can read - not just the one NME runs in. Azure storage
+    # VirtualNetworkRule entries are scoped to a specific subnet, and only take effect if that
+    # subnet has the Microsoft.Storage service endpoint enabled; this function does not enable it on
+    # subnets it doesn't own (see the P2-10 precedent for why), it only reports and skips subnets
+    # that lack it.
+    param(
+        [Parameter(Mandatory=$true)][string]$Prefix
+    )
+    $SubnetIds = @()
+    $OriginalContext = Get-AzContext
+    try {
+        $Subscriptions = Get-AzSubscription -ErrorAction Stop
+        foreach ($Subscription in $Subscriptions) {
+            try {
+                Set-AzContext -SubscriptionId $Subscription.Id -ErrorAction Stop | Out-Null
+            }
+            catch {
+                Write-Warning "Skipping subscription '$($Subscription.Name)' ($($Subscription.Id)) while looking for LINKED_NETWORK VNets: could not set context. $($_.Exception.Message)"
+                continue
+            }
+            $LinkedVnets = Get-AzVirtualNetwork -ErrorAction SilentlyContinue |
+                Where-Object { $null -ne $_.Tag } |
+                Where-Object { $_.Tag["$Prefix`_OBJECT_TYPE"] -eq 'LINKED_NETWORK' }
+            foreach ($LinkedVnet in $LinkedVnets) {
+                # Both service endpoint values are accepted for a storage VirtualNetworkRule:
+                # 'Microsoft.Storage' is the regional endpoint, 'Microsoft.Storage.Global' the
+                # cross-region one (strictly broader - it reaches storage accounts in any region,
+                # which is exactly the case a linked AVD VNet in another region needs). Matching only
+                # the regional value would skip a subnet that is in fact correctly configured, warn
+                # that it cannot be allowed through the firewall, and then cut off its access when
+                # default-deny is applied. Seen live on this lab's own shared VNet.
+                $StorageServiceEndpointNames = @('Microsoft.Storage', 'Microsoft.Storage.Global')
+                $EnabledSubnets = @($LinkedVnet.Subnets | Where-Object {
+                    $SubnetServices = @($_.ServiceEndpoints.Service)
+                    @($SubnetServices | Where-Object { $StorageServiceEndpointNames -contains $_ }).Count -gt 0
+                })
+                if (-not $EnabledSubnets.Count) {
+                    Write-Warning "LINKED_NETWORK VNet '$($LinkedVnet.Name)' (subscription $($Subscription.Id)) has no subnet with the Microsoft.Storage or Microsoft.Storage.Global service endpoint enabled, so CssaStorageAccount=Restricted cannot allow it through the storage firewall. Enable Microsoft.Storage on the subnet that needs access and re-run."
+                    continue
+                }
+                $SubnetIds += $EnabledSubnets | Select-Object -ExpandProperty Id
+            }
+        }
+    }
+    finally {
+        # Restore the caller's subscription context unconditionally - everything after this call
+        # in the script assumes it is running against the NME subscription.
+        Set-AzContext -Context $OriginalContext | Out-Null
+    }
+    return @($SubnetIds | Select-Object -Unique)
 }
 
 #region create DNS zones and links
@@ -1560,7 +1809,20 @@ if (-not $SkipDNS) {
 }
 #endregion
 
-
+# Storage sub-resource -> resolved private DNS zone object, built here rather than immediately after
+# the zone objects are first resolved: on a greenfield run $StorageDnsZone/$TableDnsZone are $null at
+# that point and only get assigned real zone objects inside the "create DNS zones and links" region
+# above (New-AzPrivateDnsZone). A hashtable literal copies the variable's value at construction time,
+# not a live reference to the variable, so building this map before that region ran was capturing the
+# pre-creation $null and handing New-NmeStoragePrivateEndpoint a zone with no ResourceId - which is
+# exactly the "Cannot validate argument on parameter 'PrivateDnsZoneId'" failure this caused on a
+# real greenfield run. Must stay after the DNS zone creation region. $TableDnsZone is only resolved/
+# created when $NmeRtiStorageAccountName is set, so it may still be $null here - that matches today's
+# behavior, since nothing but the RTI account uses the table zone.
+$StorageSubresourceDnsZones = @{
+    blob  = $StorageDnsZone
+    table = $TableDnsZone
+}
 
 #region create private endpoints
 # $VNet is already current here - nothing between its creation/resolution above and this point
@@ -1768,7 +2030,8 @@ if ($NmeScriptedActionsAccountName) {
         Write-Output "Skipping scripted actions DNS zone group configuration (SkipDNS enabled)"
     }
 
-    if ($MakeSaStoragePrivate) {
+    if ($CssaStorageAccount -ne 'Public') {
+        # Both Private and Restricted need the private endpoint - only Public skips it.
         # Get scripted actions storage account (resolved in Set-NmeVars via tag, then name pattern, then the NMW_RESOURCE fallback tag)
         $ScriptedActionsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeScriptedActionsStorageAccountName -ErrorAction SilentlyContinue
         # throw error if no scripted actions storage account found
@@ -2025,15 +2288,16 @@ $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName
 # PublicNetworkAccess is Disabled those rules are inert regardless - so in the steady state this is
 # redundant with the private-endpoint model. They are kept deliberately, as a documented fallback for
 # the window before the make-private region runs (and for a deployment that stops short of it, for
-# example one that never sets MakeSaStoragePrivate), during which the app service can still reach key
-# vault, sql and storage over the service endpoint. Mixing the two models is what makes this region
+# example one that leaves CssaStorageAccount at Public), during which the app service can still reach
+# key vault, sql and storage over the service endpoint. Mixing the two models is what makes this region
 # hard to read; this comment is the record of that being a decision rather than an oversight.
 $ServiceEndpoints = @('Microsoft.KeyVault', 'Microsoft.Sql', 'Microsoft.Web')
-if ($MakeSaStoragePrivate) {
+if ($CssaStorageAccount -ne 'Public') {
+    # Both Private and Restricted need this - only Public skips it.
     $ServiceEndpoints += 'Microsoft.Storage'
 }
 # Union with what is already on the subnet so a previous run's service endpoints (for example
-# Microsoft.Storage from a run with MakeSaStoragePrivate enabled) are not removed.
+# Microsoft.Storage from a run with CssaStorageAccount not Public) are not removed.
 $ExistingServiceEndpoints = @(@($PrivateEndpointSubnet.ServiceEndpoints.Service) | Where-Object { $_ })
 $ServiceEndpoints = @($ExistingServiceEndpoints + $ServiceEndpoints | Select-Object -Unique)
 
@@ -2388,17 +2652,78 @@ if ($NmeCclKeyVaultName) {
 Disable-NmeSqlPublicAccess -ServerName $NmeSqlServerName -ResourceGroupName $NmeRg -PrivateEndpointSubnetId $PrivateEndpointSubnet.id -DisplayName 'SQL'
 Set-NmeSqlBaseline -ResourceGroupName $NmeRg -ServerName $NmeSqlServerName -DisplayName 'SQL'
 
-if ($MakeSaStoragePrivate) {
-    # check if deny rule for storage exists (resolved in Set-NmeVars via tag, then name pattern, then the NMW_RESOURCE fallback tag)
-    $StorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeScriptedActionsStorageAccountName -ErrorAction SilentlyContinue
-    if ($StorageAccount.PublicNetworkAccess -eq 'Disabled') {
-        Write-Output "Storage public access is already disabled"
+# resolved in Set-NmeVars via tag, then name pattern, then the NMW_RESOURCE fallback tag
+switch ($CssaStorageAccount) {
+    'Public' {
+        Write-Output "Scripted actions storage account left public (CssaStorageAccount=Public)"
     }
-    else {
-        Write-Output "Disabling storage public access"
-        Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $StorageAccount.StorageAccountName | Out-Null
+    'Private' {
+        $StorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeScriptedActionsStorageAccountName -ErrorAction SilentlyContinue
+        if ($StorageAccount.PublicNetworkAccess -eq 'Disabled') {
+            Write-Output "Storage public access is already disabled"
+        }
+        else {
+            Write-Output "Disabling storage public access"
+            Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $StorageAccount.StorageAccountName | Out-Null
+        }
+        Set-NmeStorageBaseline -ResourceGroupName $NmeRg -StorageAccountName $StorageAccount.StorageAccountName -DisplayName 'scripted actions'
     }
-    Set-NmeStorageBaseline -ResourceGroupName $NmeRg -StorageAccountName $StorageAccount.StorageAccountName -DisplayName 'scripted actions'
+    'Restricted' {
+        $StorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeScriptedActionsStorageAccountName -ErrorAction SilentlyContinue
+        if ($StorageAccount.PublicNetworkAccess -eq 'Disabled') {
+            # This script never relaxes a restriction it, or an earlier run of it, already applied.
+            # Moving from Private back to Restricted is a deliberate loosening and must be done by
+            # a human in the portal first.
+            Write-Warning "The scripted actions storage account's public network access is Disabled, most likely from an earlier run with CssaStorageAccount=Private. This script will not re-enable it automatically. Re-enable public network access on the storage account in the Azure Portal, then re-run with CssaStorageAccount=Restricted to apply the firewall-restricted configuration."
+        }
+        else {
+            $AllowedSubnetIds = Get-NmeLinkedNetworkSubnetIds -Prefix $Prefix
+            # Each rule is added independently and its failure is contained. Azure rejects a storage
+            # VNet rule when the subnet uses the *regional* Microsoft.Storage service endpoint and
+            # sits in a region other than the storage account's (or its paired region):
+            # "ResourceBeingAcledHasWrongLocation: Microsoft.Storage resources in <region> cannot be
+            # ACL-ed to virtual network <id> in <other region>". A multi-region AVD deployment - a
+            # linked VNet in a different region than Nerdio Manager - hits this on the *default*
+            # parameter value, and with $ErrorActionPreference = 'Stop' an unhandled failure here
+            # aborted the run in the middle of the make-private region, after the key vault and sql
+            # server had already been locked down but before the storage baseline and the remaining
+            # components were done. Found live (2026-08-12) against a real northcentralus linked VNet
+            # while Nerdio Manager was in eastus2. Being unable to allow one AVD VNet through a
+            # firewall must never leave the deployment half-configured, so each failure is reported
+            # and the run continues.
+            $AllowedSubnetCount = 0
+            $SkippedSubnetIds = @()
+            foreach ($SubnetId in $AllowedSubnetIds) {
+                try {
+                    Add-AzStorageAccountNetworkRule -ResourceGroupName $NmeRg -Name $StorageAccount.StorageAccountName -VirtualNetworkResourceId $SubnetId -ErrorAction Stop | Out-Null
+                    $AllowedSubnetCount++
+                }
+                catch {
+                    $SkippedSubnetIds += $SubnetId
+                    Write-Warning "Could not allow subnet '$SubnetId' through the scripted actions storage account's firewall: $($_.Exception.Message) A storage account can only be ACL-ed to a subnet in its own region (or that region's pair) when the subnet uses the regional Microsoft.Storage service endpoint. To allow a subnet in a different region, enable the cross-region Microsoft.Storage.Global service endpoint on it instead, then re-run. This subnet will lose access to the storage account over the public endpoint until then."
+                }
+            }
+            Update-AzStorageAccountNetworkRuleSet -ResourceGroupName $NmeRg -Name $StorageAccount.StorageAccountName -DefaultAction Deny
+            Write-Output "Restricted the scripted actions storage account's public endpoint to $AllowedSubnetCount of $($AllowedSubnetIds.Count) linked-network subnet(s)"
+            if ($SkippedSubnetIds.Count) {
+                Write-Warning "$($SkippedSubnetIds.Count) linked-network subnet(s) could not be allowed through the scripted actions storage account's firewall (see the warnings above for each). The account's public endpoint is now default-deny, so those subnets cannot reach it. Session hosts on them will fail to run scripted actions that need this storage account until either the cross-region Microsoft.Storage.Global service endpoint is enabled on the subnet, or the VNet is peered to the private endpoint VNet (see PeerVnetIds)."
+            }
+        }
+        Set-NmeStorageBaseline -ResourceGroupName $NmeRg -StorageAccountName $StorageAccount.StorageAccountName -DisplayName 'scripted actions'
+    }
+}
+
+if (($CssaStorageAccount -ne 'Public') -and (Test-NmeCurrentJobIsDownloadMode)) {
+    # This job itself just proved download mode still works right now - it downloaded its own script
+    # from this storage account before reaching this line. That does not mean the next one will: once
+    # public access is restricted here, Azure Automation's sandbox worker (not inside any customer VNet)
+    # can no longer reach the storage account to fetch a download-mode job's script body, so every
+    # subsequent scripted action - including a later run of this one - would silently fail to download
+    # and do nothing, with no exception raised. Inline Script mode avoids this entirely: the script body
+    # is sent as a job parameter instead of fetched from storage.
+    $CssaInlineModeWarning = "CssaStorageAccount=$CssaStorageAccount restricts the scripted actions storage account's public network access. This job ran in download mode (its script was fetched from that same storage account's public endpoint), so every future scripted-action run in this environment - including a later run of this script - will fail to download its script and silently do nothing unless the Azure Runbook Execution Mode is switched to Inline Script first. In Nerdio Manager, go to Settings > Environment > Nerdio tab > Azure Runbooks Scripted Actions, expand the section, and turn on Enable Parameter Execution. See https://nmehelp.getnerdio.com/hc/en-us/articles/26124302308109-Scripted-actions-for-Azure-Runbooks#Runbook-Execution-Mode---Inline-Script"
+    Write-Warning $CssaInlineModeWarning
+    Write-Output $CssaInlineModeWarning
 }
 
 # make ccl storage account private
