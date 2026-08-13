@@ -727,22 +727,22 @@ Function Check-LastRunResults {
                         # -ErrorAction Continue is required here: this script sets $ErrorActionPreference = 'Stop',
                         # and a bare Write-Error would throw under that preference, aborting the replay before
                         # reaching the "App Service restarted" message and wait-time calculation below. Do not remove.
-                        Write-Error "[previous run] $Summary" -ErrorAction Continue
+                        Write-Error "[completed run] $Summary" -ErrorAction Continue
                     }
                     'Warning' {
-                        Write-Warning "[previous run] $Summary"
+                        Write-Warning "[completed run] $Summary"
                     }
                     'Verbose' {
-                        Write-Verbose "[previous run] $Summary"
+                        Write-Verbose "[completed run] $Summary"
                     }
                     'Debug' {
-                        Write-Debug "[previous run] $Summary"
+                        Write-Debug "[completed run] $Summary"
                     }
                     'Progress' {
                         # Progress records were transient UI state in the original run; skip them in the replay.
                     }
                     default {
-                        Write-Output "[previous run] $Summary"
+                        Write-Output "[completed run] $Summary"
                     }
                 }
             }
