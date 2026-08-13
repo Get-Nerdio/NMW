@@ -20,6 +20,10 @@ What this script does NOT make private, so that the scope is not overstated:
  - Azure Monitor, Application Insights and Log Analytics. Making these private requires an Azure Monitor Private Link
    Scope, which is out of scope for this script by design - configure AMPLS separately if you need it.
  - Azure Resource Manager control plane traffic (management.azure.com), which is not private-linkable here.
+ - The Real Time Insights app service's SCM/Kudu endpoint under RtiAppService=Restricted. Restricted firewalls the
+   main site's public endpoint but deliberately leaves ScmSiteUseMainSiteRestrictionConfig untouched, so the SCM
+   site keeps its own (unrestricted) config - consistent with the rest of this script, which never restricts an
+   SCM endpoint. Noted here so the gap is visible rather than assumed closed.
 
 Alongside disabling public network access, this script applies two Microsoft baseline settings to the storage accounts
 it manages (minimum TLS version 1.2, and anonymous public blob access disallowed) and sets a minimum TLS version of 1.2
@@ -81,14 +85,22 @@ the Intune Insights app service: Intune Insights is iframed into the Nerdio Mana
 reachable by exactly the same clients as the primary app service, and tying it to the same parameter keeps the two
 consistent instead of letting an admin create a broken combination. If the Cost Calculator (CCL) is deployed, its web
 app is always made private, regardless of this parameter: the only thing that communicates with it is the primary
-Nerdio Manager web app, over the private network. Real Time Insights has its own MakeRtiAppServicePrivate parameter,
-defaulting to 'false', because making it private cuts off any reporting endpoint (AVD session hosts, Windows 365 Cloud
-PCs, Intune-managed devices) that lacks line-of-sight to the private VNet, and that failure is silent - see the
-MakeRtiAppServicePrivate parameter description for details before enabling it.
+Nerdio Manager web app, over the private network. Real Time Insights has its own RtiAppService parameter, defaulting
+to 'Public', with a three-way 'Public' / 'Restricted' / 'Private' shape rather than a boolean: 'Restricted' is a
+middle ground that keeps the public endpoint reachable but firewalls it to linked-network subnets with the
+Microsoft.Web service endpoint enabled, because making RTI private outright cuts off any reporting endpoint (AVD
+session hosts, Windows 365 Cloud PCs, Intune-managed devices) that lacks line-of-sight to the private VNet, and that
+failure is silent - see the RtiAppService parameter description for details before choosing Restricted or Private.
 
-This script never re-enables public network access on anything. Setting MakeAppServicePrivate or
-MakeRtiAppServicePrivate back to 'false' on a later run leaves the corresponding app service private; re-enable
-public access in the Azure Portal if that is what you want.
+At a glance, which of the four app services is private under which parameter: the primary Nerdio Manager app service
+and Intune Insights both follow MakeAppServicePrivate; Cost Calculator (CCL) is always fully private, unconditionally;
+Real Time Insights follows its own RtiAppService parameter (Public/Restricted/Private) rather than
+MakeAppServicePrivate. Nothing ties RtiAppService to MakeAppServicePrivate, so a deployment can, for example, leave
+the primary app service public while restricting RTI, or the reverse.
+
+This script never re-enables public network access on anything. Setting MakeAppServicePrivate to 'false', or
+RtiAppService back to a less restrictive value, on a later run leaves the corresponding app service exactly as an
+earlier run last left it; re-enable public access in the Azure Portal if that is what you want.
 
 If the VNet and Subnets already exist, the existing resources will be used and address ranges will not be changed. 
 If they do not exist, they will be created. Names for resources created by this script, such as private endpoint names, 
@@ -162,10 +174,10 @@ its subnet will lose access to the storage account under Restricted, so enable i
     "IsRequired": false,
     "DefaultValue": "false"
   },
-  "MakeRtiAppServicePrivate": {
-    "Description": "WARNING: If set to true, only clients with network line-of-sight to the private VNet or a peered VNet will be able to reach the Real Time Insights app service. Every endpoint that reports to Real Time Insights - AVD session hosts, Windows 365 Cloud PCs and Intune-managed devices - must be able to reach it to post metrics, and devices that cannot will simply stop reporting with no error surfaced in Nerdio Manager; the symptom is missing history noticed weeks later. Intune-managed devices are typically internet-based and roaming with no VNet line-of-sight, and Cloud PCs on a Microsoft-hosted network have no customer VNet at all - neither can be recovered by peering. AVD session hosts in customer Azure VNets can be recovered by peering their VNet via PeerVnetIds and ensuring DNS resolves the app service FQDN to the private endpoint. Leave this false unless you have confirmed every reporting population can reach the private VNet. Note that setting this back to false does NOT re-enable public access on a later run - this script never re-enables public network access implicitly. To undo it, re-enable public network access on the app service in the Azure Portal.",
+  "RtiAppService": {
+    "Description": "Controls network access to the Real Time Insights app service. 'Public' (default): the app service gets a private endpoint but its public endpoint is left exactly as found. 'Restricted': the public endpoint stays reachable but is firewalled to subnets on VNets tagged as linked to Nerdio Manager (LINKED_NETWORK) that already have the Microsoft.Web service endpoint enabled - found across every subscription this service principal can read. 'Private': public network access is disabled entirely, so only clients with network line-of-sight to the private VNet or a peered VNet can reach it. WARNING for both Restricted and Private: every endpoint that reports to Real Time Insights - AVD session hosts, Windows 365 Cloud PCs and Intune-managed devices - must be able to reach it to post metrics, and devices that cannot will simply stop reporting with no error surfaced in Nerdio Manager; the symptom is missing history noticed weeks later. Intune-managed devices are typically internet-based and roaming with no VNet line-of-sight, and Cloud PCs on a Microsoft-hosted network have no customer VNet at all - neither can be recovered by peering or by a firewall rule, under either Restricted or Private. AVD session hosts in customer Azure VNets can be covered by Restricted if their subnet has the Microsoft.Web service endpoint enabled, or by peering their VNet via PeerVnetIds and ensuring DNS resolves the app service FQDN to the private endpoint. This script never relaxes a more restrictive setting back to a less restrictive one on a later run: moving from Private to Restricted or Public requires re-enabling public network access on the app service in the Azure Portal first.",
     "IsRequired": false,
-    "DefaultValue": "false"
+    "DefaultValue": "Public"
   },
   "SkipDNS": {
     "Description": "WARNING: Skip all DNS operations including checking for existing private DNS zones, creating new DNS zones, and linking DNS zones to VNets. Use this only if you are managing DNS yourself. With this set to true the private endpoints are created with no DNS zone groups, so nothing resolves to them until you configure DNS - while the same run may still disable public network access on the key vault and sql server, which locks Nerdio Manager out. The private DNS records must exist and resolve before the make-private steps take effect. If that happens, re-enable public network access on the key vault and sql server in the Azure Portal, fix DNS, and re-run.",
@@ -197,6 +209,20 @@ if ($MissingModules.Count) {
     Throw "This script requires the following PowerShell modules, which are not available in this Automation account: $($MissingModules -join ', '). Add them to the Nerdio Manager scripted actions automation account (Modules -> Browse gallery) and re-run this script."
 }
 
+# Cheap and permanently useful for field diagnosis of exactly this class of question: the Azure
+# Automation sandbox runs PowerShell 5.1 by default, which rules out ForEach-Object -Parallel and
+# Start-ThreadJob for any future concurrency work in this file (see SPEC-E5-Parallelize.md) - this
+# line is what lets that be confirmed from a customer's job log instead of assumed.
+Write-Output "PowerShell $($PSVersionTable.PSVersion) / $($PSVersionTable.PSEdition)"
+
+# A1 timing instrumentation. $ScriptStart anchors the total elapsed time reported at the very end of
+# the script; each #region below sets its own $RegionStart and reports its own elapsed time the same
+# way. Write-Output, not Write-Verbose - a customer's slow run must be diagnosable from the log they
+# already have, not from a re-run with -Verbose. This is measurement only and changes no other
+# behavior; it exists so a future decision to parallelize part of this file starts from data about
+# which region is actually slow, rather than a guess.
+$ScriptStart = Get-Date
+
 # Nerdio Manager passes these parameters in as strings. Normalize them to real booleans once, here,
 # rather than comparing against 'True' at each use site with inconsistent casing. Doing the
 # conversion up front also means a typo like "yes" or "1" is caught before the script changes
@@ -218,15 +244,18 @@ function ConvertTo-NmeBoolean {
     }
 }
 
-# Three-valued equivalent of ConvertTo-NmeBoolean above, for CssaStorageAccount: 'Restricted' is the
-# default rather than throwing on blank, since NME may pass an empty string for a parameter left at
-# its default rather than the literal default value.
-function ConvertTo-NmeCssaStorageMode {
+# Three-valued equivalent of ConvertTo-NmeBoolean above, for the Public/Restricted/Private access
+# parameters. The default is passed in rather than hardcoded because NME may pass an empty string
+# for a parameter left at its default rather than the literal default value, and the two parameters
+# that use this have different defaults: CssaStorageAccount defaults to Restricted,
+# RtiAppService to Public.
+function ConvertTo-NmeAccessMode {
     param(
         [string]$Value,
-        [Parameter(Mandatory=$true)][string]$Name
+        [Parameter(Mandatory=$true)][string]$Name,
+        [Parameter(Mandatory=$true)][ValidateSet('Public','Restricted','Private')][string]$Default
     )
-    if ([string]::IsNullOrWhiteSpace($Value)) { return 'Restricted' }
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $Default }
     switch ($Value.Trim().ToLowerInvariant()) {
         'restricted' { return 'Restricted' }
         'public'     { return 'Public' }
@@ -235,10 +264,10 @@ function ConvertTo-NmeCssaStorageMode {
     }
 }
 
-$CssaStorageAccount       = ConvertTo-NmeCssaStorageMode -Value $CssaStorageAccount -Name 'CssaStorageAccount'
-$MakeAppServicePrivate    = ConvertTo-NmeBoolean -Value $MakeAppServicePrivate    -Name 'MakeAppServicePrivate'
-$MakeRtiAppServicePrivate = ConvertTo-NmeBoolean -Value $MakeRtiAppServicePrivate -Name 'MakeRtiAppServicePrivate'
-$SkipDNS                  = ConvertTo-NmeBoolean -Value $SkipDNS                  -Name 'SkipDNS'
+$CssaStorageAccount    = ConvertTo-NmeAccessMode -Value $CssaStorageAccount -Name 'CssaStorageAccount' -Default 'Restricted'
+$RtiAppService         = ConvertTo-NmeAccessMode -Value $RtiAppService      -Name 'RtiAppService'      -Default 'Public'
+$MakeAppServicePrivate = ConvertTo-NmeBoolean    -Value $MakeAppServicePrivate -Name 'MakeAppServicePrivate'
+$SkipDNS               = ConvertTo-NmeBoolean    -Value $SkipDNS               -Name 'SkipDNS'
 
 # Reject parameter combinations where one parameter silently discards another, before anything is
 # created. Both of these were previously accepted and then quietly ignored further down, which looks
@@ -1147,6 +1176,81 @@ function New-NmeStoragePrivateEndpoint {
     return $Endpoint
 }
 
+function New-NmeComponentPrivateEndpoint {
+    # Generalizes the resolve -> Find-NmeExistingPrivateEndpoint -> create-if-absent -> DNS-zone-group
+    # pattern that New-NmeStoragePrivateEndpoint above proves for the four storage accounts, to the other
+    # 13 non-storage components (key vaults, sql servers, automation accounts, app services) in the "create
+    # private endpoints" region. Those 13 hand-maintained copies are exactly where P1-2, P1-22 and P1-23
+    # lived - collapsing them here removes the copy-paste substrate that produced all three, rather than
+    # just patching them again. This function depends on script scope: it reads $ExistingPrivateEndpoints,
+    # $NmeRg, $VnetLocation, $PrivateEndpointSubnet and $SkipDNS, all of which must be set before this
+    # function is called.
+    #
+    # Every Write-Output/Write-Warning string is supplied by the caller rather than derived from a single
+    # display-name parameter, because the 13 blocks this replaces were never worded consistently - for
+    # example "Found RTI App Service private endpoint" vs "Found RTI SQL private endpoint", or "Configuring
+    # RTI Key Vault service connection and private endpoint" vs "Configuring keyvault service connection and
+    # private endpoint" (different capitalization and phrasing per component, not a typo to fix). Deriving
+    # these from one parameter would change text a customer's job log already shows. Future editors: if a
+    # message genuinely needs to change, do that as its own reviewed change - not as a side effect of adding
+    # a new caller here.
+    param(
+        [Parameter(Mandatory=$true)][string]$TargetResourceId,
+        [Parameter(Mandatory=$true)][string]$GroupId,
+        [Parameter(Mandatory=$true)][string]$FindDisplayName,          # passed through to Find-NmeExistingPrivateEndpoint's own -DisplayName; used only in its multiple-match error text
+        [Parameter(Mandatory=$true)][string]$FoundMessage,
+        [Parameter(Mandatory=$true)][string]$ConfiguringMessage,
+        [Parameter(Mandatory=$true)][string]$PrivateEndpointName,
+        [Parameter(Mandatory=$true)][string]$ServiceConnectionName,
+        [Parameter(Mandatory=$true)][string]$DnsZoneName,
+        $DnsZone,
+        [Parameter(Mandatory=$true)][string]$DnsZoneGroupName,
+        [Parameter(Mandatory=$true)][string]$FoundDnsZoneGroupMessage,
+        [Parameter(Mandatory=$true)][string]$ConfiguringDnsZoneGroupMessage,
+        [Parameter(Mandatory=$true)][string]$SkipDnsZoneGroupMessage
+    )
+    # Existence check always goes through Find-NmeExistingPrivateEndpoint (P1-22) rather than a bare
+    # -contains/Where-Object check on $ExistingPrivateEndpoints - two of the 13 blocks this replaces did the
+    # latter, only calling Find- inside the true branch to fetch the object for later use. That duplicated
+    # the match logic and, unlike Find-, could not detect (and Throw on) more than one pre-existing endpoint
+    # already pointing at the same resource. Routing every component through the one Find- call fixes that
+    # without changing either branch's output text.
+    $Endpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $TargetResourceId -DisplayName $FindDisplayName
+    if ($Endpoint) {
+        Write-Output $FoundMessage
+    }
+    else {
+        Write-Output $ConfiguringMessage
+        $ServiceConnection = New-AzPrivateLinkServiceConnection -Name $ServiceConnectionName -PrivateLinkServiceId $TargetResourceId -GroupId $GroupId
+        $Endpoint = New-AzPrivateEndpoint -Name $PrivateEndpointName -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ServiceConnection
+    }
+
+    if (-not $SkipDNS) {
+        # Use the resolved endpoint's own .ResourceGroupName (P1-23) and .Name (P1-2) for BOTH the Get and
+        # the New below - never $NmeRg and never a name-convention variable. A pre-existing endpoint found
+        # by PrivateLinkServiceId is not necessarily in $NmeRg or named per this script's convention (that
+        # is the whole point of supporting one under a different name in another resource group), so a
+        # zone-group call scoped to the wrong resource group or name fails with a plain "resource not
+        # found" that gives no hint the endpoint was simply looked for in the wrong place. Do not swap
+        # either of these back to a convention variable or to $NmeRg - that is exactly how P1-2/P1-23
+        # happened the first time.
+        $DnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $Endpoint.ResourceGroupName -PrivateEndpointName $Endpoint.Name -ErrorAction SilentlyContinue
+        if ($DnsZoneGroup) {
+            Write-Output $FoundDnsZoneGroupMessage
+        }
+        else {
+            Write-Output $ConfiguringDnsZoneGroupMessage
+            $Config = New-AzPrivateDnsZoneConfig -Name $DnsZoneName -PrivateDnsZoneId $DnsZone.ResourceId
+            $DnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $Endpoint.ResourceGroupName -PrivateEndpointName $Endpoint.Name -Name $DnsZoneGroupName -PrivateDnsZoneConfig $Config
+        }
+    }
+    else {
+        Write-Output $SkipDnsZoneGroupMessage
+    }
+
+    return $Endpoint
+}
+
 function Test-NmePrivateDnsResolution {
     # FALLBACK ONLY, used when the real connectivity probe (Test-NmeAppServiceConnectivity, run from
     # inside the VNet-integrated app service worker via Kudu) could not run - most commonly because
@@ -1651,15 +1755,21 @@ function Get-NmePeerVnetLinkName {
 }
 
 function Get-NmeLinkedNetworkSubnetIds {
-    # Restricted mode allows the cssa storage account's public endpoint only from subnets belonging
-    # to VNets NME considers linked (tagged <prefix>_OBJECT_TYPE = LINKED_NETWORK), across every
-    # subscription this service principal can read - not just the one NME runs in. Azure storage
-    # VirtualNetworkRule entries are scoped to a specific subnet, and only take effect if that
-    # subnet has the Microsoft.Storage service endpoint enabled; this function does not enable it on
-    # subnets it doesn't own (see the P2-10 precedent for why), it only reports and skips subnets
-    # that lack it.
+    # Restricted mode allows a resource's public endpoint only from subnets belonging to VNets NME
+    # considers linked (tagged <prefix>_OBJECT_TYPE = LINKED_NETWORK), across every subscription this
+    # service principal can read - not just the one NME runs in. The firewall rule types this feeds
+    # (storage VirtualNetworkRule, App Service access-restriction rule) are both scoped to a specific
+    # subnet and only take effect if that subnet has the caller's required service endpoint enabled;
+    # this function does not enable it on subnets it doesn't own (see the P2-10 precedent for why),
+    # it only reports and skips subnets that lack it.
     param(
-        [Parameter(Mandatory=$true)][string]$Prefix
+        [Parameter(Mandatory=$true)][string]$Prefix,
+        # Accepted service endpoint values for the caller's firewall type. Storage accepts both
+        # 'Microsoft.Storage' (regional) and 'Microsoft.Storage.Global' (cross-region); App Service
+        # access restrictions accept 'Microsoft.Web' only - there is no .Global variant.
+        [Parameter(Mandatory=$true)][string[]]$ServiceEndpointNames,
+        # Named in the per-VNet warning so it says which feature cannot cover the VNet.
+        [Parameter(Mandatory=$true)][string]$PurposeDescription
     )
     $SubnetIds = @()
     $OriginalContext = Get-AzContext
@@ -1677,20 +1787,12 @@ function Get-NmeLinkedNetworkSubnetIds {
                 Where-Object { $null -ne $_.Tag } |
                 Where-Object { $_.Tag["$Prefix`_OBJECT_TYPE"] -eq 'LINKED_NETWORK' }
             foreach ($LinkedVnet in $LinkedVnets) {
-                # Both service endpoint values are accepted for a storage VirtualNetworkRule:
-                # 'Microsoft.Storage' is the regional endpoint, 'Microsoft.Storage.Global' the
-                # cross-region one (strictly broader - it reaches storage accounts in any region,
-                # which is exactly the case a linked AVD VNet in another region needs). Matching only
-                # the regional value would skip a subnet that is in fact correctly configured, warn
-                # that it cannot be allowed through the firewall, and then cut off its access when
-                # default-deny is applied. Seen live on this lab's own shared VNet.
-                $StorageServiceEndpointNames = @('Microsoft.Storage', 'Microsoft.Storage.Global')
                 $EnabledSubnets = @($LinkedVnet.Subnets | Where-Object {
                     $SubnetServices = @($_.ServiceEndpoints.Service)
-                    @($SubnetServices | Where-Object { $StorageServiceEndpointNames -contains $_ }).Count -gt 0
+                    @($SubnetServices | Where-Object { $ServiceEndpointNames -contains $_ }).Count -gt 0
                 })
                 if (-not $EnabledSubnets.Count) {
-                    Write-Warning "LINKED_NETWORK VNet '$($LinkedVnet.Name)' (subscription $($Subscription.Id)) has no subnet with the Microsoft.Storage or Microsoft.Storage.Global service endpoint enabled, so CssaStorageAccount=Restricted cannot allow it through the storage firewall. Enable Microsoft.Storage on the subnet that needs access and re-run."
+                    Write-Warning "LINKED_NETWORK VNet '$($LinkedVnet.Name)' (subscription $($Subscription.Id)) has no subnet with the $($ServiceEndpointNames -join ' or ') service endpoint enabled, so $PurposeDescription cannot allow it through. Enable $($ServiceEndpointNames[0]) on the subnet that needs access and re-run."
                     continue
                 }
                 $SubnetIds += $EnabledSubnets | Select-Object -ExpandProperty Id
@@ -1705,7 +1807,45 @@ function Get-NmeLinkedNetworkSubnetIds {
     return @($SubnetIds | Select-Object -Unique)
 }
 
+function Get-NmeAccessRestrictionRuleName {
+    # Stable, derived from the subnet's resource id so the same subnet always maps to the same rule
+    # name across runs - an index-based name collides the moment the set of linked subnets changes
+    # between runs (see P1-6 for the same bug in DNS zone link names). Length-capped for the App
+    # Service rule-name limit; the hash suffix keeps same-prefix names distinct.
+    #
+    # The authoritative Azure limit for an access-restriction rule name could not be confirmed against
+    # documentation or the Az module (Add-AzWebAppAccessRestrictionRule's -Name parameter carries no
+    # length or character-set validation). 32 characters is used here as a conservative cap - well
+    # under every candidate figure seen for App Service name-like fields - rather than risk a run-time
+    # rejection from a limit that turns out to be lower than assumed. If Azure accepts longer names in
+    # practice, this only means the readable prefix is shorter than it could be; it does not affect
+    # correctness, since the hash suffix guarantees uniqueness regardless of where the truncation cut
+    # falls.
+    param(
+        [Parameter(Mandatory=$true)][string]$SubnetId
+    )
+    $Parts = $SubnetId -split '/'
+    # .../virtualNetworks/<vnet>/subnets/<subnet> - both names are always present on a well-formed
+    # subnet resource id.
+    $VnetName = $Parts[8]
+    $SubnetName = $Parts[10]
+    $RuleName = "nme-linked-$VnetName-$SubnetName"
+    $MaxLength = 32
+    if ($RuleName.Length -gt $MaxLength) {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $Suffix = ([System.BitConverter]::ToString(
+                $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($SubnetId))
+            ).Replace('-', '')).Substring(0, 8)
+        }
+        finally { $sha256.Dispose() }
+        $RuleName = $RuleName.Substring(0, $MaxLength - ($Suffix.Length + 1)) + "-$Suffix"
+    }
+    return $RuleName
+}
+
 #region create DNS zones and links
+$RegionStart = Get-Date
 if (-not $SkipDNS) {
     # Create and link private dns zone for key vault
     if ($existingDNSZonesSubId) {
@@ -1837,12 +1977,16 @@ if (-not $SkipDNS) {
         }
         # The app service private DNS zone is shared by all four web apps (NME, CCL, Intune Insights and RTI) -
         # they all resolve the same *.azurewebsites.net/.us hostname pattern through this one zone. So a peer
-        # VNet needs this link whenever ANY of those app services is made private, not only the primary one.
-        # Without this, MakeRtiAppServicePrivate = true with MakeAppServicePrivate = false would lock down RTI
-        # while leaving peered VNets (e.g. an AVD VNet) unable to resolve its FQDN - the exact silent-failure
-        # scenario the MakeRtiAppServicePrivate parameter description warns about, for the one population that
-        # was supposed to be recoverable by peering.
-        if ($MakeAppServicePrivate -or $MakeRtiAppServicePrivate){
+        # VNet needs this link whenever ANY of those app services is made private, not only the primary one -
+        # and RtiAppService=Restricted needs it too, not just Private: a peered VNet that resolves RTI's FQDN
+        # to the private endpoint reaches it over the private path (bypassing the firewall entirely), while a
+        # non-peered VNet instead needs the Restricted firewall rule from the switch below. Both paths are
+        # intended and this link is cheap to create, so it is added whenever RtiAppService is not Public.
+        # Without this, RtiAppService=Restricted or Private with MakeAppServicePrivate=false would leave RTI
+        # firewalled or private while peered VNets (e.g. an AVD VNet) remain unable to resolve its FQDN - the
+        # exact silent-failure scenario the RtiAppService parameter description warns about, for the one
+        # population that was supposed to be recoverable by peering.
+        if ($MakeAppServicePrivate -or ($RtiAppService -ne 'Public')){
             $AppServicePrviateDnsZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $AppServiceDnsZoneName -ErrorAction SilentlyContinue
             $AppServiceMissingLinks = $VnetIds | Where-Object { $AppServicePrviateDnsZoneLink.VirtualNetworkId -notcontains $_ }
             if ($AppServiceMissingLinks) {
@@ -1859,6 +2003,7 @@ if (-not $SkipDNS) {
         $context = Set-AzContext -Subscription $NmeSubscriptionId
     }
 }
+Write-Output "DNS zones and links region completed in $([math]::Round(((Get-Date) - $RegionStart).TotalSeconds, 1)) seconds"
 #endregion
 
 # Storage sub-resource -> resolved private DNS zone object, built here rather than immediately after
@@ -1877,6 +2022,7 @@ $StorageSubresourceDnsZones = @{
 }
 
 #region create private endpoints
+$RegionStart = Get-Date
 # $VNet is already current here - nothing between its creation/resolution above and this point
 # modifies it - so it is not re-fetched. Get-AzVirtualNetworkSubnetConfig reads the in-memory object
 # and costs no API call.
@@ -1885,202 +2031,86 @@ $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName
  
 # check if keyvault private endpoint created
 $KeyVault = Get-AzKeyVault -VaultName $KeyVaultName -ErrorAction SilentlyContinue
-if ($ExistingPrivateEndpoints.PrivateLinkServiceConnections.PrivateLinkServiceId -contains $KeyVault.ResourceId) {
-    Write-Output "Found Key Vault private endpoint"
-    $KvPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $KeyVault.ResourceId -DisplayName "the Nerdio Manager key vault"
-} 
-else {
-    Write-Output "Configuring keyvault service connection and private endpoint"
-    $KvServiceConnection = New-AzPrivateLinkServiceConnection -Name $KvServiceConnectionName -PrivateLinkServiceId $KeyVault.ResourceId -GroupId vault 
-    $KvPrivateEndpoint = New-AzPrivateEndpoint -Name "$KvPrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $KvServiceConnection
-}
-
-
-# check if keyvault dns zone group created
-if (-not $SkipDNS) {
-    $KvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $KvPrivateEndpoint.ResourceGroupName -PrivateEndpointName $KvPrivateEndpoint.Name -ErrorAction SilentlyContinue
-    if ($KvDnsZoneGroup) {
-        Write-Output "Found Key Vault DNS zone group"
-    } else {
-        Write-Output "Configuring keyvault DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name $KeyVaultDnsZoneName  -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
-        # Use the discovered endpoint's actual .Name (not this script's naming convention): a pre-existing private
-        # endpoint is matched by PrivateLinkServiceId, so its name may not follow the convention, and the DNS zone
-        # group must be attached to the endpoint that actually exists.
-        $KvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $KvPrivateEndpoint.ResourceGroupName -PrivateEndpointName $KvPrivateEndpoint.Name -Name "$KvDnsZoneGroupName" -PrivateDnsZoneConfig $config
-    }
-} else {
-    Write-Output "Skipping Key Vault DNS zone group configuration (SkipDNS enabled)"
-}
+$KvPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $KeyVault.ResourceId -GroupId vault `
+    -FindDisplayName "the Nerdio Manager key vault" `
+    -FoundMessage "Found Key Vault private endpoint" -ConfiguringMessage "Configuring keyvault service connection and private endpoint" `
+    -PrivateEndpointName "$KvPrivateEndpointName" -ServiceConnectionName $KvServiceConnectionName `
+    -DnsZoneName $KeyVaultDnsZoneName -DnsZone $KeyVaultDnsZone -DnsZoneGroupName "$KvDnsZoneGroupName" `
+    -FoundDnsZoneGroupMessage "Found Key Vault DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring keyvault DNS zone group" `
+    -SkipDnsZoneGroupMessage "Skipping Key Vault DNS zone group configuration (SkipDNS enabled)"
 
 # check if ccl key vault exists
 if ($NmeCclKeyVaultName) {
     # get ccl key vault
     $NmeCclKeyVault = Get-AzKeyVault -VaultName $NmeCclKeyVaultName
-    # check if ccl key vault private endpoint exists in $ExistingPrivateEndpoints
-    if ($ExistingPrivateEndpoints.PrivateLinkServiceConnections.PrivateLinkServiceId -contains $NmeCclKeyVault.ResourceId) {
-        Write-Output "Found CCL Key Vault private endpoint"
-        $CclKvPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $NmeCclKeyVault.ResourceId -DisplayName "the CCL key vault"
-    }
-    else {
-        Write-Output "Configuring CCL keyvault service connection and private endpoint"
-        $CclKvServiceConnection = New-AzPrivateLinkServiceConnection -Name $CclKvServiceConnectionName -PrivateLinkServiceId $NmeCclKeyVault.ResourceId -GroupId vault
-        $CclKvPrivateEndpoint = New-AzPrivateEndpoint -Name "$CclKvPrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $CclKvServiceConnection
-    }
-    # check if ccl keyvault dns zone group created
-    if (-not $SkipDNS) {
-        $CclKvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $CclKvPrivateEndpoint.ResourceGroupName -PrivateEndpointName $CclKvPrivateEndpoint.Name -ErrorAction SilentlyContinue
-        if ($CclKvDnsZoneGroup) {
-            Write-Output "Found CCL Key Vault DNS zone group"
-        } else {
-            Write-Output "Configuring CCL keyvault DNS zone group"
-            $Config = New-AzPrivateDnsZoneConfig -Name $KeyVaultDnsZoneName  -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
-            $CclKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $CclKvPrivateEndpoint.ResourceGroupName -PrivateEndpointName $CclKvPrivateEndpoint.Name -Name "$CclKvDnsZoneGroupName" -PrivateDnsZoneConfig $config
-        }
-    } else {
-        Write-Output "Skipping CCL Key Vault DNS zone group configuration (SkipDNS enabled)"
-    }
+    $CclKvPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $NmeCclKeyVault.ResourceId -GroupId vault `
+        -FindDisplayName "the CCL key vault" `
+        -FoundMessage "Found CCL Key Vault private endpoint" -ConfiguringMessage "Configuring CCL keyvault service connection and private endpoint" `
+        -PrivateEndpointName "$CclKvPrivateEndpointName" -ServiceConnectionName $CclKvServiceConnectionName `
+        -DnsZoneName $KeyVaultDnsZoneName -DnsZone $KeyVaultDnsZone -DnsZoneGroupName "$CclKvDnsZoneGroupName" `
+        -FoundDnsZoneGroupMessage "Found CCL Key Vault DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring CCL keyvault DNS zone group" `
+        -SkipDnsZoneGroupMessage "Skipping CCL Key Vault DNS zone group configuration (SkipDNS enabled)"
 }
 
 # check if intune insights key vault exists
 if ($NmeIiKeyVaultName) {
     # get intune insights key vault
     $NmeIiKeyVault = Get-AzKeyVault -VaultName $NmeIiKeyVaultName
-    # create if intune insights key vault private endpoint created
-    $IiKvPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $NmeIiKeyVault.ResourceId -DisplayName "the Intune Insights key vault"
-    if ($IiKvPrivateEndpoint) {
-        Write-Output "Found Intune Insights Key Vault private endpoint"
-    } 
-    else {
-        Write-Output "Configuring Intune Insights keyvault service connection and private endpoint"
-        $IiKvServiceConnection = New-AzPrivateLinkServiceConnection -Name $IiKvServiceConnectionName -PrivateLinkServiceId $NmeIiKeyVault.ResourceId -GroupId vault 
-        $IiKvPrivateEndpoint = New-AzPrivateEndpoint -Name "$IiKvPrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $IiKvServiceConnection
-    }
-    # check if intune insights keyvault dns zone group created
-    if (-not $SkipDNS) {
-        $IiKvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $IiKvPrivateEndpoint.ResourceGroupName -PrivateEndpointName $IiKvPrivateEndpoint.Name -ErrorAction SilentlyContinue
-        if ($IiKvDnsZoneGroup) {
-            Write-Output "Found Intune Insights Key Vault DNS zone group"
-        } else {
-            Write-Output "Configuring Intune Insights keyvault DNS zone group"
-            $Config = New-AzPrivateDnsZoneConfig -Name $KeyVaultDnsZoneName  -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
-            $IiKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $IiKvPrivateEndpoint.ResourceGroupName -PrivateEndpointName $IiKvPrivateEndpoint.Name -Name "$IiKvDnsZoneGroupName" -PrivateDnsZoneConfig $Config
-        }
-    } else {
-        Write-Output "Skipping Intune Insights Key Vault DNS zone group configuration (SkipDNS enabled)"
-    }
+    $IiKvPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $NmeIiKeyVault.ResourceId -GroupId vault `
+        -FindDisplayName "the Intune Insights key vault" `
+        -FoundMessage "Found Intune Insights Key Vault private endpoint" -ConfiguringMessage "Configuring Intune Insights keyvault service connection and private endpoint" `
+        -PrivateEndpointName "$IiKvPrivateEndpointName" -ServiceConnectionName $IiKvServiceConnectionName `
+        -DnsZoneName $KeyVaultDnsZoneName -DnsZone $KeyVaultDnsZone -DnsZoneGroupName "$IiKvDnsZoneGroupName" `
+        -FoundDnsZoneGroupMessage "Found Intune Insights Key Vault DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring Intune Insights keyvault DNS zone group" `
+        -SkipDnsZoneGroupMessage "Skipping Intune Insights Key Vault DNS zone group configuration (SkipDNS enabled)"
 }
 
 $SqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeSqlServerName
 
 #check if sql private endpoint created
-$SqlPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $SqlServer.ResourceId -DisplayName "the Nerdio Manager sql server"
-if ($SqlPrivateEndpoint) {
-    Write-Output "Found SQL private endpoint"
-} 
-else {
-    Write-Output "Configuring sql service connection and private endpoint"
-    $SqlServiceConnection = New-AzPrivateLinkServiceConnection -Name $SqlServiceConnectionName -PrivateLinkServiceId $SqlServer.ResourceId -GroupId sqlserver 
-    $SqlPrivateEndpoint = New-AzPrivateEndpoint -Name "$SqlPrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $SqlServiceConnection 
-}
-
-# check if sql dns zone group created
-if (-not $SkipDNS) {
-    $SqlDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $SqlPrivateEndpoint.ResourceGroupName -PrivateEndpointName $SqlPrivateEndpoint.Name -ErrorAction SilentlyContinue
-    if ($SqlDnsZoneGroup) {
-        Write-Output "Found SQL DNS zone group"
-    } else {
-        Write-Output "Configuring sql DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name $SqlDnsZoneName -PrivateDnsZoneId $SqlDnsZone.ResourceId
-        $SqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $SqlPrivateEndpoint.ResourceGroupName -PrivateEndpointName $SqlPrivateEndpoint.Name -Name "$SqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
-    }
-} else {
-    Write-Output "Skipping SQL DNS zone group configuration (SkipDNS enabled)"
-}
+$SqlPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $SqlServer.ResourceId -GroupId sqlserver `
+    -FindDisplayName "the Nerdio Manager sql server" `
+    -FoundMessage "Found SQL private endpoint" -ConfiguringMessage "Configuring sql service connection and private endpoint" `
+    -PrivateEndpointName "$SqlPrivateEndpointName" -ServiceConnectionName $SqlServiceConnectionName `
+    -DnsZoneName $SqlDnsZoneName -DnsZone $SqlDnsZone -DnsZoneGroupName "$SqlDnsZoneGroupName" `
+    -FoundDnsZoneGroupMessage "Found SQL DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring sql DNS zone group" `
+    -SkipDnsZoneGroupMessage "Skipping SQL DNS zone group configuration (SkipDNS enabled)"
 
 # if $nmeIisqlServerName is set, create private endpoint for intune insights sql server
 if ($NmeIiSqlServerName) {
     $IiSqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeIiSqlServerName
-    # check if intune insights sql private endpoint created
-    $IiSqlPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $IiSqlServer.ResourceId -DisplayName "the Intune Insights sql server"
-    if ($IiSqlPrivateEndpoint) {
-        Write-Output "Found Intune Insights SQL private endpoint"
-    } 
-    else {
-        Write-Output "Configuring Intune Insights sql service connection and private endpoint"
-        $IiSqlServiceConnection = New-AzPrivateLinkServiceConnection -Name $IiSqlServiceConnectionName -PrivateLinkServiceId $IiSqlServer.ResourceId -GroupId sqlserver 
-        $IiSqlPrivateEndpoint = New-AzPrivateEndpoint -Name "$IiSqlPrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $IiSqlServiceConnection 
-    }
-    # check if intune insights sql dns zone group created
-    if (-not $SkipDNS) {
-        $IiSqlDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $IiSqlPrivateEndpoint.ResourceGroupName -PrivateEndpointName $IiSqlPrivateEndpoint.Name -ErrorAction SilentlyContinue
-        if ($IiSqlDnsZoneGroup) {
-            Write-Output "Found Intune Insights SQL DNS zone group"
-        } else {
-            Write-Output "Configuring Intune Insights sql DNS zone group"
-            $Config = New-AzPrivateDnsZoneConfig -Name $SqlDnsZoneName -PrivateDnsZoneId $SqlDnsZone.ResourceId
-            $IiSqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $IiSqlPrivateEndpoint.ResourceGroupName -PrivateEndpointName $IiSqlPrivateEndpoint.Name -Name "$IiSqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
-        }
-    } else {
-        Write-Output "Skipping Intune Insights SQL DNS zone group configuration (SkipDNS enabled)"
-    }
+    $IiSqlPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $IiSqlServer.ResourceId -GroupId sqlserver `
+        -FindDisplayName "the Intune Insights sql server" `
+        -FoundMessage "Found Intune Insights SQL private endpoint" -ConfiguringMessage "Configuring Intune Insights sql service connection and private endpoint" `
+        -PrivateEndpointName "$IiSqlPrivateEndpointName" -ServiceConnectionName $IiSqlServiceConnectionName `
+        -DnsZoneName $SqlDnsZoneName -DnsZone $SqlDnsZone -DnsZoneGroupName "$IiSqlDnsZoneGroupName" `
+        -FoundDnsZoneGroupMessage "Found Intune Insights SQL DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring Intune Insights sql DNS zone group" `
+        -SkipDnsZoneGroupMessage "Skipping Intune Insights SQL DNS zone group configuration (SkipDNS enabled)"
 }
 
 
 # check if automation account private endpoint is created
 $NmeAutomationAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Automation/automationAccounts/$NmeAutomationAccountName"
-$AutomationPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $NmeAutomationAccountResourceId -DisplayName "the Nerdio Manager automation account"
-if ($AutomationPrivateEndpoint) {
-    Write-Output "Found Automation private endpoint"
-} 
-else {
-    Write-Output "Configuring automation service connection and private endpoint"
-    $AutomationServiceConnection = New-AzPrivateLinkServiceConnection -Name $AutomationServiceConnectionName -PrivateLinkServiceId $NmeAutomationAccountResourceId -GroupId DSCAndHybridWorker 
-    $AutomationPrivateEndpoint = New-AzPrivateEndpoint -Name "$AutomationPrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $AutomationServiceConnection 
-
-}
-# check if automation account dns zone group created
-if (-not $SkipDNS) {
-    $AutomationDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $AutomationPrivateEndpoint.ResourceGroupName -PrivateEndpointName $AutomationPrivateEndpoint.Name -ErrorAction SilentlyContinue
-    if ($AutomationDnsZoneGroup) {
-        Write-Output "Found Automation DNS zone group"
-    } else {
-        Write-Output "Configuring automation DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name $AutomationDnsZoneName -PrivateDnsZoneId $AutomationDnsZone.ResourceId
-        $AutomationDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $AutomationPrivateEndpoint.ResourceGroupName -PrivateEndpointName $AutomationPrivateEndpoint.Name -Name "$AutomationDnsZoneGroupName" -PrivateDnsZoneConfig $config
-    }
-} else {
-    Write-Output "Skipping Automation DNS zone group configuration (SkipDNS enabled)"
-}
+$AutomationPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $NmeAutomationAccountResourceId -GroupId DSCAndHybridWorker `
+    -FindDisplayName "the Nerdio Manager automation account" `
+    -FoundMessage "Found Automation private endpoint" -ConfiguringMessage "Configuring automation service connection and private endpoint" `
+    -PrivateEndpointName "$AutomationPrivateEndpointName" -ServiceConnectionName $AutomationServiceConnectionName `
+    -DnsZoneName $AutomationDnsZoneName -DnsZone $AutomationDnsZone -DnsZoneGroupName "$AutomationDnsZoneGroupName" `
+    -FoundDnsZoneGroupMessage "Found Automation DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring automation DNS zone group" `
+    -SkipDnsZoneGroupMessage "Skipping Automation DNS zone group configuration (SkipDNS enabled)"
 
 
 # Get scripted action automation account
        
 if ($NmeScriptedActionsAccountName) {
     $ScriptedActionsAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Automation/automationAccounts/$NmeScriptedActionsAccountName"
-    # check if scripted action automation account private endpoint is created
-    $ScriptedActionsPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $ScriptedActionsAccountResourceId -DisplayName "the scripted actions automation account"
-    if ($ScriptedActionsPrivateEndpoint) {
-        Write-Output "Found scripted actions private endpoint"
-    } 
-    else {
-        Write-Output "Configuring scripted actions service connection and private endpoint"
-        $ScriptedActionsServiceConnection = New-AzPrivateLinkServiceConnection -Name $ScriptedActionsServiceConnectionName -PrivateLinkServiceId $ScriptedActionsAccountResourceId -GroupId DSCAndHybridWorker 
-        $ScriptedActionsPrivateEndpoint = New-AzPrivateEndpoint -Name $ScriptedActionsPrivateEndpointName -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ScriptedActionsServiceConnection 
-    }
-    # check if scripted action automation account dns zone group created
-    if (-not $SkipDNS) {
-        $ScriptedActionsDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $ScriptedActionsPrivateEndpoint.ResourceGroupName -PrivateEndpointName $ScriptedActionsPrivateEndpoint.Name -ErrorAction SilentlyContinue
-        if ($ScriptedActionsDnsZoneGroup) {
-            Write-Output "Found scripted actions DNS zone group"
-        } else {
-            Write-Output "Configuring scripted actions DNS zone group"
-            $Config = New-AzPrivateDnsZoneConfig -Name $AutomationDnsZoneName -PrivateDnsZoneId $AutomationDnsZone.ResourceId
-            $ScriptedActionsDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $ScriptedActionsPrivateEndpoint.ResourceGroupName -PrivateEndpointName $ScriptedActionsPrivateEndpoint.Name -Name "$ScriptedActionsDnsZoneGroupName" -PrivateDnsZoneConfig $config
-        }
-    } else {
-        Write-Output "Skipping scripted actions DNS zone group configuration (SkipDNS enabled)"
-    }
+    $ScriptedActionsPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $ScriptedActionsAccountResourceId -GroupId DSCAndHybridWorker `
+        -FindDisplayName "the scripted actions automation account" `
+        -FoundMessage "Found scripted actions private endpoint" -ConfiguringMessage "Configuring scripted actions service connection and private endpoint" `
+        -PrivateEndpointName $ScriptedActionsPrivateEndpointName -ServiceConnectionName $ScriptedActionsServiceConnectionName `
+        -DnsZoneName $AutomationDnsZoneName -DnsZone $AutomationDnsZone -DnsZoneGroupName "$ScriptedActionsDnsZoneGroupName" `
+        -FoundDnsZoneGroupMessage "Found scripted actions DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring scripted actions DNS zone group" `
+        -SkipDnsZoneGroupMessage "Skipping scripted actions DNS zone group configuration (SkipDNS enabled)"
 
     if ($CssaStorageAccount -ne 'Public') {
         # Both Private and Restricted need the private endpoint - only Public skips it.
@@ -2118,142 +2148,59 @@ else {
 
 $AppService = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
 # check if app service private endpoint is created
-$AppServicePrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $AppService.id -DisplayName "the Nerdio Manager app service"
-if ($AppServicePrivateEndpoint) {
-    Write-Output "Found App Service private endpoint"
-} 
-else {
-    Write-Output "Configuring app service service connection and private endpoint"
-    $AppServiceResourceId = $AppService.id
-    $AppServiceServiceConnection = New-AzPrivateLinkServiceConnection -Name $AppServiceServiceConnectionName -PrivateLinkServiceId $AppServiceResourceId -GroupId sites 
-    $AppServicePrivateEndpoint = New-AzPrivateEndpoint -Name "$AppServicePrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $AppServiceServiceConnection 
-}
-# check if app service dns zone group created
-if (-not $SkipDNS) {
-    $AppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $AppServicePrivateEndpoint.ResourceGroupName -PrivateEndpointName $AppServicePrivateEndpoint.Name -ErrorAction SilentlyContinue
-    if ($AppServiceDnsZoneGroup) {
-        Write-Output "Found App Service DNS zone group"
-    } else {
-        Write-Output "Configuring app service DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
-        $AppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $AppServicePrivateEndpoint.ResourceGroupName -PrivateEndpointName $AppServicePrivateEndpoint.Name -Name $AppServicePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
-    }
-} else {
-    Write-Output "Skipping App Service DNS zone group configuration (SkipDNS enabled)"
-}
+$AppServicePrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $AppService.id -GroupId sites `
+    -FindDisplayName "the Nerdio Manager app service" `
+    -FoundMessage "Found App Service private endpoint" -ConfiguringMessage "Configuring app service service connection and private endpoint" `
+    -PrivateEndpointName "$AppServicePrivateEndpointName" -ServiceConnectionName $AppServiceServiceConnectionName `
+    -DnsZoneName $AppServiceDnsZoneName -DnsZone $AppServiceDnsZone -DnsZoneGroupName $AppServicePrivateDnsZoneGroupName `
+    -FoundDnsZoneGroupMessage "Found App Service DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring app service DNS zone group" `
+    -SkipDnsZoneGroupMessage "Skipping App Service DNS zone group configuration (SkipDNS enabled)"
 
 
 if ($NmeCclWebAppName) {
     $CclAppService = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeCclWebAppName
-    # check if ccl app service private endpoint is created
-    $CclAppServicePrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $CclAppService.id -DisplayName "the CCL app service"
-    if ($CclAppServicePrivateEndpoint) {
-        Write-Output "Found CCL App Service private endpoint"
-    } 
-    else {
-        Write-Output "Configuring CCL app service service connection and private endpoint"
-        $CclAppServiceResourceId = $CclAppService.id
-        $CclAppServiceServiceConnection = New-AzPrivateLinkServiceConnection -Name $CclAppServiceServiceConnectionName -PrivateLinkServiceId $CclAppServiceResourceId -GroupId sites 
-        $CclAppServicePrivateEndpoint = New-AzPrivateEndpoint -Name "$CclAppServicePrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $CclAppServiceServiceConnection 
-    }
-    # check if ccl app service dns zone group created
-    if (-not $SkipDNS) {
-        $CclAppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $CclAppServicePrivateEndpoint.ResourceGroupName -PrivateEndpointName $CclAppServicePrivateEndpoint.Name -ErrorAction SilentlyContinue
-        if ($CclAppServiceDnsZoneGroup) {
-            Write-Output "Found CCL App Service DNS zone group"
-        } else {
-            Write-Output "Configuring CCL app service DNS zone group"
-            $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
-            $CclAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $CclAppServicePrivateEndpoint.ResourceGroupName -PrivateEndpointName $CclAppServicePrivateEndpoint.Name -Name $CclAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
-        }
-    } else {
-        Write-Output "Skipping CCL App Service DNS zone group configuration (SkipDNS enabled)"
-    }
+    $CclAppServicePrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $CclAppService.id -GroupId sites `
+        -FindDisplayName "the CCL app service" `
+        -FoundMessage "Found CCL App Service private endpoint" -ConfiguringMessage "Configuring CCL app service service connection and private endpoint" `
+        -PrivateEndpointName "$CclAppServicePrivateEndpointName" -ServiceConnectionName $CclAppServiceServiceConnectionName `
+        -DnsZoneName $AppServiceDnsZoneName -DnsZone $AppServiceDnsZone -DnsZoneGroupName $CclAppServiceDnsZoneGroupName `
+        -FoundDnsZoneGroupMessage "Found CCL App Service DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring CCL app service DNS zone group" `
+        -SkipDnsZoneGroupMessage "Skipping CCL App Service DNS zone group configuration (SkipDNS enabled)"
 }
 # add section for NmeiiWebApp
 if ($NmeIiWebAppName) {
     $IiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeIiWebAppName
-    # check if intune insights app service private endpoint is created
-    $IiAppServicePrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $IiWebApp.id -DisplayName "the Intune Insights app service"
-    if ($IiAppServicePrivateEndpoint) {
-        Write-Output "Found Intune Insights App Service private endpoint"
-    } 
-    else {
-        Write-Output "Configuring Intune Insights app service service connection and private endpoint"
-        $IiAppServiceResourceId = $IiWebApp.id
-        $IiAppServiceServiceConnection = New-AzPrivateLinkServiceConnection -Name $IiAppServiceServiceConnectionName -PrivateLinkServiceId $IiAppServiceResourceId -GroupId sites 
-        $IiAppServicePrivateEndpoint = New-AzPrivateEndpoint -Name "$IiAppServicePrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $IiAppServiceServiceConnection 
-    }
-    # check if intune insights app service dns zone group created
-    if (-not $SkipDNS) {
-        $IiAppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $IiAppServicePrivateEndpoint.ResourceGroupName -PrivateEndpointName $IiAppServicePrivateEndpoint.Name -ErrorAction SilentlyContinue
-        if ($IiAppServiceDnsZoneGroup) {
-            Write-Output "Found Intune Insights App Service DNS zone group"
-        } else {
-            Write-Output "Configuring Intune Insights app service DNS zone group"
-            $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
-            $IiAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $IiAppServicePrivateEndpoint.ResourceGroupName -PrivateEndpointName $IiAppServicePrivateEndpoint.Name -Name $IiAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
-        }
-    } else {
-        Write-Output "Skipping Intune Insights App Service DNS zone group configuration (SkipDNS enabled)"
-    }
+    $IiAppServicePrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $IiWebApp.id -GroupId sites `
+        -FindDisplayName "the Intune Insights app service" `
+        -FoundMessage "Found Intune Insights App Service private endpoint" -ConfiguringMessage "Configuring Intune Insights app service service connection and private endpoint" `
+        -PrivateEndpointName "$IiAppServicePrivateEndpointName" -ServiceConnectionName $IiAppServiceServiceConnectionName `
+        -DnsZoneName $AppServiceDnsZoneName -DnsZone $AppServiceDnsZone -DnsZoneGroupName $IiAppServiceDnsZoneGroupName `
+        -FoundDnsZoneGroupMessage "Found Intune Insights App Service DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring Intune Insights app service DNS zone group" `
+        -SkipDnsZoneGroupMessage "Skipping Intune Insights App Service DNS zone group configuration (SkipDNS enabled)"
 
 }
 
 # add private endpoints for real time insights app service
 if ($NmeRtiWebAppName) {
     $RtiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeRtiWebAppName
-    # check if rti app service private endpoint is created
-    $RtiAppServicePrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $RtiWebApp.id -DisplayName "the RTI app service"
-    if ($RtiAppServicePrivateEndpoint) {
-        Write-Output "Found RTI App Service private endpoint"
-    } 
-    else {
-        Write-Output "Configuring RTI app service service connection and private endpoint"
-        $RtiAppServiceResourceId = $RtiWebApp.id
-        $RtiAppServiceServiceConnection = New-AzPrivateLinkServiceConnection -Name $RtiAppServiceServiceConnectionName -PrivateLinkServiceId $RtiAppServiceResourceId -GroupId sites 
-        $RtiAppServicePrivateEndpoint = New-AzPrivateEndpoint -Name "$RtiAppServicePrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $RtiAppServiceServiceConnection 
-    }
-    # check if rti app service dns zone group created
-    if (-not $SkipDNS) {
-        $RtiAppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $RtiAppServicePrivateEndpoint.ResourceGroupName -PrivateEndpointName $RtiAppServicePrivateEndpoint.Name -ErrorAction SilentlyContinue
-        if ($RtiAppServiceDnsZoneGroup) {
-            Write-Output "Found RTI App Service DNS zone group"
-        } else {
-            Write-Output "Configuring RTI app service DNS zone group"
-            $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
-            $RtiAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $RtiAppServicePrivateEndpoint.ResourceGroupName -PrivateEndpointName $RtiAppServicePrivateEndpoint.Name -Name $RtiAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
-        }
-    } else {
-        Write-Output "Skipping RTI App Service DNS zone group configuration (SkipDNS enabled)"
-    }
+    $RtiAppServicePrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $RtiWebApp.id -GroupId sites `
+        -FindDisplayName "the RTI app service" `
+        -FoundMessage "Found RTI App Service private endpoint" -ConfiguringMessage "Configuring RTI app service service connection and private endpoint" `
+        -PrivateEndpointName "$RtiAppServicePrivateEndpointName" -ServiceConnectionName $RtiAppServiceServiceConnectionName `
+        -DnsZoneName $AppServiceDnsZoneName -DnsZone $AppServiceDnsZone -DnsZoneGroupName $RtiAppServiceDnsZoneGroupName `
+        -FoundDnsZoneGroupMessage "Found RTI App Service DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring RTI app service DNS zone group" `
+        -SkipDnsZoneGroupMessage "Skipping RTI App Service DNS zone group configuration (SkipDNS enabled)"
 }
 # add private endpoints for real time insights sql server
 if ($NmeRtiSqlServerName) {
     $RtiSqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeRtiSqlServerName
-    # check if rti sql private endpoint is created
-    $RtiSqlPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $RtiSqlServer.ResourceId -DisplayName "the RTI sql server"
-    if ($RtiSqlPrivateEndpoint) {
-        Write-Output "Found RTI SQL private endpoint"
-    } 
-    else {
-        Write-Output "Configuring RTI sql service connection and private endpoint"
-        $RtiSqlServiceConnection = New-AzPrivateLinkServiceConnection -Name $RtiSqlServiceConnectionName -PrivateLinkServiceId $RtiSqlServer.ResourceId -GroupId sqlserver 
-        $RtiSqlPrivateEndpoint = New-AzPrivateEndpoint -Name "$RtiSqlPrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $RtiSqlServiceConnection 
-    }
-    # check if rti sql dns zone group created
-    if (-not $SkipDNS) {
-        $RtiSqlDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $RtiSqlPrivateEndpoint.ResourceGroupName -PrivateEndpointName $RtiSqlPrivateEndpoint.Name -ErrorAction SilentlyContinue
-        if ($RtiSqlDnsZoneGroup) {
-            Write-Output "Found RTI SQL DNS zone group"
-        } else {
-            Write-Output "Configuring RTI sql DNS zone group"
-            $Config = New-AzPrivateDnsZoneConfig -Name $SqlDnsZoneName -PrivateDnsZoneId $SqlDnsZone.ResourceId
-            $RtiSqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $RtiSqlPrivateEndpoint.ResourceGroupName -PrivateEndpointName $RtiSqlPrivateEndpoint.Name -Name $RtiSqlDnsZoneGroupName -PrivateDnsZoneConfig $config
-        }
-    } else {
-        Write-Output "Skipping RTI SQL DNS zone group configuration (SkipDNS enabled)"
-    }
+    $RtiSqlPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $RtiSqlServer.ResourceId -GroupId sqlserver `
+        -FindDisplayName "the RTI sql server" `
+        -FoundMessage "Found RTI SQL private endpoint" -ConfiguringMessage "Configuring RTI sql service connection and private endpoint" `
+        -PrivateEndpointName "$RtiSqlPrivateEndpointName" -ServiceConnectionName $RtiSqlServiceConnectionName `
+        -DnsZoneName $SqlDnsZoneName -DnsZone $SqlDnsZone -DnsZoneGroupName $RtiSqlDnsZoneGroupName `
+        -FoundDnsZoneGroupMessage "Found RTI SQL DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring RTI sql DNS zone group" `
+        -SkipDnsZoneGroupMessage "Skipping RTI SQL DNS zone group configuration (SkipDNS enabled)"
 }
 # add private endpoint for real time insights storage account
 if ($NmeRtiStorageAccountName) {
@@ -2267,34 +2214,20 @@ if ($NmeRtiStorageAccountName) {
 if ($NmeRtiKeyVaultName) {
     # Get rti key vault
     $NmeRtiKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -VaultName $NmeRtiKeyVaultName
-    # check if rti key vault private endpoint is created
-    $RtiKvPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $NmeRtiKeyVault.ResourceId -DisplayName "the RTI key vault"
-    if ($RtiKvPrivateEndpoint) {
-        Write-Output "Found RTI Key Vault private endpoint"
-    } 
-    else {
-        Write-Output "Configuring RTI Key Vault service connection and private endpoint"
-        $RtiKvServiceConnection = New-AzPrivateLinkServiceConnection -Name $RtiKvServiceConnectionName -PrivateLinkServiceId $NmeRtiKeyVault.ResourceId -GroupId vault 
-        $RtiKvPrivateEndpoint = New-AzPrivateEndpoint -Name "$RtiKvPrivateEndpointName" -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $RtiKvServiceConnection 
-    }
-    # check if rti key vault dns zone group created
-    if (-not $SkipDNS) {
-        $RtiKvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $RtiKvPrivateEndpoint.ResourceGroupName -PrivateEndpointName $RtiKvPrivateEndpoint.Name -ErrorAction SilentlyContinue
-        if ($RtiKvDnsZoneGroup) {
-            Write-Output "Found RTI Key Vault DNS zone group"
-        } else {
-            Write-Output "Configuring RTI Key Vault DNS zone group"
-            $Config = New-AzPrivateDnsZoneConfig -Name $KeyVaultDnsZoneName  -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
-            $RtiKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $RtiKvPrivateEndpoint.ResourceGroupName -PrivateEndpointName $RtiKvPrivateEndpoint.Name -Name $RtiKvDnsZoneGroupName -PrivateDnsZoneConfig $Config
-        }
-    } else {
-        Write-Output "Skipping RTI Key Vault DNS zone group configuration (SkipDNS enabled)"
-    }
+    $RtiKvPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $NmeRtiKeyVault.ResourceId -GroupId vault `
+        -FindDisplayName "the RTI key vault" `
+        -FoundMessage "Found RTI Key Vault private endpoint" -ConfiguringMessage "Configuring RTI Key Vault service connection and private endpoint" `
+        -PrivateEndpointName "$RtiKvPrivateEndpointName" -ServiceConnectionName $RtiKvServiceConnectionName `
+        -DnsZoneName $KeyVaultDnsZoneName -DnsZone $KeyVaultDnsZone -DnsZoneGroupName $RtiKvDnsZoneGroupName `
+        -FoundDnsZoneGroupMessage "Found RTI Key Vault DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring RTI Key Vault DNS zone group" `
+        -SkipDnsZoneGroupMessage "Skipping RTI Key Vault DNS zone group configuration (SkipDNS enabled)"
 }
 
+Write-Output "Private endpoints region completed in $([math]::Round(((Get-Date) - $RegionStart).TotalSeconds, 1)) seconds"
 #endregion
 
 # region create private link peering
+$RegionStart = Get-Date
 if ($PeerVnetIds) {
     Write-Output "Peering vnets"
     foreach ($id in $VnetIds) {
@@ -2324,10 +2257,12 @@ if ($PeerVnetIds) {
         }
     }
 }
+Write-Output "Private link peering region completed in $([math]::Round(((Get-Date) - $RegionStart).TotalSeconds, 1)) seconds"
 #endregion
 
 
 #region app service vnet integration
+$RegionStart = Get-Date
 
 Write-Output "Add VNet service endpoints"
 # Deliberate refresh: the peering region above mutates the VNet when PeerVnetIds is supplied.
@@ -2465,9 +2400,11 @@ if ($NmeRtiWebAppName) {
 # no effect here. NSG and UDR support on a VNet integration subnet does not depend on it. This
 # previously printed "Enabling network policies" and then did nothing, because the only statement in
 # the branch was commented out.
+Write-Output "App service VNet integration region completed in $([math]::Round(((Get-Date) - $RegionStart).TotalSeconds, 1)) seconds"
 #endregion
 
 #region private DNS and network preflight checks
+$RegionStart = Get-Date
 # The NSG/route table checks further down only report - they never block, throw or alter control
 # flow. The connectivity gate immediately below is the exception: it can Throw and stop the script
 # before the make-private region runs. Both run after private endpoints and DNS zone groups have been
@@ -2659,9 +2596,11 @@ if ($AppServiceSubnet.RouteTable.Id) {
 if ($NetworkChecksClean) {
     Write-Output "No NSGs or route tables found on the private endpoint or app service subnets."
 }
+Write-Output "Private DNS and network preflight checks region completed in $([math]::Round(((Get-Date) - $RegionStart).TotalSeconds, 1)) seconds"
 #endregion
 
 #region make resources private
+$RegionStart = Get-Date
 
 Write-Output "Check network deny rules for key vault and sql"
 $NmeKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -VaultName $KeyVaultName
@@ -2710,6 +2649,15 @@ switch ($CssaStorageAccount) {
         Write-Output "Scripted actions storage account left public (CssaStorageAccount=Public)"
     }
     'Private' {
+        # Emitted on every Private run, not just the one that flips the property: the consequence is a
+        # standing state, and a re-run is when an admin is most likely to be looking for why session
+        # hosts lost access. Placed before the Get-AzStorageAccount call so it still fires if
+        # $StorageAccount resolves to $null. Dual-streamed for the same reason as $CssaInlineModeWarning
+        # below - NME surfaces Write-Warning and Write-Output differently.
+        $CssaPrivateModeWarning = "CssaStorageAccount=Private fully disables public network access on the scripted actions storage account - there is no firewall allow-list, unlike Restricted. Any client without network line-of-sight to the private endpoint, including AVD session hosts, will lose access to it, and scripted actions that need this storage account will fail on those hosts. Peer the session hosts' VNet to the private endpoint VNet (see PeerVnetIds) and ensure DNS resolves the storage account's FQDN to the private endpoint, or create a private endpoint in their own VNet, or use CssaStorageAccount=Restricted instead to keep the public endpoint reachable from linked networks. This script never re-enables public network access once disabled; reversing it is a manual Azure Portal action."
+        Write-Warning $CssaPrivateModeWarning
+        Write-Output  $CssaPrivateModeWarning
+
         $StorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeScriptedActionsStorageAccountName -ErrorAction SilentlyContinue
         if ($StorageAccount.PublicNetworkAccess -eq 'Disabled') {
             Write-Output "Storage public access is already disabled"
@@ -2729,7 +2677,14 @@ switch ($CssaStorageAccount) {
             Write-Warning "The scripted actions storage account's public network access is Disabled, most likely from an earlier run with CssaStorageAccount=Private. This script will not re-enable it automatically. Re-enable public network access on the storage account in the Azure Portal, then re-run with CssaStorageAccount=Restricted to apply the firewall-restricted configuration."
         }
         else {
-            $AllowedSubnetIds = Get-NmeLinkedNetworkSubnetIds -Prefix $Prefix
+            # Both service endpoint values are accepted for a storage VirtualNetworkRule:
+            # 'Microsoft.Storage' is the regional endpoint, 'Microsoft.Storage.Global' the
+            # cross-region one (strictly broader - it reaches storage accounts in any region, which
+            # is exactly the case a linked AVD VNet in another region needs). Matching only the
+            # regional value would skip a subnet that is in fact correctly configured, warn that it
+            # cannot be allowed through the firewall, and then cut off its access when default-deny
+            # is applied. Seen live on this lab's own shared VNet.
+            $AllowedSubnetIds = Get-NmeLinkedNetworkSubnetIds -Prefix $Prefix -ServiceEndpointNames 'Microsoft.Storage','Microsoft.Storage.Global' -PurposeDescription 'CssaStorageAccount=Restricted'
             # Each rule is added independently and its failure is contained. Azure rejects a storage
             # VNet rule when the subnet uses the *regional* Microsoft.Storage service endpoint and
             # sits in a region other than the storage account's (or its paired region):
@@ -2835,23 +2790,132 @@ if ($NmeRtiKeyVaultName) {
     }
 }
 
-# make real time insights app service private. Gated on its own MakeRtiAppServicePrivate parameter, not
+# Control network access to the real time insights app service. Gated on its own RtiAppService parameter, not
 # MakeAppServicePrivate: unlike Intune Insights, nothing requires RTI to be reachable by the same clients as the
 # primary app service, and locking it down silently cuts off any reporting endpoint (AVD session hosts, Windows
-# 365 Cloud PCs, Intune-managed devices) without VNet line-of-sight - see the parameter description. This only
-# ever writes Disabled, never Enabled, for the same reason as the NME app service block at the end of this
-# script: setting the parameter back to false must not re-expose an app the customer locked down. Runs after RTI
-# VNet integration (in the #region app service vnet integration block above), per the lesson from the CCL web app.
-if ($NmeRtiWebAppName -and $MakeRtiAppServicePrivate) {
-    $NmeRtiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeRtiWebAppName
-    $RtiWebAppResource = Get-AzResource -Id $NmeRtiWebApp.id
-    if ($RtiWebAppResource.Properties.publicNetworkAccess -eq 'Disabled') {
-        Write-Output "RTI app service public access already disabled"
-    }
-    else {
-        Write-Output "Disabling RTI app service public access"
-        $RtiWebAppResource.Properties.publicNetworkAccess = "Disabled"
-        $RtiWebAppResource | Set-AzResource -Force | Out-Null
+# 365 Cloud PCs, Intune-managed devices) without VNet line-of-sight - see the parameter description. Restricted
+# and Private only ever tighten access, never loosen it, for the same reason as the NME app service block at the
+# end of this script: setting the parameter back to a less restrictive value must not re-expose an app the
+# customer locked down. Runs after RTI VNet integration (in the #region app service vnet integration block
+# above), per the lesson from the CCL web app, and after the P2-1 connectivity gate.
+if ($NmeRtiWebAppName) {
+    switch ($RtiAppService) {
+        'Public' {
+            # No reads, no writes. A customer may have configured their own access restrictions on this app
+            # service, and this script never removes a restriction it did not add.
+            Write-Output "RTI app service left public (RtiAppService=Public)"
+        }
+        'Private' {
+            # Emitted on every Private run, not just the one that flips the property: the consequence is a
+            # standing state, and a re-run is when an admin is most likely to be looking for why session hosts
+            # lost access. Placed before the Get-AzWebApp call so it still fires if that resolves oddly.
+            # Dual-streamed for the same reason as $CssaPrivateModeWarning above - NME surfaces Write-Warning
+            # and Write-Output differently.
+            $RtiPrivateModeWarning = "RtiAppService=Private fully disables public network access on the Real Time Insights app service - only clients with network line-of-sight to the private VNet or a peered VNet can reach it. Every endpoint that reports to Real Time Insights - AVD session hosts, Windows 365 Cloud PCs and Intune-managed devices - must be able to reach it to post metrics, and any that cannot will simply stop reporting with no error surfaced in Nerdio Manager; the symptom is missing history noticed weeks later. Windows 365 Cloud PCs and roaming Intune-managed devices are not recoverable by peering or by a firewall rule under either Restricted or Private. This script never re-enables public network access once disabled; reversing it is a manual Azure Portal action."
+            Write-Warning $RtiPrivateModeWarning
+            Write-Output  $RtiPrivateModeWarning
+
+            $NmeRtiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeRtiWebAppName
+            $RtiWebAppResource = Get-AzResource -Id $NmeRtiWebApp.id
+            if ($RtiWebAppResource.Properties.publicNetworkAccess -eq 'Disabled') {
+                Write-Output "RTI app service public access already disabled"
+            }
+            else {
+                Write-Output "Disabling RTI app service public access"
+                $RtiWebAppResource.Properties.publicNetworkAccess = "Disabled"
+                $RtiWebAppResource | Set-AzResource -Force | Out-Null
+            }
+            # No access-restriction rules are added here: publicNetworkAccess = Disabled supersedes them
+            # entirely, so a rule added on top would be inert and would misleadingly suggest the firewall,
+            # not this setting, is what's blocking traffic.
+        }
+        'Restricted' {
+            $NmeRtiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeRtiWebAppName
+            $RtiWebAppResource = Get-AzResource -Id $NmeRtiWebApp.id
+            if ($RtiWebAppResource.Properties.publicNetworkAccess -eq 'Disabled') {
+                # This script never relaxes a restriction it, or an earlier run of it, already applied.
+                # Moving from Private back to Restricted is a deliberate loosening and must be done by a
+                # human in the portal first. Adding access-restriction rules to an app whose public endpoint
+                # is off would be inert and misleading, so nothing else runs in this branch.
+                Write-Warning "The RTI app service's public network access is Disabled, most likely from an earlier run with RtiAppService=Private. This script will not re-enable it automatically. Re-enable public network access on the app service in the Azure Portal, then re-run with RtiAppService=Restricted to apply the firewall-restricted configuration."
+            }
+            else {
+                $AllowedSubnetIds = Get-NmeLinkedNetworkSubnetIds -Prefix $Prefix -ServiceEndpointNames 'Microsoft.Web' -PurposeDescription 'RtiAppService=Restricted'
+                if (-not $AllowedSubnetIds.Count) {
+                    # The single most important safeguard in this branch. App Service access restrictions
+                    # have no explicit default-deny to configure - adding the first Allow rule removes the
+                    # implicit "Allow all" and everything else becomes denied. An empty allow-list would
+                    # therefore silently produce exactly Private, while the admin believes they chose a
+                    # middle ground, so an empty list here means apply nothing at all rather than an
+                    # all-denying rule set.
+                    Write-Warning "No LINKED_NETWORK subnet has the Microsoft.Web service endpoint enabled, so RtiAppService=Restricted changed nothing on the RTI app service. Enable Microsoft.Web on the subnets whose session hosts report to Real Time Insights and re-run, or choose RtiAppService=Private deliberately if cutting off all reporting is intended."
+                }
+                else {
+                    $RtiAccessWarning = "RtiAppService=Restricted firewalls the RTI app service's public endpoint to only the linked-network subnets that have the Microsoft.Web service endpoint enabled; every other network is denied. Every endpoint that reports to Real Time Insights - AVD session hosts, Windows 365 Cloud PCs and Intune-managed devices - must be able to reach it to post metrics, and any endpoint or device not on an eligible network will simply stop reporting with no error surfaced in Nerdio Manager; the symptom is missing history noticed weeks later. Windows 365 Cloud PCs and roaming Intune-managed devices are not recoverable by peering or by a firewall rule under either Restricted or Private. This script never re-enables public network access or removes a firewall rule on a later run; reversing it is a manual Azure Portal action."
+                    Write-Warning $RtiAccessWarning
+                    Write-Output  $RtiAccessWarning
+
+                    # Read the current config once, up front, rather than per subnet in the loop below - a
+                    # per-iteration read would not see rules this same loop just added and would not save
+                    # any calls anyway. Match an allowed subnet against an existing rule by SubnetId, not by
+                    # name - the P1-18 lesson in reverse: match on what the rule *does*, not what it's called
+                    # - and separately guard against the derived name colliding with an unrelated rule.
+                    $ExistingConfig = Get-AzWebAppAccessRestrictionConfig -ResourceGroupName $NmeRg -Name $NmeRtiWebAppName
+                    $ExistingRules = @($ExistingConfig.MainSiteAccessRestrictions)
+                    $ExistingSubnetIds = @($ExistingRules | Where-Object { $_.SubnetId } | Select-Object -ExpandProperty SubnetId)
+                    $ExistingRuleNames = @($ExistingRules | Select-Object -ExpandProperty RuleName)
+                    $UsedPriorities = @($ExistingRules | Select-Object -ExpandProperty Priority)
+                    $NextPriority = 300
+
+                    # Each rule is added independently and its failure is contained - the exact pattern and
+                    # reasoning of the storage Add-AzStorageAccountNetworkRule loop above: with
+                    # $ErrorActionPreference = 'Stop', one un-allowable subnet must never abort the run in
+                    # the middle of the make-private region. Expect a cross-region or ARM-validation failure
+                    # class here analogous to storage's ResourceBeingAcledHasWrongLocation; the message is
+                    # reported verbatim rather than guessed at in advance. -IgnoreMissingServiceEndpoint is
+                    # never passed: its existence on this cmdlet is exactly the evidence that a
+                    # service-endpoint access-restriction rule silently does nothing without Microsoft.Web
+                    # already enabled on the source subnet, which is the failure class this file keeps
+                    # getting bitten by.
+                    $AllowedSubnetCount = 0
+                    $FailedSubnetIds = @()
+                    foreach ($SubnetId in $AllowedSubnetIds) {
+                        if ($ExistingSubnetIds -contains $SubnetId) {
+                            $AllowedSubnetCount++
+                            continue
+                        }
+                        $RuleName = Get-NmeAccessRestrictionRuleName -SubnetId $SubnetId
+                        if ($ExistingRuleNames -contains $RuleName) {
+                            Write-Warning "Could not allow subnet '$SubnetId' through the RTI app service's firewall: the derived rule name '$RuleName' is already used by a different access-restriction rule. This subnet will lose access to Real Time Insights over the public endpoint until the name collision is resolved and this script is re-run."
+                            $FailedSubnetIds += $SubnetId
+                            continue
+                        }
+                        while ($UsedPriorities -contains $NextPriority) { $NextPriority += 10 }
+                        try {
+                            Add-AzWebAppAccessRestrictionRule -ResourceGroupName $NmeRg -WebAppName $NmeRtiWebAppName -Name $RuleName -Action Allow -SubnetId $SubnetId -Priority $NextPriority -ErrorAction Stop | Out-Null
+                            $UsedPriorities += $NextPriority
+                            $AllowedSubnetCount++
+                        }
+                        catch {
+                            $FailedSubnetIds += $SubnetId
+                            Write-Warning "Could not allow subnet '$SubnetId' through the RTI app service's firewall: $($_.Exception.Message) This subnet will lose access to Real Time Insights over the public endpoint until the failure above is resolved and this script is re-run."
+                        }
+                    }
+                    Write-Output "Restricted the RTI app service's public endpoint to $AllowedSubnetCount of $($AllowedSubnetIds.Count) linked-network subnet(s)"
+                    if ($FailedSubnetIds.Count) {
+                        Write-Warning "$($FailedSubnetIds.Count) linked-network subnet(s) could not be allowed through the RTI app service's firewall (see the warnings above for each). Session hosts on them will fail to report to Real Time Insights until the failure is resolved and this script is re-run."
+                    }
+                }
+            }
+            # Deliberately not touched, in either sub-branch above: ScmSiteUseMainSiteRestrictionConfig. The
+            # SCM/Kudu site keeps its own (unrestricted) config, consistent with the rest of this script,
+            # which never restricts an SCM endpoint - restricting it would also break the P2-1-style Kudu
+            # probe pattern used earlier in this script, if that pattern is ever extended to RTI. Also
+            # deliberately not done: removing a pre-existing rule this script did not create, or adding an
+            # explicit Deny-all rule. App Service already denies everything once any Allow rule exists - that
+            # implicit deny is the reason there is no -DefaultAction equivalent here, unlike the storage
+            # account's Update-AzStorageAccountNetworkRuleSet -DefaultAction Deny call above.
+        }
     }
 }
 
@@ -2917,6 +2981,7 @@ if ($NmeIiWebAppName -and $MakeAppServicePrivate) {
     }
 }
 
+Write-Output "Make resources private region completed in $([math]::Round(((Get-Date) - $RegionStart).TotalSeconds, 1)) seconds"
 #endregion
 
 # Public network access is only ever written when MakeAppServicePrivate explicitly asks for it.
@@ -2938,3 +3003,8 @@ else {
 # restart the app service
 Write-Output "Restarting app service"
 $restart = Restart-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
+
+# A1 total, paired with $ScriptStart near the top of the file. Printed last so it captures everything,
+# including the public-access and restart steps above that run after the "make resources private"
+# region's own #endregion. This is the number to compare against a Phase B run once one exists.
+Write-Output "Total script execution time: $([math]::Round(((Get-Date) - $ScriptStart).TotalSeconds, 1)) seconds"
