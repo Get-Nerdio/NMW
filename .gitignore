@@ -1,0 +1,18 @@
+# Working docs for the private-endpoints hardening pass - deliberately not committed.
+# Get-Nerdio/NMW is a PUBLIC repo, and TEST-PLAN.md / TEST-RESULTS.md / To-Do.md carry lab
+# tenant and subscription IDs, the lab NME hostname, and internal (including teammates')
+# resource group names. Publishing them is hard to reverse - history, forks, indexing - so
+# they stay local. The SPEC-*.md files happen to be free of identifiers, but are kept local
+# alongside the rest so the whole working set lives in one place and nothing has to be
+# re-audited before a commit.
+#
+# Note: .gitignore never un-tracks a file that is already committed. If any of these are ever
+# added deliberately, scrub the identifiers first.
+To-Do.md
+TEST-PLAN.md
+TEST-RESULTS.md
+SPEC-*.md
+
+# Raw NME/Azure Automation job logs from test runs - verbose, large, and full of the same
+# lab identifiers.
+test-logs/
