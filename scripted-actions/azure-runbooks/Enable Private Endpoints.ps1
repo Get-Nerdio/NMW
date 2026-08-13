@@ -1,6 +1,5 @@
 ﻿#description: Restrict access to the sql database and keyvault used by Nerdio Manager.
 #tags: Nerdio, Preview
-# test-run: BATCH1-attempt3-storage-acl-guard
 
 <# Notes:
  
@@ -666,79 +665,97 @@ function Get-NmeScriptHash {
     finally { $sha256.Dispose() }
 }
 
-# Check if the web app has been restarted recently and if the script has been run before
+# Check if the web app has been restarted recently and if the script has been run before.
+#
+# This USED to be gated on `(Get-AzWebApp ...).LastModifiedTimeUtc` being within the last
+# $MinutesAgo minutes, as a cheap proxy for "this script (or something else) recently restarted the
+# app, so it's worth checking for a duplicate run." That proxy is wrong: `Restart-AzWebApp` (called
+# unconditionally at the very end of this script) is a control-plane *action*, not a resource property
+# write, and does not advance `LastModifiedTimeUtc` at all - only an actual property change (VNet
+# integration, publicNetworkAccess, etc.) does. Once a deployment reaches a stable state where a run
+# has nothing left to configure (every check is a "Found ..." no-op), no property write ever happens
+# again, `LastModifiedTimeUtc` stops advancing, and this gate goes permanently false - silently
+# disabling duplicate-run detection forever, even though the script still restarts the app every run.
+# Found live (2026-08-13): NME resubmitting this scripted action after each restart (its own
+# documented behavior - see the coordinator's note) produced an unbounded chain of ~7-minute jobs, each
+# one skipping this entire function (the gate was false), redoing the (idempotent, harmless, but not
+# free) checks, and restarting the app again - which triggered the next resubmission, forever, with
+# nothing to ever make the gate true again. Observed and manually broken via `az automation job stop`
+# after 4 real jobs; without intervention this had no natural end. Fixed by removing the gate entirely
+# - the loop below is already bounded to jobs that *ended* within the last $MinutesAgo minutes via
+# $JobCutoffUtc, which is the correct signal (a job actually ran recently), so nothing is lost by no
+# longer requiring the web app's own timestamp to agree.
 Function Check-LastRunResults {
     # this function depends on the Set-NmeVars function, which must be run before this function
     Param()
     $MinutesAgo = 10
-    $app = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
-    if ($app.LastModifiedTimeUtc -gt (get-date).AddMinutes(-$MinutesAgo).ToUniversalTime()) {
-        Write-Output "Web job has been restarted recently. Checking for previous script run"
-        $ThisJob = Get-AzAutomationJob -id $PSPrivateMetadata['JobId'].Guid -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
-        $ThisScriptText = Get-NmeJobScriptText -JobParameters $ThisJob.JobParameters
-        $ThisScriptHash = Get-NmeScriptHash -ScriptText $ThisScriptText
-        if (-not $ThisScriptHash) {
-            Write-Verbose "Skipping duplicate-run detection because the running script's source could not be determined."
-            return
+    Write-Output "Checking for a previous run of this script in the last $MinutesAgo minutes"
+    $ThisJob = Get-AzAutomationJob -id $PSPrivateMetadata['JobId'].Guid -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
+    $ThisScriptText = Get-NmeJobScriptText -JobParameters $ThisJob.JobParameters
+    $ThisScriptHash = Get-NmeScriptHash -ScriptText $ThisScriptText
+    if (-not $ThisScriptHash) {
+        Write-Verbose "Skipping duplicate-run detection because the running script's source could not be determined."
+        return
+    }
+
+    # EndTime is a DateTimeOffset; compare both sides in UTC explicitly rather than
+    # relying on the sandbox's local timezone happening to be UTC.
+    $JobCutoffUtc = (Get-Date).ToUniversalTime().AddMinutes(-$MinutesAgo)
+    $jobs = Get-AzAutomationJob -ResourceGroupName $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName |
+        Where-Object { $_.Status -match 'completed|Failed' } |
+        Where-Object { $_.EndTime.UtcDateTime -gt $JobCutoffUtc }
+    foreach ($job in $jobs){
+        $details = Get-AzAutomationJob -id $job.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
+        $JobScriptText = Get-NmeJobScriptText -JobParameters $details.JobParameters
+        $JobHash = Get-NmeScriptHash -ScriptText $JobScriptText
+        if (-not $JobHash) {
+            Write-Verbose "Skipping job $($job.JobId) because its script source could not be determined."
+            continue
         }
-
-        # EndTime is a DateTimeOffset; compare both sides in UTC explicitly rather than
-        # relying on the sandbox's local timezone happening to be UTC.
-        $JobCutoffUtc = (Get-Date).ToUniversalTime().AddMinutes(-$MinutesAgo)
-        $jobs = Get-AzAutomationJob -ResourceGroupName $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName |
-            Where-Object { $_.Status -match 'completed|Failed' } |
-            Where-Object { $_.EndTime.UtcDateTime -gt $JobCutoffUtc }
-        foreach ($job in $jobs){
-            $details = Get-AzAutomationJob -id $job.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
-            $JobScriptText = Get-NmeJobScriptText -JobParameters $details.JobParameters
-            $JobHash = Get-NmeScriptHash -ScriptText $JobScriptText
-            if (-not $JobHash) {
-                Write-Verbose "Skipping job $($job.JobId) because its script source could not be determined."
-                continue
-            }
-            if ($JobHash -eq $ThisScriptHash){
-                Write-Output "Output of previous script run:"
-                $JobOutput = Get-AzAutomationJobOutput -Id $details.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
-                # Note: Get-AzAutomationJobOutput only returns a truncated summary of each record.
-                # If the full, untruncated text is ever needed, use Get-AzAutomationJobOutputRecord -Id <record id> instead.
-                foreach ($record in $JobOutput) {
-                    $Summary = $record.Summary
-                    if ([string]::IsNullOrEmpty($Summary)) {
-                        continue
+        if ($JobHash -eq $ThisScriptHash){
+            Write-Output "Output of previous script run:"
+            $JobOutput = Get-AzAutomationJobOutput -Id $details.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
+            # Note: Get-AzAutomationJobOutput only returns a truncated summary of each record.
+            # If the full, untruncated text is ever needed, use Get-AzAutomationJobOutputRecord -Id <record id> instead.
+            foreach ($record in $JobOutput) {
+                $Summary = $record.Summary
+                if ([string]::IsNullOrEmpty($Summary)) {
+                    continue
+                }
+                switch ($record.Type) {
+                    'Error' {
+                        # -ErrorAction Continue is required here: this script sets $ErrorActionPreference = 'Stop',
+                        # and a bare Write-Error would throw under that preference, aborting the replay before
+                        # reaching the "App Service restarted" message and wait-time calculation below. Do not remove.
+                        Write-Error "[previous run] $Summary" -ErrorAction Continue
                     }
-                    switch ($record.Type) {
-                        'Error' {
-                            # -ErrorAction Continue is required here: this script sets $ErrorActionPreference = 'Stop',
-                            # and a bare Write-Error would throw under that preference, aborting the replay before
-                            # reaching the "App Service restarted" message and wait-time calculation below. Do not remove.
-                            Write-Error "[previous run] $Summary" -ErrorAction Continue
-                        }
-                        'Warning' {
-                            Write-Warning "[previous run] $Summary"
-                        }
-                        'Verbose' {
-                            Write-Verbose "[previous run] $Summary"
-                        }
-                        'Debug' {
-                            Write-Debug "[previous run] $Summary"
-                        }
-                        'Progress' {
-                            # Progress records were transient UI state in the original run; skip them in the replay.
-                        }
-                        default {
-                            Write-Output "[previous run] $Summary"
-                        }
+                    'Warning' {
+                        Write-Warning "[previous run] $Summary"
+                    }
+                    'Verbose' {
+                        Write-Verbose "[previous run] $Summary"
+                    }
+                    'Debug' {
+                        Write-Debug "[previous run] $Summary"
+                    }
+                    'Progress' {
+                        # Progress records were transient UI state in the original run; skip them in the replay.
+                    }
+                    default {
+                        Write-Output "[previous run] $Summary"
                     }
                 }
-
-                Write-Output "App Service restarted after running this script."
-                # How much of the cooldown window is left, based on how long ago the app was actually modified.
-                $WaitMinutes = [math]::Ceiling($MinutesAgo - ((Get-Date).ToUniversalTime() - $app.LastModifiedTimeUtc).TotalMinutes)
-                if ($WaitMinutes -gt 0) {
-                    Write-Output "If you need to re-run the script, please wait $WaitMinutes minutes and try again."
-                }
-                Exit
             }
+
+            Write-Output "App Service restarted after running this script."
+            # How much of the cooldown window is left, based on the matched previous job's own EndTime -
+            # not the web app's LastModifiedTimeUtc (see the note above this function: that stops being a
+            # reliable signal once a run stops needing to change anything).
+            $WaitMinutes = [math]::Ceiling($MinutesAgo - ((Get-Date).ToUniversalTime() - $details.EndTime.UtcDateTime).TotalMinutes)
+            if ($WaitMinutes -gt 0) {
+                Write-Output "If you need to re-run the script, please wait $WaitMinutes minutes and try again."
+            }
+            Exit
         }
     }
 }
@@ -1038,6 +1055,34 @@ function Set-NmeSqlBaseline {
     }
 }
 
+# Every component's "does a private endpoint already exist for this resource?" check filters
+# $ExistingPrivateEndpoints by PrivateLinkServiceId with the assumption that at most one match
+# exists. That assumption can be wrong - a customer can have more than one private endpoint pointed
+# at the same resource (manually created, left over from a prior run against a different VNet, or in
+# this test pass's own case, a fixture endpoint coexisting with one this script already created). A
+# plain `Where-Object` returning more than one object silently produces an array, and the very next
+# line always does `$X.Name` expecting a single string - which fails downstream with a confusing
+# "Cannot convert 'System.Object[]' to the type 'System.String'" error that gives no hint about the
+# real cause. Found live (2026-08-12, T20). Centralizing the lookup here means this is checked once
+# for all ~14 call sites instead of relying on each one to guard itself, and the failure mode becomes
+# a clear, actionable error instead of a type-coercion crash several lines away from the real cause.
+function Find-NmeExistingPrivateEndpoint {
+    param(
+        [Parameter(Mandatory=$true)]$ExistingPrivateEndpoints,
+        [Parameter(Mandatory=$true)][string]$PrivateLinkServiceId,
+        [Parameter(Mandatory=$true)][string]$DisplayName
+    )
+    # Named $FoundEndpoints, not $Matches - $Matches is a PowerShell automatic variable populated by
+    # the -match operator, and shadowing it here would be a landmine for any future edit that adds a
+    # -match check in this function or its callers.
+    $FoundEndpoints = @($ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $PrivateLinkServiceId })
+    if ($FoundEndpoints.Count -gt 1) {
+        $MatchDescriptions = ($FoundEndpoints | ForEach-Object { "$($_.Name) (resource group $($_.ResourceGroupName))" }) -join ', '
+        Throw "Found more than one private endpoint pointing at $DisplayName`: $MatchDescriptions. This script cannot tell which one is authoritative and will not guess. Delete the extra endpoint(s) so only one remains, then re-run."
+    }
+    return $FoundEndpoints | Select-Object -First 1
+}
+
 function New-NmeStoragePrivateEndpoint {
     # This function depends on script scope: it reads $ExistingPrivateEndpoints, $NmeRg,
     # $VnetLocation, $PrivateEndpointSubnet, $SkipDNS, $StorageSubresourceDnsZoneNames and
@@ -1056,7 +1101,7 @@ function New-NmeStoragePrivateEndpoint {
     $ZoneName = $StorageSubresourceDnsZoneNames[$Subresource]
     $Zone = $StorageSubresourceDnsZones[$Subresource]
 
-    $Endpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $StorageAccount.Id }
+    $Endpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $StorageAccount.Id -DisplayName "the storage account"
     if ($Endpoint) {
         Write-Output "Found $DisplayName storage private endpoint"
         # Earlier versions of this script created some storage endpoints with a hardcoded sub-resource that
@@ -1078,7 +1123,14 @@ function New-NmeStoragePrivateEndpoint {
         return $Endpoint
     }
 
-    $DnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $Endpoint.Name -ErrorAction SilentlyContinue
+    # -ResourceGroupName is the endpoint's own resource group, not $NmeRg: a pre-existing endpoint
+    # found by PrivateLinkServiceId (P2-7's subscription-wide discovery) is not necessarily in $NmeRg
+    # - that is the whole point of supporting a pre-existing endpoint under a non-convention name in
+    # another resource group (P1-2, T15/T20). Every zone-group call in this script follows the same
+    # rule: use the resolved endpoint object's own .ResourceGroupName, never $NmeRg, since a Get/New
+    # call scoped to the wrong resource group fails with a plain "resource not found" that gives no
+    # hint the endpoint was simply looked for in the wrong place. Found live (2026-08-12, T20).
+    $DnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $Endpoint.ResourceGroupName -PrivateEndpointName $Endpoint.Name -ErrorAction SilentlyContinue
     if ($DnsZoneGroup) {
         Write-Output "Found $DisplayName storage DNS zone group"
         # Earlier versions of this script linked some zone groups to the wrong zone for the account's sub-resource
@@ -1089,7 +1141,7 @@ function New-NmeStoragePrivateEndpoint {
     else {
         Write-Output "Configuring $DisplayName storage DNS zone group"
         $Config = New-AzPrivateDnsZoneConfig -Name $ZoneName -PrivateDnsZoneId $Zone.ResourceId
-        $DnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $Endpoint.Name -Name $DnsZoneGroupName -PrivateDnsZoneConfig $Config
+        $DnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $Endpoint.ResourceGroupName -PrivateEndpointName $Endpoint.Name -Name $DnsZoneGroupName -PrivateDnsZoneConfig $Config
     }
 
     return $Endpoint
@@ -1835,7 +1887,7 @@ $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName
 $KeyVault = Get-AzKeyVault -VaultName $KeyVaultName -ErrorAction SilentlyContinue
 if ($ExistingPrivateEndpoints.PrivateLinkServiceConnections.PrivateLinkServiceId -contains $KeyVault.ResourceId) {
     Write-Output "Found Key Vault private endpoint"
-    $KvPrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $KeyVault.ResourceId }
+    $KvPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $KeyVault.ResourceId -DisplayName "the Nerdio Manager key vault"
 } 
 else {
     Write-Output "Configuring keyvault service connection and private endpoint"
@@ -1846,7 +1898,7 @@ else {
 
 # check if keyvault dns zone group created
 if (-not $SkipDNS) {
-    $KvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $KvPrivateEndpoint.Name -ErrorAction SilentlyContinue
+    $KvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $KvPrivateEndpoint.ResourceGroupName -PrivateEndpointName $KvPrivateEndpoint.Name -ErrorAction SilentlyContinue
     if ($KvDnsZoneGroup) {
         Write-Output "Found Key Vault DNS zone group"
     } else {
@@ -1855,7 +1907,7 @@ if (-not $SkipDNS) {
         # Use the discovered endpoint's actual .Name (not this script's naming convention): a pre-existing private
         # endpoint is matched by PrivateLinkServiceId, so its name may not follow the convention, and the DNS zone
         # group must be attached to the endpoint that actually exists.
-        $KvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $KvPrivateEndpoint.Name -Name "$KvDnsZoneGroupName" -PrivateDnsZoneConfig $config
+        $KvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $KvPrivateEndpoint.ResourceGroupName -PrivateEndpointName $KvPrivateEndpoint.Name -Name "$KvDnsZoneGroupName" -PrivateDnsZoneConfig $config
     }
 } else {
     Write-Output "Skipping Key Vault DNS zone group configuration (SkipDNS enabled)"
@@ -1868,7 +1920,7 @@ if ($NmeCclKeyVaultName) {
     # check if ccl key vault private endpoint exists in $ExistingPrivateEndpoints
     if ($ExistingPrivateEndpoints.PrivateLinkServiceConnections.PrivateLinkServiceId -contains $NmeCclKeyVault.ResourceId) {
         Write-Output "Found CCL Key Vault private endpoint"
-        $CclKvPrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $NmeCclKeyVault.ResourceId }
+        $CclKvPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $NmeCclKeyVault.ResourceId -DisplayName "the CCL key vault"
     }
     else {
         Write-Output "Configuring CCL keyvault service connection and private endpoint"
@@ -1877,13 +1929,13 @@ if ($NmeCclKeyVaultName) {
     }
     # check if ccl keyvault dns zone group created
     if (-not $SkipDNS) {
-        $CclKvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $CclKvPrivateEndpoint.Name -ErrorAction SilentlyContinue
+        $CclKvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $CclKvPrivateEndpoint.ResourceGroupName -PrivateEndpointName $CclKvPrivateEndpoint.Name -ErrorAction SilentlyContinue
         if ($CclKvDnsZoneGroup) {
             Write-Output "Found CCL Key Vault DNS zone group"
         } else {
             Write-Output "Configuring CCL keyvault DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $KeyVaultDnsZoneName  -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
-            $CclKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $CclKvPrivateEndpoint.Name -Name "$CclKvDnsZoneGroupName" -PrivateDnsZoneConfig $config
+            $CclKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $CclKvPrivateEndpoint.ResourceGroupName -PrivateEndpointName $CclKvPrivateEndpoint.Name -Name "$CclKvDnsZoneGroupName" -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping CCL Key Vault DNS zone group configuration (SkipDNS enabled)"
@@ -1895,7 +1947,7 @@ if ($NmeIiKeyVaultName) {
     # get intune insights key vault
     $NmeIiKeyVault = Get-AzKeyVault -VaultName $NmeIiKeyVaultName
     # create if intune insights key vault private endpoint created
-    $IiKvPrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $NmeIiKeyVault.ResourceId }
+    $IiKvPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $NmeIiKeyVault.ResourceId -DisplayName "the Intune Insights key vault"
     if ($IiKvPrivateEndpoint) {
         Write-Output "Found Intune Insights Key Vault private endpoint"
     } 
@@ -1906,13 +1958,13 @@ if ($NmeIiKeyVaultName) {
     }
     # check if intune insights keyvault dns zone group created
     if (-not $SkipDNS) {
-        $IiKvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $IiKvPrivateEndpoint.Name -ErrorAction SilentlyContinue
+        $IiKvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $IiKvPrivateEndpoint.ResourceGroupName -PrivateEndpointName $IiKvPrivateEndpoint.Name -ErrorAction SilentlyContinue
         if ($IiKvDnsZoneGroup) {
             Write-Output "Found Intune Insights Key Vault DNS zone group"
         } else {
             Write-Output "Configuring Intune Insights keyvault DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $KeyVaultDnsZoneName  -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
-            $IiKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $IiKvPrivateEndpoint.Name -Name "$IiKvDnsZoneGroupName" -PrivateDnsZoneConfig $Config
+            $IiKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $IiKvPrivateEndpoint.ResourceGroupName -PrivateEndpointName $IiKvPrivateEndpoint.Name -Name "$IiKvDnsZoneGroupName" -PrivateDnsZoneConfig $Config
         }
     } else {
         Write-Output "Skipping Intune Insights Key Vault DNS zone group configuration (SkipDNS enabled)"
@@ -1922,7 +1974,7 @@ if ($NmeIiKeyVaultName) {
 $SqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeSqlServerName
 
 #check if sql private endpoint created
-$SqlPrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $SqlServer.ResourceId }
+$SqlPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $SqlServer.ResourceId -DisplayName "the Nerdio Manager sql server"
 if ($SqlPrivateEndpoint) {
     Write-Output "Found SQL private endpoint"
 } 
@@ -1934,13 +1986,13 @@ else {
 
 # check if sql dns zone group created
 if (-not $SkipDNS) {
-    $SqlDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $SqlPrivateEndpoint.Name -ErrorAction SilentlyContinue
+    $SqlDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $SqlPrivateEndpoint.ResourceGroupName -PrivateEndpointName $SqlPrivateEndpoint.Name -ErrorAction SilentlyContinue
     if ($SqlDnsZoneGroup) {
         Write-Output "Found SQL DNS zone group"
     } else {
         Write-Output "Configuring sql DNS zone group"
         $Config = New-AzPrivateDnsZoneConfig -Name $SqlDnsZoneName -PrivateDnsZoneId $SqlDnsZone.ResourceId
-        $SqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $SqlPrivateEndpoint.Name -Name "$SqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
+        $SqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $SqlPrivateEndpoint.ResourceGroupName -PrivateEndpointName $SqlPrivateEndpoint.Name -Name "$SqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
     }
 } else {
     Write-Output "Skipping SQL DNS zone group configuration (SkipDNS enabled)"
@@ -1950,7 +2002,7 @@ if (-not $SkipDNS) {
 if ($NmeIiSqlServerName) {
     $IiSqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeIiSqlServerName
     # check if intune insights sql private endpoint created
-    $IiSqlPrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $IiSqlServer.ResourceId }
+    $IiSqlPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $IiSqlServer.ResourceId -DisplayName "the Intune Insights sql server"
     if ($IiSqlPrivateEndpoint) {
         Write-Output "Found Intune Insights SQL private endpoint"
     } 
@@ -1961,13 +2013,13 @@ if ($NmeIiSqlServerName) {
     }
     # check if intune insights sql dns zone group created
     if (-not $SkipDNS) {
-        $IiSqlDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $IiSqlPrivateEndpoint.Name -ErrorAction SilentlyContinue
+        $IiSqlDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $IiSqlPrivateEndpoint.ResourceGroupName -PrivateEndpointName $IiSqlPrivateEndpoint.Name -ErrorAction SilentlyContinue
         if ($IiSqlDnsZoneGroup) {
             Write-Output "Found Intune Insights SQL DNS zone group"
         } else {
             Write-Output "Configuring Intune Insights sql DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $SqlDnsZoneName -PrivateDnsZoneId $SqlDnsZone.ResourceId
-            $IiSqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $IiSqlPrivateEndpoint.Name -Name "$IiSqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
+            $IiSqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $IiSqlPrivateEndpoint.ResourceGroupName -PrivateEndpointName $IiSqlPrivateEndpoint.Name -Name "$IiSqlDnsZoneGroupName" -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping Intune Insights SQL DNS zone group configuration (SkipDNS enabled)"
@@ -1977,7 +2029,7 @@ if ($NmeIiSqlServerName) {
 
 # check if automation account private endpoint is created
 $NmeAutomationAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Automation/automationAccounts/$NmeAutomationAccountName"
-$AutomationPrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $NmeAutomationAccountResourceId }
+$AutomationPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $NmeAutomationAccountResourceId -DisplayName "the Nerdio Manager automation account"
 if ($AutomationPrivateEndpoint) {
     Write-Output "Found Automation private endpoint"
 } 
@@ -1989,13 +2041,13 @@ else {
 }
 # check if automation account dns zone group created
 if (-not $SkipDNS) {
-    $AutomationDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $AutomationPrivateEndpoint.Name -ErrorAction SilentlyContinue
+    $AutomationDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $AutomationPrivateEndpoint.ResourceGroupName -PrivateEndpointName $AutomationPrivateEndpoint.Name -ErrorAction SilentlyContinue
     if ($AutomationDnsZoneGroup) {
         Write-Output "Found Automation DNS zone group"
     } else {
         Write-Output "Configuring automation DNS zone group"
         $Config = New-AzPrivateDnsZoneConfig -Name $AutomationDnsZoneName -PrivateDnsZoneId $AutomationDnsZone.ResourceId
-        $AutomationDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $AutomationPrivateEndpoint.Name -Name "$AutomationDnsZoneGroupName" -PrivateDnsZoneConfig $config
+        $AutomationDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $AutomationPrivateEndpoint.ResourceGroupName -PrivateEndpointName $AutomationPrivateEndpoint.Name -Name "$AutomationDnsZoneGroupName" -PrivateDnsZoneConfig $config
     }
 } else {
     Write-Output "Skipping Automation DNS zone group configuration (SkipDNS enabled)"
@@ -2007,7 +2059,7 @@ if (-not $SkipDNS) {
 if ($NmeScriptedActionsAccountName) {
     $ScriptedActionsAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Automation/automationAccounts/$NmeScriptedActionsAccountName"
     # check if scripted action automation account private endpoint is created
-    $ScriptedActionsPrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $ScriptedActionsAccountResourceId }
+    $ScriptedActionsPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $ScriptedActionsAccountResourceId -DisplayName "the scripted actions automation account"
     if ($ScriptedActionsPrivateEndpoint) {
         Write-Output "Found scripted actions private endpoint"
     } 
@@ -2018,13 +2070,13 @@ if ($NmeScriptedActionsAccountName) {
     }
     # check if scripted action automation account dns zone group created
     if (-not $SkipDNS) {
-        $ScriptedActionsDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsPrivateEndpoint.Name -ErrorAction SilentlyContinue
+        $ScriptedActionsDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $ScriptedActionsPrivateEndpoint.ResourceGroupName -PrivateEndpointName $ScriptedActionsPrivateEndpoint.Name -ErrorAction SilentlyContinue
         if ($ScriptedActionsDnsZoneGroup) {
             Write-Output "Found scripted actions DNS zone group"
         } else {
             Write-Output "Configuring scripted actions DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $AutomationDnsZoneName -PrivateDnsZoneId $AutomationDnsZone.ResourceId
-            $ScriptedActionsDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $ScriptedActionsPrivateEndpoint.Name -Name "$ScriptedActionsDnsZoneGroupName" -PrivateDnsZoneConfig $config
+            $ScriptedActionsDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $ScriptedActionsPrivateEndpoint.ResourceGroupName -PrivateEndpointName $ScriptedActionsPrivateEndpoint.Name -Name "$ScriptedActionsDnsZoneGroupName" -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping scripted actions DNS zone group configuration (SkipDNS enabled)"
@@ -2066,7 +2118,7 @@ else {
 
 $AppService = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
 # check if app service private endpoint is created
-$AppServicePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $AppService.id }
+$AppServicePrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $AppService.id -DisplayName "the Nerdio Manager app service"
 if ($AppServicePrivateEndpoint) {
     Write-Output "Found App Service private endpoint"
 } 
@@ -2078,13 +2130,13 @@ else {
 }
 # check if app service dns zone group created
 if (-not $SkipDNS) {
-    $AppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $AppServicePrivateEndpoint.Name -ErrorAction SilentlyContinue
+    $AppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $AppServicePrivateEndpoint.ResourceGroupName -PrivateEndpointName $AppServicePrivateEndpoint.Name -ErrorAction SilentlyContinue
     if ($AppServiceDnsZoneGroup) {
         Write-Output "Found App Service DNS zone group"
     } else {
         Write-Output "Configuring app service DNS zone group"
         $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
-        $AppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $AppServicePrivateEndpoint.Name -Name $AppServicePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
+        $AppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $AppServicePrivateEndpoint.ResourceGroupName -PrivateEndpointName $AppServicePrivateEndpoint.Name -Name $AppServicePrivateDnsZoneGroupName -PrivateDnsZoneConfig $config
     }
 } else {
     Write-Output "Skipping App Service DNS zone group configuration (SkipDNS enabled)"
@@ -2094,7 +2146,7 @@ if (-not $SkipDNS) {
 if ($NmeCclWebAppName) {
     $CclAppService = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeCclWebAppName
     # check if ccl app service private endpoint is created
-    $CclAppServicePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $CclAppService.id }
+    $CclAppServicePrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $CclAppService.id -DisplayName "the CCL app service"
     if ($CclAppServicePrivateEndpoint) {
         Write-Output "Found CCL App Service private endpoint"
     } 
@@ -2106,13 +2158,13 @@ if ($NmeCclWebAppName) {
     }
     # check if ccl app service dns zone group created
     if (-not $SkipDNS) {
-        $CclAppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $CclAppServicePrivateEndpoint.Name -ErrorAction SilentlyContinue
+        $CclAppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $CclAppServicePrivateEndpoint.ResourceGroupName -PrivateEndpointName $CclAppServicePrivateEndpoint.Name -ErrorAction SilentlyContinue
         if ($CclAppServiceDnsZoneGroup) {
             Write-Output "Found CCL App Service DNS zone group"
         } else {
             Write-Output "Configuring CCL app service DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
-            $CclAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $CclAppServicePrivateEndpoint.Name -Name $CclAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
+            $CclAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $CclAppServicePrivateEndpoint.ResourceGroupName -PrivateEndpointName $CclAppServicePrivateEndpoint.Name -Name $CclAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping CCL App Service DNS zone group configuration (SkipDNS enabled)"
@@ -2122,7 +2174,7 @@ if ($NmeCclWebAppName) {
 if ($NmeIiWebAppName) {
     $IiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeIiWebAppName
     # check if intune insights app service private endpoint is created
-    $IiAppServicePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $IiWebApp.id }
+    $IiAppServicePrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $IiWebApp.id -DisplayName "the Intune Insights app service"
     if ($IiAppServicePrivateEndpoint) {
         Write-Output "Found Intune Insights App Service private endpoint"
     } 
@@ -2134,13 +2186,13 @@ if ($NmeIiWebAppName) {
     }
     # check if intune insights app service dns zone group created
     if (-not $SkipDNS) {
-        $IiAppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $IiAppServicePrivateEndpoint.Name -ErrorAction SilentlyContinue
+        $IiAppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $IiAppServicePrivateEndpoint.ResourceGroupName -PrivateEndpointName $IiAppServicePrivateEndpoint.Name -ErrorAction SilentlyContinue
         if ($IiAppServiceDnsZoneGroup) {
             Write-Output "Found Intune Insights App Service DNS zone group"
         } else {
             Write-Output "Configuring Intune Insights app service DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
-            $IiAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $IiAppServicePrivateEndpoint.Name -Name $IiAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
+            $IiAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $IiAppServicePrivateEndpoint.ResourceGroupName -PrivateEndpointName $IiAppServicePrivateEndpoint.Name -Name $IiAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping Intune Insights App Service DNS zone group configuration (SkipDNS enabled)"
@@ -2152,7 +2204,7 @@ if ($NmeIiWebAppName) {
 if ($NmeRtiWebAppName) {
     $RtiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeRtiWebAppName
     # check if rti app service private endpoint is created
-    $RtiAppServicePrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $RtiWebApp.id }
+    $RtiAppServicePrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $RtiWebApp.id -DisplayName "the RTI app service"
     if ($RtiAppServicePrivateEndpoint) {
         Write-Output "Found RTI App Service private endpoint"
     } 
@@ -2164,13 +2216,13 @@ if ($NmeRtiWebAppName) {
     }
     # check if rti app service dns zone group created
     if (-not $SkipDNS) {
-        $RtiAppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $RtiAppServicePrivateEndpoint.Name -ErrorAction SilentlyContinue
+        $RtiAppServiceDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $RtiAppServicePrivateEndpoint.ResourceGroupName -PrivateEndpointName $RtiAppServicePrivateEndpoint.Name -ErrorAction SilentlyContinue
         if ($RtiAppServiceDnsZoneGroup) {
             Write-Output "Found RTI App Service DNS zone group"
         } else {
             Write-Output "Configuring RTI app service DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $AppServiceDnsZoneName -PrivateDnsZoneId $AppServiceDnsZone.ResourceId
-            $RtiAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $RtiAppServicePrivateEndpoint.Name -Name $RtiAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
+            $RtiAppServiceDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $RtiAppServicePrivateEndpoint.ResourceGroupName -PrivateEndpointName $RtiAppServicePrivateEndpoint.Name -Name $RtiAppServiceDnsZoneGroupName -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping RTI App Service DNS zone group configuration (SkipDNS enabled)"
@@ -2180,7 +2232,7 @@ if ($NmeRtiWebAppName) {
 if ($NmeRtiSqlServerName) {
     $RtiSqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeRtiSqlServerName
     # check if rti sql private endpoint is created
-    $RtiSqlPrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $RtiSqlServer.ResourceId }
+    $RtiSqlPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $RtiSqlServer.ResourceId -DisplayName "the RTI sql server"
     if ($RtiSqlPrivateEndpoint) {
         Write-Output "Found RTI SQL private endpoint"
     } 
@@ -2191,13 +2243,13 @@ if ($NmeRtiSqlServerName) {
     }
     # check if rti sql dns zone group created
     if (-not $SkipDNS) {
-        $RtiSqlDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $RtiSqlPrivateEndpoint.Name -ErrorAction SilentlyContinue
+        $RtiSqlDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $RtiSqlPrivateEndpoint.ResourceGroupName -PrivateEndpointName $RtiSqlPrivateEndpoint.Name -ErrorAction SilentlyContinue
         if ($RtiSqlDnsZoneGroup) {
             Write-Output "Found RTI SQL DNS zone group"
         } else {
             Write-Output "Configuring RTI sql DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $SqlDnsZoneName -PrivateDnsZoneId $SqlDnsZone.ResourceId
-            $RtiSqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $RtiSqlPrivateEndpoint.Name -Name $RtiSqlDnsZoneGroupName -PrivateDnsZoneConfig $config
+            $RtiSqlDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $RtiSqlPrivateEndpoint.ResourceGroupName -PrivateEndpointName $RtiSqlPrivateEndpoint.Name -Name $RtiSqlDnsZoneGroupName -PrivateDnsZoneConfig $config
         }
     } else {
         Write-Output "Skipping RTI SQL DNS zone group configuration (SkipDNS enabled)"
@@ -2216,7 +2268,7 @@ if ($NmeRtiKeyVaultName) {
     # Get rti key vault
     $NmeRtiKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -VaultName $NmeRtiKeyVaultName
     # check if rti key vault private endpoint is created
-    $RtiKvPrivateEndpoint = $ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $NmeRtiKeyVault.ResourceId }
+    $RtiKvPrivateEndpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $NmeRtiKeyVault.ResourceId -DisplayName "the RTI key vault"
     if ($RtiKvPrivateEndpoint) {
         Write-Output "Found RTI Key Vault private endpoint"
     } 
@@ -2227,13 +2279,13 @@ if ($NmeRtiKeyVaultName) {
     }
     # check if rti key vault dns zone group created
     if (-not $SkipDNS) {
-        $RtiKvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $RtiKvPrivateEndpoint.Name -ErrorAction SilentlyContinue
+        $RtiKvDnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $RtiKvPrivateEndpoint.ResourceGroupName -PrivateEndpointName $RtiKvPrivateEndpoint.Name -ErrorAction SilentlyContinue
         if ($RtiKvDnsZoneGroup) {
             Write-Output "Found RTI Key Vault DNS zone group"
         } else {
             Write-Output "Configuring RTI Key Vault DNS zone group"
             $Config = New-AzPrivateDnsZoneConfig -Name $KeyVaultDnsZoneName  -PrivateDnsZoneId $KeyVaultDnsZone.ResourceId
-            $RtiKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $NmeRg -PrivateEndpointName $RtiKvPrivateEndpoint.Name -Name $RtiKvDnsZoneGroupName -PrivateDnsZoneConfig $Config
+            $RtiKvDnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $RtiKvPrivateEndpoint.ResourceGroupName -PrivateEndpointName $RtiKvPrivateEndpoint.Name -Name $RtiKvDnsZoneGroupName -PrivateDnsZoneConfig $Config
         }
     } else {
         Write-Output "Skipping RTI Key Vault DNS zone group configuration (SkipDNS enabled)"
