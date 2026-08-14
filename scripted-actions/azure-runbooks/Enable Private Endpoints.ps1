@@ -1,4 +1,4 @@
-﻿#description: Restrict access to the sql database and keyvault used by Nerdio Manager.
+#description: Restrict access to the sql database and keyvault used by Nerdio Manager.
 #tags: Nerdio, Preview
 
 <# Notes:
@@ -1116,6 +1116,14 @@ function New-NmeStoragePrivateEndpoint {
     # This function depends on script scope: it reads $ExistingPrivateEndpoints, $NmeRg,
     # $VnetLocation, $PrivateEndpointSubnet, $SkipDNS, $StorageSubresourceDnsZoneNames and
     # $StorageSubresourceDnsZones, all of which must be set before this function is called.
+    # Deliberately returns nothing (bare `return`, not `return $Endpoint`): every call site invokes
+    # this as a bare statement with no assignment, specifically so the Write-Output progress messages
+    # below reach the job log directly. `$x = New-NmeStoragePrivateEndpoint ...` or `... | Out-Null`
+    # captures the ENTIRE success stream of the call - every Write-Output in this function, not just
+    # a final return value - silencing all of them. Found live 2026-08-13 (R1 of TEST-PLAN.md §11):
+    # every call site here already piped to `| Out-Null` for exactly this reason before the fix, which
+    # is what caused it. No caller has ever used the endpoint object this returned - do not add a
+    # return value back without also changing every call site to not capture/discard the pipeline.
     param(
         [Parameter(Mandatory=$true)]$StorageAccount,          # the object from Get-AzStorageAccount
         [Parameter(Mandatory=$true)][string]$Subresource,     # 'blob' or 'table'
@@ -1149,7 +1157,7 @@ function New-NmeStoragePrivateEndpoint {
 
     if ($SkipDNS) {
         Write-Output "Skipping $DisplayName storage DNS zone group configuration (SkipDNS enabled)"
-        return $Endpoint
+        return
     }
 
     # -ResourceGroupName is the endpoint's own resource group, not $NmeRg: a pre-existing endpoint
@@ -1172,8 +1180,6 @@ function New-NmeStoragePrivateEndpoint {
         $Config = New-AzPrivateDnsZoneConfig -Name $ZoneName -PrivateDnsZoneId $Zone.ResourceId
         $DnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $Endpoint.ResourceGroupName -PrivateEndpointName $Endpoint.Name -Name $DnsZoneGroupName -PrivateDnsZoneConfig $Config
     }
-
-    return $Endpoint
 }
 
 function New-NmeComponentPrivateEndpoint {
@@ -1185,6 +1191,14 @@ function New-NmeComponentPrivateEndpoint {
     # just patching them again. This function depends on script scope: it reads $ExistingPrivateEndpoints,
     # $NmeRg, $VnetLocation, $PrivateEndpointSubnet and $SkipDNS, all of which must be set before this
     # function is called.
+    #
+    # Deliberately returns nothing: see New-NmeStoragePrivateEndpoint's comment above for why. This
+    # function originally ended with `return $Endpoint` and every one of the 13 call sites assigned it
+    # to a `$XxxPrivateEndpoint` variable - which silenced every Write-Output below (Found/Configuring
+    # for both the endpoint and its DNS zone group) across every component, since assignment captures
+    # the function's entire success stream, not just the last object. None of those 13 variables were
+    # ever read again (confirmed by grep before removing them). Found live 2026-08-13 (R1 of
+    # TEST-PLAN.md §11) - the private-endpoints region produced zero progress output for ~4.5 minutes.
     #
     # Every Write-Output/Write-Warning string is supplied by the caller rather than derived from a single
     # display-name parameter, because the 13 blocks this replaces were never worded consistently - for
@@ -1247,8 +1261,6 @@ function New-NmeComponentPrivateEndpoint {
     else {
         Write-Output $SkipDnsZoneGroupMessage
     }
-
-    return $Endpoint
 }
 
 function Test-NmePrivateDnsResolution {
@@ -2031,7 +2043,7 @@ $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName
  
 # check if keyvault private endpoint created
 $KeyVault = Get-AzKeyVault -VaultName $KeyVaultName -ErrorAction SilentlyContinue
-$KvPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $KeyVault.ResourceId -GroupId vault `
+New-NmeComponentPrivateEndpoint -TargetResourceId $KeyVault.ResourceId -GroupId vault `
     -FindDisplayName "the Nerdio Manager key vault" `
     -FoundMessage "Found Key Vault private endpoint" -ConfiguringMessage "Configuring keyvault service connection and private endpoint" `
     -PrivateEndpointName "$KvPrivateEndpointName" -ServiceConnectionName $KvServiceConnectionName `
@@ -2043,7 +2055,7 @@ $KvPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $KeyVault
 if ($NmeCclKeyVaultName) {
     # get ccl key vault
     $NmeCclKeyVault = Get-AzKeyVault -VaultName $NmeCclKeyVaultName
-    $CclKvPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $NmeCclKeyVault.ResourceId -GroupId vault `
+    New-NmeComponentPrivateEndpoint -TargetResourceId $NmeCclKeyVault.ResourceId -GroupId vault `
         -FindDisplayName "the CCL key vault" `
         -FoundMessage "Found CCL Key Vault private endpoint" -ConfiguringMessage "Configuring CCL keyvault service connection and private endpoint" `
         -PrivateEndpointName "$CclKvPrivateEndpointName" -ServiceConnectionName $CclKvServiceConnectionName `
@@ -2056,7 +2068,7 @@ if ($NmeCclKeyVaultName) {
 if ($NmeIiKeyVaultName) {
     # get intune insights key vault
     $NmeIiKeyVault = Get-AzKeyVault -VaultName $NmeIiKeyVaultName
-    $IiKvPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $NmeIiKeyVault.ResourceId -GroupId vault `
+    New-NmeComponentPrivateEndpoint -TargetResourceId $NmeIiKeyVault.ResourceId -GroupId vault `
         -FindDisplayName "the Intune Insights key vault" `
         -FoundMessage "Found Intune Insights Key Vault private endpoint" -ConfiguringMessage "Configuring Intune Insights keyvault service connection and private endpoint" `
         -PrivateEndpointName "$IiKvPrivateEndpointName" -ServiceConnectionName $IiKvServiceConnectionName `
@@ -2068,7 +2080,7 @@ if ($NmeIiKeyVaultName) {
 $SqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeSqlServerName
 
 #check if sql private endpoint created
-$SqlPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $SqlServer.ResourceId -GroupId sqlserver `
+New-NmeComponentPrivateEndpoint -TargetResourceId $SqlServer.ResourceId -GroupId sqlserver `
     -FindDisplayName "the Nerdio Manager sql server" `
     -FoundMessage "Found SQL private endpoint" -ConfiguringMessage "Configuring sql service connection and private endpoint" `
     -PrivateEndpointName "$SqlPrivateEndpointName" -ServiceConnectionName $SqlServiceConnectionName `
@@ -2079,7 +2091,7 @@ $SqlPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $SqlServ
 # if $nmeIisqlServerName is set, create private endpoint for intune insights sql server
 if ($NmeIiSqlServerName) {
     $IiSqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeIiSqlServerName
-    $IiSqlPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $IiSqlServer.ResourceId -GroupId sqlserver `
+    New-NmeComponentPrivateEndpoint -TargetResourceId $IiSqlServer.ResourceId -GroupId sqlserver `
         -FindDisplayName "the Intune Insights sql server" `
         -FoundMessage "Found Intune Insights SQL private endpoint" -ConfiguringMessage "Configuring Intune Insights sql service connection and private endpoint" `
         -PrivateEndpointName "$IiSqlPrivateEndpointName" -ServiceConnectionName $IiSqlServiceConnectionName `
@@ -2091,7 +2103,7 @@ if ($NmeIiSqlServerName) {
 
 # check if automation account private endpoint is created
 $NmeAutomationAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Automation/automationAccounts/$NmeAutomationAccountName"
-$AutomationPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $NmeAutomationAccountResourceId -GroupId DSCAndHybridWorker `
+New-NmeComponentPrivateEndpoint -TargetResourceId $NmeAutomationAccountResourceId -GroupId DSCAndHybridWorker `
     -FindDisplayName "the Nerdio Manager automation account" `
     -FoundMessage "Found Automation private endpoint" -ConfiguringMessage "Configuring automation service connection and private endpoint" `
     -PrivateEndpointName "$AutomationPrivateEndpointName" -ServiceConnectionName $AutomationServiceConnectionName `
@@ -2104,7 +2116,7 @@ $AutomationPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $
        
 if ($NmeScriptedActionsAccountName) {
     $ScriptedActionsAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Automation/automationAccounts/$NmeScriptedActionsAccountName"
-    $ScriptedActionsPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $ScriptedActionsAccountResourceId -GroupId DSCAndHybridWorker `
+    New-NmeComponentPrivateEndpoint -TargetResourceId $ScriptedActionsAccountResourceId -GroupId DSCAndHybridWorker `
         -FindDisplayName "the scripted actions automation account" `
         -FoundMessage "Found scripted actions private endpoint" -ConfiguringMessage "Configuring scripted actions service connection and private endpoint" `
         -PrivateEndpointName $ScriptedActionsPrivateEndpointName -ServiceConnectionName $ScriptedActionsServiceConnectionName `
@@ -2122,7 +2134,7 @@ if ($NmeScriptedActionsAccountName) {
         }
         New-NmeStoragePrivateEndpoint -StorageAccount $ScriptedActionsStorageAccount -Subresource blob `
             -PrivateEndpointName $ScriptedActionsStoragePrivateEndpointName -ServiceConnectionName $SaStorageServiceConnectionName `
-            -DnsZoneGroupName $SaStoragePrivateDnsZoneGroupName -DisplayName 'scripted actions' | Out-Null
+            -DnsZoneGroupName $SaStoragePrivateDnsZoneGroupName -DisplayName 'scripted actions'
     }
 }
 
@@ -2131,7 +2143,7 @@ if ($NmeCclStorageAccountName) {
     $NmeCclStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeCclStorageAccountName
     New-NmeStoragePrivateEndpoint -StorageAccount $NmeCclStorageAccount -Subresource blob `
         -PrivateEndpointName $CclStoragePrivateEndpointName -ServiceConnectionName $CclStorageServiceConnectionName `
-        -DnsZoneGroupName $CclStoragePrivateDnsZoneGroupName -DisplayName 'CCL' | Out-Null
+        -DnsZoneGroupName $CclStoragePrivateDnsZoneGroupName -DisplayName 'CCL'
 }
 
 if ($NmeDpsStorageAccountName) {
@@ -2139,7 +2151,7 @@ if ($NmeDpsStorageAccountName) {
     $NmeDpsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeDpsStorageAccountName
     New-NmeStoragePrivateEndpoint -StorageAccount $NmeDpsStorageAccount -Subresource blob `
         -PrivateEndpointName $DpsStoragePrivateEndpointName -ServiceConnectionName $DpsStorageServiceConnectionName `
-        -DnsZoneGroupName $DpsStoragePrivateDnsZoneGroupName -DisplayName 'DPS' | Out-Null
+        -DnsZoneGroupName $DpsStoragePrivateDnsZoneGroupName -DisplayName 'DPS'
 }
 else {
     Write-Warning "Unable to find DPS storage account. Skipping private endpoint creation. You will need to manually create the private endpoint for the storage account."
@@ -2148,7 +2160,7 @@ else {
 
 $AppService = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
 # check if app service private endpoint is created
-$AppServicePrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $AppService.id -GroupId sites `
+New-NmeComponentPrivateEndpoint -TargetResourceId $AppService.id -GroupId sites `
     -FindDisplayName "the Nerdio Manager app service" `
     -FoundMessage "Found App Service private endpoint" -ConfiguringMessage "Configuring app service service connection and private endpoint" `
     -PrivateEndpointName "$AppServicePrivateEndpointName" -ServiceConnectionName $AppServiceServiceConnectionName `
@@ -2159,7 +2171,7 @@ $AppServicePrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $
 
 if ($NmeCclWebAppName) {
     $CclAppService = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeCclWebAppName
-    $CclAppServicePrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $CclAppService.id -GroupId sites `
+    New-NmeComponentPrivateEndpoint -TargetResourceId $CclAppService.id -GroupId sites `
         -FindDisplayName "the CCL app service" `
         -FoundMessage "Found CCL App Service private endpoint" -ConfiguringMessage "Configuring CCL app service service connection and private endpoint" `
         -PrivateEndpointName "$CclAppServicePrivateEndpointName" -ServiceConnectionName $CclAppServiceServiceConnectionName `
@@ -2170,7 +2182,7 @@ if ($NmeCclWebAppName) {
 # add section for NmeiiWebApp
 if ($NmeIiWebAppName) {
     $IiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeIiWebAppName
-    $IiAppServicePrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $IiWebApp.id -GroupId sites `
+    New-NmeComponentPrivateEndpoint -TargetResourceId $IiWebApp.id -GroupId sites `
         -FindDisplayName "the Intune Insights app service" `
         -FoundMessage "Found Intune Insights App Service private endpoint" -ConfiguringMessage "Configuring Intune Insights app service service connection and private endpoint" `
         -PrivateEndpointName "$IiAppServicePrivateEndpointName" -ServiceConnectionName $IiAppServiceServiceConnectionName `
@@ -2183,7 +2195,7 @@ if ($NmeIiWebAppName) {
 # add private endpoints for real time insights app service
 if ($NmeRtiWebAppName) {
     $RtiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeRtiWebAppName
-    $RtiAppServicePrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $RtiWebApp.id -GroupId sites `
+    New-NmeComponentPrivateEndpoint -TargetResourceId $RtiWebApp.id -GroupId sites `
         -FindDisplayName "the RTI app service" `
         -FoundMessage "Found RTI App Service private endpoint" -ConfiguringMessage "Configuring RTI app service service connection and private endpoint" `
         -PrivateEndpointName "$RtiAppServicePrivateEndpointName" -ServiceConnectionName $RtiAppServiceServiceConnectionName `
@@ -2194,7 +2206,7 @@ if ($NmeRtiWebAppName) {
 # add private endpoints for real time insights sql server
 if ($NmeRtiSqlServerName) {
     $RtiSqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeRtiSqlServerName
-    $RtiSqlPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $RtiSqlServer.ResourceId -GroupId sqlserver `
+    New-NmeComponentPrivateEndpoint -TargetResourceId $RtiSqlServer.ResourceId -GroupId sqlserver `
         -FindDisplayName "the RTI sql server" `
         -FoundMessage "Found RTI SQL private endpoint" -ConfiguringMessage "Configuring RTI sql service connection and private endpoint" `
         -PrivateEndpointName "$RtiSqlPrivateEndpointName" -ServiceConnectionName $RtiSqlServiceConnectionName `
@@ -2208,13 +2220,13 @@ if ($NmeRtiStorageAccountName) {
     $NmeRtiStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeRtiStorageAccountName
     New-NmeStoragePrivateEndpoint -StorageAccount $NmeRtiStorageAccount -Subresource table `
         -PrivateEndpointName $RtiStoragePrivateEndpointName -ServiceConnectionName $RtiStorageServiceConnectionName `
-        -DnsZoneGroupName $RtiStorageDnsZoneGroupName -DisplayName 'RTI' | Out-Null
+        -DnsZoneGroupName $RtiStorageDnsZoneGroupName -DisplayName 'RTI'
 }
 # add private endpoint for real time insights key vault
 if ($NmeRtiKeyVaultName) {
     # Get rti key vault
     $NmeRtiKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -VaultName $NmeRtiKeyVaultName
-    $RtiKvPrivateEndpoint = New-NmeComponentPrivateEndpoint -TargetResourceId $NmeRtiKeyVault.ResourceId -GroupId vault `
+    New-NmeComponentPrivateEndpoint -TargetResourceId $NmeRtiKeyVault.ResourceId -GroupId vault `
         -FindDisplayName "the RTI key vault" `
         -FoundMessage "Found RTI Key Vault private endpoint" -ConfiguringMessage "Configuring RTI Key Vault service connection and private endpoint" `
         -PrivateEndpointName "$RtiKvPrivateEndpointName" -ServiceConnectionName $RtiKvServiceConnectionName `
@@ -2458,10 +2470,11 @@ if ($NmeDpsStorageAccountName) {
 }
 
 # Re-fetch private endpoints subscription-wide, with the same fallback-to-$NmeRg pattern used for
-# $ExistingPrivateEndpoints earlier in this script, rather than reusing $KvPrivateEndpoint /
-# $SqlPrivateEndpoint / the DPS storage helper's return value (which is discarded at its call site). A
-# freshly created endpoint may not have CustomDnsConfigs populated yet on the object New-AzPrivateEndpoint
-# returned earlier in this same run, so only a fresh Get can be trusted for the private IPs here.
+# $ExistingPrivateEndpoints earlier in this script, rather than reusing the object New-AzPrivateEndpoint
+# returned when the endpoint was created above (neither New-NmeComponentPrivateEndpoint nor
+# New-NmeStoragePrivateEndpoint return it to their callers at all - see their own comments). A freshly
+# created endpoint may not have CustomDnsConfigs populated yet on that object, so only a fresh Get can
+# be trusted for the private IPs here regardless.
 try {
     $ConnectivityPrivateEndpoints = Get-AzPrivateEndpoint -ErrorAction Stop
 }
