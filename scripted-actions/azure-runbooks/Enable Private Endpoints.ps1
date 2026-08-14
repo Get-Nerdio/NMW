@@ -1,4 +1,4 @@
-#description: Restrict access to the sql database and keyvault used by Nerdio Manager.
+﻿#description: Restrict access to the sql database and keyvault used by Nerdio Manager.
 #tags: Nerdio, Preview
 
 <# Notes:
@@ -1151,8 +1151,18 @@ function New-NmeStoragePrivateEndpoint {
     }
     else {
         Write-Output "Configuring $DisplayName storage service connection and private endpoint"
-        $ServiceConnection = New-AzPrivateLinkServiceConnection -Name $ServiceConnectionName -PrivateLinkServiceId $StorageAccount.Id -GroupId $Subresource
-        $Endpoint = New-AzPrivateEndpoint -Name $PrivateEndpointName -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ServiceConnection
+        $EndpointStart = Get-Date
+        try {
+            $ServiceConnection = New-AzPrivateLinkServiceConnection -Name $ServiceConnectionName -PrivateLinkServiceId $StorageAccount.Id -GroupId $Subresource -ErrorAction Stop
+            $Endpoint = New-AzPrivateEndpoint -Name $PrivateEndpointName -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ServiceConnection -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "Could not create the private endpoint for $DisplayName storage: $($_.Exception.Message) The remaining components will still be attempted, and this run will stop before making anything private - see the summary at the end of this region."
+            $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = "$DisplayName storage"; Reason = $_.Exception.Message }
+            return
+        }
+        Write-Output "Created $DisplayName storage private endpoint '$PrivateEndpointName'"
+        Write-Verbose "Created $DisplayName storage private endpoint in $([math]::Round(((Get-Date) - $EndpointStart).TotalSeconds, 1)) seconds"
     }
 
     if ($SkipDNS) {
@@ -1177,8 +1187,16 @@ function New-NmeStoragePrivateEndpoint {
     }
     else {
         Write-Output "Configuring $DisplayName storage DNS zone group"
-        $Config = New-AzPrivateDnsZoneConfig -Name $ZoneName -PrivateDnsZoneId $Zone.ResourceId
-        $DnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $Endpoint.ResourceGroupName -PrivateEndpointName $Endpoint.Name -Name $DnsZoneGroupName -PrivateDnsZoneConfig $Config
+        try {
+            $Config = New-AzPrivateDnsZoneConfig -Name $ZoneName -PrivateDnsZoneId $Zone.ResourceId -ErrorAction Stop
+            $DnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $Endpoint.ResourceGroupName -PrivateEndpointName $Endpoint.Name -Name $DnsZoneGroupName -PrivateDnsZoneConfig $Config -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "Could not create the DNS zone group for $DisplayName storage: $($_.Exception.Message) The private endpoint itself was created, but $DisplayName will not resolve to it until this is fixed. The remaining components will still be attempted, and this run will stop before making anything private."
+            $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = "$DisplayName storage"; Reason = $_.Exception.Message }
+            return
+        }
+        Write-Output "Created $DisplayName storage DNS zone group '$DnsZoneGroupName'"
     }
 }
 
@@ -1235,8 +1253,18 @@ function New-NmeComponentPrivateEndpoint {
     }
     else {
         Write-Output $ConfiguringMessage
-        $ServiceConnection = New-AzPrivateLinkServiceConnection -Name $ServiceConnectionName -PrivateLinkServiceId $TargetResourceId -GroupId $GroupId
-        $Endpoint = New-AzPrivateEndpoint -Name $PrivateEndpointName -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ServiceConnection
+        $EndpointStart = Get-Date
+        try {
+            $ServiceConnection = New-AzPrivateLinkServiceConnection -Name $ServiceConnectionName -PrivateLinkServiceId $TargetResourceId -GroupId $GroupId -ErrorAction Stop
+            $Endpoint = New-AzPrivateEndpoint -Name $PrivateEndpointName -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ServiceConnection -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "Could not create the private endpoint for $FindDisplayName`: $($_.Exception.Message) The remaining components will still be attempted, and this run will stop before making anything private - see the summary at the end of this region."
+            $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = $FindDisplayName; Reason = $_.Exception.Message }
+            return
+        }
+        Write-Output "Created $FindDisplayName private endpoint '$PrivateEndpointName'"
+        Write-Verbose "Created $FindDisplayName private endpoint in $([math]::Round(((Get-Date) - $EndpointStart).TotalSeconds, 1)) seconds"
     }
 
     if (-not $SkipDNS) {
@@ -1254,8 +1282,16 @@ function New-NmeComponentPrivateEndpoint {
         }
         else {
             Write-Output $ConfiguringDnsZoneGroupMessage
-            $Config = New-AzPrivateDnsZoneConfig -Name $DnsZoneName -PrivateDnsZoneId $DnsZone.ResourceId
-            $DnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $Endpoint.ResourceGroupName -PrivateEndpointName $Endpoint.Name -Name $DnsZoneGroupName -PrivateDnsZoneConfig $Config
+            try {
+                $Config = New-AzPrivateDnsZoneConfig -Name $DnsZoneName -PrivateDnsZoneId $DnsZone.ResourceId -ErrorAction Stop
+                $DnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $Endpoint.ResourceGroupName -PrivateEndpointName $Endpoint.Name -Name $DnsZoneGroupName -PrivateDnsZoneConfig $Config -ErrorAction Stop
+            }
+            catch {
+                Write-Warning "Could not create the DNS zone group for $FindDisplayName`: $($_.Exception.Message) The private endpoint itself was created, but $FindDisplayName will not resolve to it until this is fixed. The remaining components will still be attempted, and this run will stop before making anything private."
+                $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = $FindDisplayName; Reason = $_.Exception.Message }
+                return
+            }
+            Write-Output "Created $FindDisplayName DNS zone group '$DnsZoneGroupName'"
         }
     }
     else {
@@ -2033,6 +2069,13 @@ $StorageSubresourceDnsZones = @{
     table = $TableDnsZone
 }
 
+# Components whose private endpoint or DNS zone group could not be created this run. Populated by
+# New-NmeComponentPrivateEndpoint / New-NmeStoragePrivateEndpoint, which contain their own failures so
+# that one broken component does not prevent the other 16 from being attempted. Consumed by the
+# region-end check below, which Throws if this is non-empty - see that check for why the run must not
+# continue to the make-private region with an incomplete endpoint set.
+$script:NmeFailedEndpointComponents = @()
+
 #region create private endpoints
 $RegionStart = Get-Date
 # $VNet is already current here - nothing between its creation/resolution above and this point
@@ -2236,6 +2279,23 @@ if ($NmeRtiKeyVaultName) {
 }
 
 Write-Output "Private endpoints region completed in $([math]::Round(((Get-Date) - $RegionStart).TotalSeconds, 1)) seconds"
+
+if ($script:NmeFailedEndpointComponents.Count) {
+    Write-Output "$($script:NmeFailedEndpointComponents.Count) component(s) could not be configured:"
+    foreach ($f in $script:NmeFailedEndpointComponents) {
+        Write-Output "  FAILED: $($f.Component) - $($f.Reason)"
+    }
+    # Deliberately fatal, and deliberately fatal HERE. Every component was attempted first, so one run
+    # now reports every problem instead of surfacing them one per run (T01 in the first test pass took
+    # seven attempts for exactly this reason). But the run must still stop before the make-private
+    # region: disabling public network access on a resource whose private endpoint does not exist
+    # strands Nerdio Manager from its own key vault/sql/storage with no in-product recovery. The P2-1
+    # connectivity gate is not sufficient cover - it probes only the key vault, primary sql server and
+    # DPS storage account, so a failed CCL / Intune Insights / RTI endpoint would pass the gate and
+    # then be locked down. Stopping here also avoids the VNet-integration write that would trigger an
+    # NME resubmission of a run already known to be incomplete (P1-24).
+    Throw "$($script:NmeFailedEndpointComponents.Count) of the private endpoints or DNS zone groups could not be created (listed above). Nothing has been made private by this run. Resolve the errors above and re-run - components that already succeeded will be found and skipped."
+}
 #endregion
 
 # region create private link peering
