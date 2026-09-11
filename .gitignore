@@ -12,7 +12,10 @@ To-Do.md
 TEST-PLAN.md
 TEST-RESULTS.md
 SPEC-*.md
+*.md
 
 # Raw NME/Azure Automation job logs from test runs - verbose, large, and full of the same
 # lab identifiers.
 test-logs/
+
+.claude/

@@ -2,185 +2,81 @@
 #tags: Nerdio, Preview
 
 <# Notes:
- 
-This script will add private endpoints and service endpoints to allow the Nerdio Manager app service to communicate
-with the sql database, keyvault, and automation account over a private network. Access to the sql database and
-keyvault will be restricted to the private network.
 
-What this script does NOT make private, so that the scope is not overstated:
+Adds private endpoints/service endpoints so the Nerdio Manager app service reaches its sql database,
+keyvault, and automation account over a private network, then restricts the database and keyvault to that
+network. Re-run safely to bring newly-enabled NME components (Intune Insights, CCL, RTI) onto the same
+private network. Never re-enables public access on anything a prior run restricted.
 
- - The automation accounts. Both the Nerdio Manager automation account and the scripted actions automation account get
-   private endpoints, but their public network access is deliberately left enabled. Disabling it on an Automation
-   account restricts runbook execution to Hybrid Runbook Workers - Azure sandbox jobs stop working - which would break
-   scripted actions for any deployment that does not run everything on hybrid workers. The private endpoints use the
-   DSCAndHybridWorker sub-resource only; the Webhook sub-resource is not configured.
- - The secondary sql server, if geo-replication is configured. It is detected but gets no private endpoint and no
-   public access restriction, because it is typically in a different region and would need its own VNet, private
-   endpoint and DNS zone link.
- - Azure Monitor, Application Insights and Log Analytics. Making these private requires an Azure Monitor Private Link
-   Scope, which is out of scope for this script by design - configure AMPLS separately if you need it.
- - Azure Resource Manager control plane traffic (management.azure.com), which is not private-linkable here.
- - The Real Time Insights app service's SCM/Kudu endpoint under RtiAppService=Restricted. Restricted firewalls the
-   main site's public endpoint but deliberately leaves ScmSiteUseMainSiteRestrictionConfig untouched, so the SCM
-   site keeps its own (unrestricted) config - consistent with the rest of this script, which never restricts an
-   SCM endpoint. Noted here so the gap is visible rather than assumed closed.
+Full detail - including what is deliberately NOT made private, storage sub-resource coverage, lockout
+recovery, and the app-service-private matrix - is available on our help site: https://nmehelp.getnerdio.com/hc/en-us/articles/26124385359757-Scripted-Actions-Azure-Runbook-Enable-Private-Endpoints.
 
-Alongside disabling public network access, this script applies two Microsoft baseline settings to the storage accounts
-it manages (minimum TLS version 1.2, and anonymous public blob access disallowed) and sets a minimum TLS version of 1.2
-on the sql servers it manages. These are only ever raised, never lowered, so an account already requiring a newer TLS
-version keeps it. Shared key access on the storage accounts is deliberately left alone, because Nerdio Manager may
-depend on it.
-
-Storage accounts and sub-resources covered. Azure allows exactly one sub-resource per private endpoint, so each entry
-below is one endpoint. Anything not listed keeps resolving over the public endpoint even after this script runs, which
-is what makes this table worth checking when a new component is added:
-
- - Scripted actions storage account - blob only, and for both the Private and Restricted values of
-   CssaStorageAccount (not Public).
- - Cost Calculator (CCL) storage account - blob only.
- - Deployment/Provisioning (DPS) storage account - blob only.
- - Real Time Insights storage account - table only. Real Time Insights uses the table API and does not use blob, so
-   this endpoint deliberately does not request the blob sub-resource.
-
-No queue or file sub-resource endpoints are created, because no Nerdio Manager component requests them. Adding one
-means adding its private DNS zone name to the cloud if/else near the top of this script and one entry to the
-$StorageSubresourceDnsZoneNames map.
-
-Consequences of disabling public network access on the key vaults. This blocks the trusted-services path as well as the
-public path, so scenarios that rely on it stop working: App Service certificate binding from Key Vault, ARM template
-reference() to a secret, and Azure Backup are the common ones. If you depend on any of those, they must be reworked to
-use the private endpoint or the vault must be left public. The script also sets the trusted-services bypass to None;
-that is redundant once public network access is Disabled, and is set for clarity rather than effect.
-
-Recovering from a lockout. Every restriction this script applies is reversible only from the Azure Portal (or the CLI)
-- not by re-running this script, which never re-enables public network access on anything. Before disabling anything,
-the script now resolves the Nerdio Manager key vault, primary sql server and DPS storage account FQDNs from inside the
-VNet-integrated app service worker (via the Kudu/SCM command API), against the VNet's own DNS servers, and TCP-connects
-to whatever IP comes back. If any of those three checks fails - the resolved IP is not the private endpoint's IP, or
-the TCP connect fails - the script aborts before the make-private region runs and changes nothing. This probe is
-skipped with a warning (not an error) when the app service's SCM endpoint cannot be reached, which is the normal case
-when re-running this script against a deployment that is already private: disabling public network access on the app
-service also blocks its own Kudu endpoint. In that case the script falls back to the weaker private-DNS-zone-record
-check described below and proceeds. If Nerdio Manager cannot reach its key vault or database after this script runs
-anyway, re-enable public network access on the key vault and the sql server in the portal, confirm the private DNS
-records exist and resolve, and then re-run. The most common causes are private DNS records that had not propagated
-when public access was disabled, and a pre-existing network security group on the private endpoint subnet whose rules
-this script has never inspected but has, by enabling privateEndpointNetworkPolicies, caused to be enforced (also
-warned about).
-
-App service subnet sizing. The AppServiceSubnetRange default is a /26. Microsoft recommends a /26 for App Service
-regional VNet integration: scale-out and in-place plan changes each temporarily double IP consumption, and up to four
-apps (Nerdio Manager, CCL, Intune Insights, Real Time Insights) integrate into this one subnet. The address range is
-ignored when the subnet already exists, so a subnet created too small on a first run cannot be widened by re-running
-this script - it has to be recreated, which means removing the VNet integration from every app first.
-
-If other NME components, such as Intune Insights, Cost Calculator, or Real Time Insights have been enabled, they will
-be added to the private network with private endpoints. The script can be re-run to add additional components to the
-private networking.
-
-The MakeAppServicePrivate parameter can be set to 'true' to further limit access to the app service to clients on the
-private network or peered networks. Supplying ResourceIds for one ore more existing networks will cause those networks
-to be peered to the new private network. MakeAppServicePrivate governs both the primary Nerdio Manager app service and
-the Intune Insights app service: Intune Insights is iframed into the Nerdio Manager interface, so it has to be
-reachable by exactly the same clients as the primary app service, and tying it to the same parameter keeps the two
-consistent instead of letting an admin create a broken combination. If the Cost Calculator (CCL) is deployed, its web
-app is always made private, regardless of this parameter: the only thing that communicates with it is the primary
-Nerdio Manager web app, over the private network. Real Time Insights has its own RtiAppService parameter, defaulting
-to 'Public', with a three-way 'Public' / 'Restricted' / 'Private' shape rather than a boolean: 'Restricted' is a
-middle ground that keeps the public endpoint reachable but firewalls it to linked-network subnets with the
-Microsoft.Web service endpoint enabled, because making RTI private outright cuts off any reporting endpoint (AVD
-session hosts, Windows 365 Cloud PCs, Intune-managed devices) that lacks line-of-sight to the private VNet, and that
-failure is silent - see the RtiAppService parameter description for details before choosing Restricted or Private.
-
-At a glance, which of the four app services is private under which parameter: the primary Nerdio Manager app service
-and Intune Insights both follow MakeAppServicePrivate; Cost Calculator (CCL) is always fully private, unconditionally;
-Real Time Insights follows its own RtiAppService parameter (Public/Restricted/Private) rather than
-MakeAppServicePrivate. Nothing ties RtiAppService to MakeAppServicePrivate, so a deployment can, for example, leave
-the primary app service public while restricting RTI, or the reverse.
-
-This script never re-enables public network access on anything. Setting MakeAppServicePrivate to 'false', or
-RtiAppService back to a less restrictive value, on a later run leaves the corresponding app service exactly as an
-earlier run last left it; re-enable public access in the Azure Portal if that is what you want.
-
-If the VNet and Subnets already exist, the existing resources will be used and address ranges will not be changed. 
-If they do not exist, they will be created. Names for resources created by this script, such as private endpoint names, 
-can be customized by cloning this script and editing the variables at the top of the script.
-
-The CssaStorageAccount parameter controls network access to the scripted actions storage account, and defaults to
-Restricted. Private and Restricted both put the account on the private vnet (blob sub-resource only - see the storage
-sub-resource list above); Public leaves it exactly as found, matching this script's old default behavior. Private also
-fully disables the account's public network access, so AVD VMs need PeerVnetIds (or another private endpoint) to reach
-it at all. Restricted leaves the public endpoint reachable but firewalls it to VNets tagged as linked to Nerdio Manager
-(LINKED_NETWORK) - found across every subscription this service principal can read, not just this one - whose subnet
-already has the Microsoft.Storage service endpoint enabled; a linked AVD VNet without that service endpoint enabled on
-its subnet will lose access to the storage account under Restricted, so enable it there before relying on the default.
- 
 #>
  
 <# Variables:
 {
   "PrivateLinkVnetName": {
-    "Description": "VNet for private endpoints. If the vnet does not exist, it will be created. If specifying an existing vnet, the vnet or its resource group must be linked to Nerdio Manager in Settings->Azure environment",
+    "Description": "VNet for private endpoints. Created if it doesn't exist. An existing VNet (or its resource group) must be linked to Nerdio Manager in Settings->Azure environment. See the KB article for details.",
     "IsRequired": true,
     "DefaultValue": "nmw-private-vnet"
   },
   "VnetAddressRange": {
-    "Description": "Address range for private endpoint vnet. Ignored if vnet already exists.",
+    "Description": "Address range for the private endpoint VNet. Ignored if the VNet already exists.",
     "IsRequired": false,
     "DefaultValue": "10.250.250.0/23"
   },
   "PrivateEndpointSubnetName": {
-    "Description": "Name of private endpoint subnet. If the subnet does not exist, it will be created.",
+    "Description": "Name of the private endpoint subnet. Created if it doesn't exist.",
     "IsRequired": true,
     "DefaultValue": "nmw-privateendpoints-subnet"
   },
   "PrivateEndpointSubnetRange": {
-    "Description": "Address range for private endpoint subnet. Ignored if subnet already exists.",
+    "Description": "Address range for the private endpoint subnet. Ignored if the subnet already exists.",
     "IsRequired": false,
     "DefaultValue": "10.250.250.0/24"
   },
   "AppServiceSubnetName": {
-    "Description": "App service subnet name. If the subnet does not exist, it will be created.",
+    "Description": "App service subnet name. Created if it doesn't exist.",
     "IsRequired": true,
     "DefaultValue": "nmw-app-subnet"
   },
   "AppServiceSubnetRange": {
-    "Description": "Address range for app service subnet. Ignored if subnet already exists. A /26 is the Microsoft recommendation for App Service regional VNet integration: scale-out and in-place plan changes each temporarily double IP consumption, and up to four Nerdio Manager apps integrate into this one subnet. Because the range is ignored once the subnet exists, a subnet created too small cannot be widened by re-running this script - it has to be recreated, which means removing the VNet integration from every app first.",
+    "Description": "Address range for the app service subnet. Ignored once the subnet exists - see the KB article before resizing an existing deployment.",
     "IsRequired": false,
     "DefaultValue": "10.250.251.0/26"
   },
   "ExistingDNSZonesRG": {
-    "Description": "If you have private DNS zones already configured for use with the new private endpoints, specify their resource group here. This script will retrieve the existing DNS Zones and link them to the private network. Nerdio Manager needs to be linked to this RG in Settings->Azure Environment, or temporarily assigned the Private DNS Zone Contributor role for these zones. No changes will be made to the private DNS zones apart from linking them to the private VNet if necessary.",
+    "Description": "Resource group of pre-existing private DNS zones to link to the private network, if any. Nerdio Manager must be linked to this RG in Settings->Azure environment (or granted Private DNS Zone Contributor on the zones).",
     "IsRequired": false,
     "DefaultValue": ""
   },
   "ExistingDNSZonesSubId": {
-    "Description": "If your existing private DNS zones are in a separate subscription from NME, specify the subscription id here. Nerdio needs to be linked to this subscription in Settings, but can be unlinked after running this script.",
+    "Description": "Subscription ID for ExistingDNSZonesRG, if it's in a different subscription than NME. Only used together with ExistingDNSZonesRG.",
     "IsRequired": false,
     "DefaultValue": ""
   },
   "CssaStorageAccount": {
-    "Description": "Controls network access to the scripted actions storage account. 'Restricted' (default): the account gets a private endpoint (blob sub-resource) and stays reachable on its public endpoint, but the public endpoint's firewall denies all traffic except from VNets tagged as linked to Nerdio Manager (LINKED_NETWORK) whose subnet already has the Microsoft.Storage service endpoint enabled - found across every subscription this service principal can read, not just this one. 'Public': no private endpoint, no firewall change - the account is left exactly as found, matching this script's old default behavior. 'Private': private endpoint plus public network access fully disabled, matching this script's previous default-parameter-off behavior - AVD hosts then need a private endpoint or VNet peering (see PeerVnetIds) to reach the account at all. This script never relaxes a more restrictive setting back to a less restrictive one on a later run: moving from Private to Restricted or Public requires re-enabling public network access on the storage account in the Azure Portal first.",
+    "Description": "Network access for the scripted actions storage account: Restricted (default) = private endpoint plus public access firewalled to linked networks; Public = unchanged; Private = private endpoint and public access fully disabled. See the KB article for details - a more restrictive setting is never relaxed automatically on a later run.",
     "IsRequired": false,
     "DefaultValue": "Restricted"
   },
   "PeerVnetIds": {
-    "Description": "Optional. Values are 'All' or comma-separated list of Azure resource IDs of VNets to peer to private endpoint VNet. If 'All' then all linked VNets will be peered. The VNETs or their resource groups must be linked to Nerdio Manager in Settings->Azure environment. All VNets must be in the same subscription as Nerdio Manager. External VNets must be peered manually.",
+    "Description": "'All', or a comma-separated list of Azure resource IDs of VNets to peer to the private endpoint VNet. VNets (or their resource groups) must be linked to Nerdio Manager and in the same subscription. External VNets must be peered manually.",
     "IsRequired": false,
     "DefaultValue": ""
   },
   "MakeAppServicePrivate": {
-    "Description": "WARNING: If set to true, only hosts on the VNet created by this script, or on peered VNets, will be able to access the app service URL. Note that setting this back to false does NOT re-enable public access on a later run - this script never re-enables public network access implicitly. To undo it, re-enable public network access on the app service in the Azure Portal.",
+    "Description": "WARNING: If true, only hosts on the private VNet or peered VNets can reach the Nerdio Manager and Intune Insights app services. Setting back to false does not re-enable public access - do that in the Azure Portal.",
     "IsRequired": false,
     "DefaultValue": "false"
   },
   "RtiAppService": {
-    "Description": "Controls network access to the Real Time Insights app service. 'Public' (default): the app service gets a private endpoint but its public endpoint is left exactly as found. 'Restricted': the public endpoint stays reachable but is firewalled to subnets on VNets tagged as linked to Nerdio Manager (LINKED_NETWORK) that already have the Microsoft.Web service endpoint enabled - found across every subscription this service principal can read. 'Private': public network access is disabled entirely, so only clients with network line-of-sight to the private VNet or a peered VNet can reach it. WARNING for both Restricted and Private: every endpoint that reports to Real Time Insights - AVD session hosts, Windows 365 Cloud PCs and Intune-managed devices - must be able to reach it to post metrics, and devices that cannot will simply stop reporting with no error surfaced in Nerdio Manager; the symptom is missing history noticed weeks later. Intune-managed devices are typically internet-based and roaming with no VNet line-of-sight, and Cloud PCs on a Microsoft-hosted network have no customer VNet at all - neither can be recovered by peering or by a firewall rule, under either Restricted or Private. AVD session hosts in customer Azure VNets can be covered by Restricted if their subnet has the Microsoft.Web service endpoint enabled, or by peering their VNet via PeerVnetIds and ensuring DNS resolves the app service FQDN to the private endpoint. This script never relaxes a more restrictive setting back to a less restrictive one on a later run: moving from Private to Restricted or Public requires re-enabling public network access on the app service in the Azure Portal first.",
+    "Description": "Network access for the Real Time Insights app service: Public (default) = unchanged; Restricted = public endpoint firewalled to linked networks; Private = public access fully disabled. WARNING: Restricted/Private can silently cut off devices (Intune, Cloud PCs) with no line-of-sight to the private VNet - see the KB article before choosing either.",
     "IsRequired": false,
     "DefaultValue": "Public"
   },
   "SkipDNS": {
-    "Description": "WARNING: Skip all DNS operations including checking for existing private DNS zones, creating new DNS zones, and linking DNS zones to VNets. Use this only if you are managing DNS yourself. With this set to true the private endpoints are created with no DNS zone groups, so nothing resolves to them until you configure DNS - while the same run may still disable public network access on the key vault and sql server, which locks Nerdio Manager out. The private DNS records must exist and resolve before the make-private steps take effect. If that happens, re-enable public network access on the key vault and sql server in the Azure Portal, fix DNS, and re-run.",
+    "Description": "WARNING: Skips all DNS zone creation/lookup/linking - use only if you manage DNS yourself. Public access may still be disabled on the key vault and sql server this run, locking out Nerdio Manager until your DNS records resolve. See the KB article.",
     "IsRequired": false,
     "DefaultValue": "false"
   }
@@ -192,8 +88,6 @@ $ErrorActionPreference = 'Stop'
 # Explicit module check rather than #Requires -Modules. A #Requires failure inside the Azure
 # Automation sandbox surfaces as an opaque error that does not name the missing module, and pinning
 # minimum versions is risky across commercial and US Gov, where available module versions differ.
-# Microsoft.Graph.Applications is deliberately not in this list: it is only needed by the
-# GetEntAppName recovery path, which installs it on demand.
 $RequiredModules = @(
     'Az.Accounts'
     'Az.Resources'
@@ -202,10 +96,22 @@ $RequiredModules = @(
     'Az.Storage'
     'Az.Websites'
     'Az.Network'
+    # Listed separately from Az.Network on purpose: Get-AzPrivateDnsZone, New-AzPrivateDnsZone,
+    # Get-AzPrivateDnsVirtualNetworkLink, New-AzPrivateDnsVirtualNetworkLink, and
+    # Get-AzPrivateDnsRecordSet (all used below) live in Az.PrivateDns, while the near-identically
+    # named Get-AzPrivateDnsZoneGroup / New-AzPrivateDnsZoneGroup / New-AzPrivateDnsZoneConfig live in
+    # Az.Network. Do not delete this thinking Az.Network already covers "the PrivateDns cmdlets" -
+    # verified against a real Az install; it doesn't.
+    'Az.PrivateDns'
     'Az.Automation'
 )
 $MissingModules = @($RequiredModules | Where-Object { -not (Get-Module -ListAvailable -Name $_) })
 if ($MissingModules.Count) {
+    # Without Az.PrivateDns in this list, this check passed and the script instead failed later,
+    # inside DNS-zone resolution, with an opaque "term is not recognized" error - and in the
+    # $ExistingDNSZonesRG branch that failure is caught and reported as "Unable to find one or more
+    # of the DNS zones in resource group X", which blames the customer's DNS zones for what is
+    # actually a missing module. This preflight is what turns that into an actionable error instead.
     Throw "This script requires the following PowerShell modules, which are not available in this Automation account: $($MissingModules -join ', '). Add them to the Nerdio Manager scripted actions automation account (Modules -> Browse gallery) and re-run this script."
 }
 
@@ -268,6 +174,12 @@ $CssaStorageAccount    = ConvertTo-NmeAccessMode -Value $CssaStorageAccount -Nam
 $RtiAppService         = ConvertTo-NmeAccessMode -Value $RtiAppService      -Name 'RtiAppService'      -Default 'Public'
 $MakeAppServicePrivate = ConvertTo-NmeBoolean    -Value $MakeAppServicePrivate -Name 'MakeAppServicePrivate'
 $SkipDNS               = ConvertTo-NmeBoolean    -Value $SkipDNS               -Name 'SkipDNS'
+# Same "normalize NME's string inputs once, here, rather than at each use site with inconsistent
+# handling" rationale as the two conversions above. $PeerVnetIds is compared with -eq 'All', tested
+# for truthiness at two later sites (DNS-links region and the peering region), and split on comma -
+# all four need to see the same trimmed value, or " All" fails the -eq check and a whitespace-only
+# value fails to normalize to falsy. Trim() on $null throws, hence the IsNullOrWhiteSpace guard.
+$PeerVnetIds           = if ([string]::IsNullOrWhiteSpace($PeerVnetIds)) { '' } else { ([string]$PeerVnetIds).Trim() }
 
 # Reject parameter combinations where one parameter silently discards another, before anything is
 # created. Both of these were previously accepted and then quietly ignored further down, which looks
@@ -295,7 +207,10 @@ function Set-NmeVars {
     # tag- and name-based checks below couldn't reliably identify. When none of those checks find a resource,
     # this script tells the user to manually add this tag (with the expected value) to the correct resource so
     # that the *next* run can find it here.
-    $NmeResourceTagName = "NMW_RESOURCE"
+    # Script-scoped: the throw in the main body's scripted-actions storage account lookup (private-endpoints
+    # region, ~line 2176) interpolates this into a customer-facing recovery instruction, and a function-local
+    # variable would already be out of scope there, leaving the message reading "add the tag ''".
+    $script:NmeResourceTagName = "NMW_RESOURCE"
     $keyvaultTags = $NmeKeyVault.Tags
     # $key becomes the name of this deployment's "_OBJECT_TYPE" tag (e.g. "NMW_OBJECT_TYPE"), found by looking
     # for whichever tag on the NME key vault has the value "PAAS" - this makes the lookup work regardless of the
@@ -494,6 +409,18 @@ function Set-NmeVars {
 
 Set-NmeVars -keyvaultName $KeyVaultName
 $Prefix = $NmeTagPrefix
+if ([string]::IsNullOrWhiteSpace($Prefix)) {
+    # Same reasoning as the $key fallback to 'NMW_OBJECT_TYPE' inside Set-NmeVars above: default
+    # rather than proceed with a null. A null $Prefix here is worse than a wrong tag-name guess -
+    # every name below becomes e.g. "-app-kv-privateendpoint" (leading hyphen, rejected by ARM)
+    # across ~17 private endpoints, ~14 DNS zone groups, ~17 service connections, and the DNS zone
+    # link names; and Get-NmeLinkedNetworkSubnetIds -Prefix $Prefix hits a Mandatory [string]
+    # parameter-binding failure - inside the make-private region, after the key vault and primary
+    # SQL server have already been locked down, leaving the deployment half-configured. 'nmw' is
+    # what every NME deployment that hasn't overridden the tag prefix actually uses.
+    Write-Warning "Could not read the Deployment:AzureTagPrefix app setting on the Nerdio Manager web app; assuming 'nmw'. Every resource this script creates will be named using that prefix. If this deployment actually uses a different tag prefix, fix that app setting and re-run so parameter-sourced names are correct."
+    $Prefix = 'nmw'
+}
 
 # define variables for all azure resources this script will create
 
@@ -714,6 +641,12 @@ function Get-NmeScriptHash {
 # - the loop below is already bounded to jobs that *ended* within the last $MinutesAgo minutes via
 # $JobCutoffUtc, which is the correct signal (a job actually ran recently), so nothing is lost by no
 # longer requiring the web app's own timestamp to agree.
+# The prefix every replayed line below is emitted with, and the exact string the replay-detection
+# in the loop matches on. Deliberately ONE variable rather than the literal repeated in both places:
+# emitter and detector must never drift apart, or a replay job stops being recognizable as one and
+# the chained-replay bug described above comes straight back.
+$NmeReplayMarker = '[completed run] '
+
 Function Check-LastRunResults {
     # this function depends on the Set-NmeVars function, which must be run before this function
     Param()
@@ -742,10 +675,53 @@ Function Check-LastRunResults {
             continue
         }
         if ($JobHash -eq $ThisScriptHash){
-            Write-Output "Output of previous script run:"
             $JobOutput = Get-AzAutomationJobOutput -Id $details.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
             # Note: Get-AzAutomationJobOutput only returns a truncated summary of each record.
             # If the full, untruncated text is ever needed, use Get-AzAutomationJobOutputRecord -Id <record id> instead.
+
+            # Skip a candidate that is itself a replay, and keep looking for the run that actually
+            # did the work. A replay job's own output is just the previous run's output re-emitted
+            # with $NmeReplayMarker in front of every line, so any marked record identifies one -
+            # this script never emits that prefix anywhere else.
+            #
+            # Found live 2026-09-11 (one NME submission -> 3 Azure Automation jobs, because this
+            # script restarts the NME app service twice per run: once writing virtualNetworkSubnetId
+            # for VNet integration, once via the explicit Restart-AzWebApp at the end, and NME
+            # resubmits a running scripted action on each restart). Job 2 correctly replayed job 1,
+            # the real run. Job 3 then matched *job 2* - the newest hash-match in the window - and
+            # replayed the replay, producing doubled '[completed run] [completed run] ' lines. Three
+            # things were wrong with that, in increasing order of importance:
+            #   1. The doubled prefix is confusing to read.
+            #   2. $WaitMinutes below was computed from the matched job's EndTime, so it anchored on
+            #      the replay rather than on the real run: job 3 reported "wait 1 minutes" when,
+            #      measured from the real run's EndTime, the cooldown had already expired by 4
+            #      minutes and no wait message was due at all.
+            #   3. Worse, each replay's own EndTime re-armed the $MinutesAgo window, so the
+            #      effective cooldown ratcheted forward off replays instead of off the work: real
+            #      work ended 18:04:27 and should have unblocked at 18:14:27, but re-runs stayed
+            #      blocked until 18:28:43 - 24 minutes - and every further generation would have
+            #      pushed that out again.
+            # Each generation also re-emitted an ever-growing output set (3175 -> 4659 -> 6143 job
+            # stream records; 4m52s -> 7m01s runtime), since a replay replays everything the
+            # previous replay emitted.
+            #
+            # Anchoring on the original fixes all three at once. If the real run has aged out of the
+            # window and only a replay is left, this skips it, finds nothing, and lets the run
+            # proceed - which is correct: the work finished more than $MinutesAgo ago, so a re-run
+            # is exactly what should be allowed.
+            $IsReplayJob = $false
+            foreach ($record in $JobOutput) {
+                if (([string]$record.Summary).StartsWith($NmeReplayMarker)) {
+                    $IsReplayJob = $true
+                    break
+                }
+            }
+            if ($IsReplayJob) {
+                Write-Verbose "Skipping job $($job.JobId): its output is itself a replay of an earlier run, not a run that did work."
+                continue
+            }
+
+            Write-Output "Output of previous script run:"
             foreach ($record in $JobOutput) {
                 $Summary = $record.Summary
                 if ([string]::IsNullOrEmpty($Summary)) {
@@ -756,22 +732,22 @@ Function Check-LastRunResults {
                         # -ErrorAction Continue is required here: this script sets $ErrorActionPreference = 'Stop',
                         # and a bare Write-Error would throw under that preference, aborting the replay before
                         # reaching the "App Service restarted" message and wait-time calculation below. Do not remove.
-                        Write-Error "[completed run] $Summary" -ErrorAction Continue
+                        Write-Error "$NmeReplayMarker$Summary" -ErrorAction Continue
                     }
                     'Warning' {
-                        Write-Warning "[completed run] $Summary"
+                        Write-Warning "$NmeReplayMarker$Summary"
                     }
                     'Verbose' {
-                        Write-Verbose "[completed run] $Summary"
+                        Write-Verbose "$NmeReplayMarker$Summary"
                     }
                     'Debug' {
-                        Write-Debug "[completed run] $Summary"
+                        Write-Debug "$NmeReplayMarker$Summary"
                     }
                     'Progress' {
                         # Progress records were transient UI state in the original run; skip them in the replay.
                     }
                     default {
-                        Write-Output "[completed run] $Summary"
+                        Write-Output "$NmeReplayMarker$Summary"
                     }
                 }
             }
@@ -861,95 +837,13 @@ else {
 }
 
 #### helper functions ####
-function GetEntAppName {
-    # check if mggraph module installed
-    if (!(Get-Module -ListAvailable -Name Microsoft.Graph.Applications)) {
-        Write-Verbose "Installing Microsoft.Graph.Applications module to retrieve app name"
-        # -MinimumVersion pinned to 2.0.0: that's the first version whose Connect-MgGraph
-        # parameter sets support -Identity, which the managed-identity branch below needs.
-        # -Scope CurrentUser avoids failing in a sandbox that can't elevate to AllUsers.
-        Install-Module -Name Microsoft.Graph.Applications -Repository PSGallery -Force -Scope CurrentUser -AllowClobber -MinimumVersion '2.0.0'
-    }
-
-    $ctx = Get-AzContext
-    if (!$ctx) {
-        throw "GetEntAppName: Get-AzContext returned nothing - no Azure context is active to resolve the running identity's display name."
-    }
-
-    $AppId = $ctx.Account.Id
-    $TenantId = $ctx.Tenant.Id
-    # A certificate-based service principal login (NME's default connection mode) records its
-    # thumbprint in ExtendedProperties. $ctx.Account.CertificateThumbprint is not a real property
-    # on PSAzureRmAccount - reading it always returned $null, which is why auth silently failed.
-    $Thumbprint = $null
-    if ($ctx.Account.ExtendedProperties) {
-        $Thumbprint = $ctx.Account.ExtendedProperties['CertificateThumbprint']
-    }
-
-    # Connect-MgGraph needs to be told which cloud it's targeting or it silently fails to
-    # authenticate in sovereign clouds. This script supports US Gov elsewhere (see the
-    # azurewebsites.us branching), so map the Az environment name to a Graph environment.
-    $GraphEnvironment = switch ($ctx.Environment.Name) {
-        'AzureUSGovernment' { 'USGov' }
-        'AzureChinaCloud'   { 'China' }
-        'AzureGermanCloud'  { 'Germany' }
-        default             { 'Global' }
-    }
-
-    if ($Thumbprint) {
-        # NME's default connection mode: certificate-based service principal.
-        Connect-MgGraph -TenantId $TenantId -ClientId $AppId -CertificateThumbprint $Thumbprint -Environment $GraphEnvironment -NoWelcome
-    }
-    elseif ($ctx.Account.Type -eq 'ManagedService') {
-        # NME's MANAGED_IDENTITY_ connection mode. NME's _Connect-AzAccount always passes
-        # -AccountId, so try the user-assigned form first; fall back to the system-assigned
-        # form (no -ClientId) because Connect-MgGraph rejects -ClientId for system-assigned
-        # identities.
-        try {
-            Connect-MgGraph -Identity -ClientId $AppId -Environment $GraphEnvironment -NoWelcome
-        }
-        catch {
-            Connect-MgGraph -Identity -Environment $GraphEnvironment -NoWelcome
-        }
-    }
-    else {
-        # Federated-credentials connection mode (or anything unrecognised) leaves no reusable
-        # secret or certificate in the context - there is no credential this function can use
-        # to authenticate to Microsoft Graph. Throw before the try/catch below so this message
-        # reaches the caller unwrapped instead of being re-wrapped by the generic catch.
-        throw "GetEntAppName: the Azure connection in use (Account.Type = '$($ctx.Account.Type)') leaves no credential this script can reuse to authenticate to Microsoft Graph, so the SQL Entra admin display name cannot be looked up automatically. Set the SQL server's Entra admin to a named user or group in the Azure Portal and re-run."
-    }
-
-    try {
-        # A service principal (not an application object) exists in the tenant for BOTH an
-        # application registration and a managed identity - an application object exists only
-        # for the former. The previous app-object lookup by app id would return nothing for a
-        # managed identity, which is why it silently broke that auth mode.
-        $ServicePrincipal = Get-MgServicePrincipal -Filter "appId eq '$AppId'" -ErrorAction Stop
-        if (!$ServicePrincipal) {
-            throw "No service principal found in the tenant for appId '$AppId'."
-        }
-        # .Count on a single (non-collection) object is unreliable in PowerShell; wrap in @() first.
-        $ServicePrincipal = @($ServicePrincipal)[0]
-        return $ServicePrincipal.DisplayName
-    }
-    catch {
-        # This recovery path exists specifically so the caller's "Disable in Azure Portal"
-        # fallback doesn't mask the real cause - surface it plus the actionable permission fix.
-        throw "GetEntAppName: failed to resolve the running identity's display name via Microsoft Graph: $($_.Exception.Message). The identity running this scripted action needs Microsoft Graph permission to read service principals (Application.Read.All or Directory.Read.All) for this recovery path to work."
-    }
-    finally {
-        if (Get-MgContext) {
-            try {
-                Disconnect-MgGraph | Out-Null
-            }
-            catch {
-                Write-Verbose "GetEntAppName: failed to disconnect from Microsoft Graph cleanly: $($_.Exception.Message)"
-            }
-        }
-    }
-}
-
+# GA api-version for Microsoft.Sql/servers that carries the publicNetworkAccess and
+# minimalTlsVersion properties used by the ARM-PATCH fallbacks below. This used to be hardcoded as
+# 2023-08-01-preview at the one call site that needed it; a preview api-version is a poor choice
+# for a last-resort recovery path - preview versions are not guaranteed to be present in sovereign
+# clouds such as US Gov and are retired on their own schedule, independent of GA versions. One
+# constant shared by both PATCH call sites so they cannot drift apart from each other.
+$NmeSqlApiVersion = '2021-11-01'
 function Disable-NmeSqlPublicAccess {
     # All three NME SQL servers (primary, Real Time Insights, Intune Insights) get the same
     # treatment. The primary server used to call Set-AzSqlServer bare: with
@@ -991,30 +885,51 @@ function Disable-NmeSqlPublicAccess {
     # An equivalent 'Allow app service subnet' rule was commented out at all three original call
     # sites; left out here deliberately. Traffic arriving over a private endpoint is not evaluated
     # against VNet rules at all, and once PublicNetworkAccess is Disabled these rules are inert.
-    if ($SqlServer.PublicNetworkAccess -ne 'Enabled') {
-        return
-    }
+    # There used to be a second gate here returning early unless $SqlServer.PublicNetworkAccess was
+    # exactly 'Enabled'. The 'Disabled' case already returned at the top of this function, so that
+    # gate could only ever fire on a null/empty/unexpected value - and in that case it printed
+    # "Disabling $DisplayName public access", added the VNet rule above, and then returned WITHOUT
+    # disabling anything, reporting success for a silent no-op. Falling through to the
+    # Set-AzSqlServer attempt below (which has a full ARM-PATCH fallback and a warning path) is
+    # correct for every value that is not already 'Disabled'.
     try {
         Set-AzSqlServer -ServerName $ServerName -ResourceGroupName $ResourceGroupName -PublicNetworkAccess Disabled | Out-Null
     }
     catch {
+        # Set-AzSqlServer resubmits the server's whole model on every call, including the
+        # Administrators block, and its SDK does its own client-side check of the AAD admin before
+        # submitting: it treats Administrators.Login (a bare GUID for an application/service
+        # principal admin - exactly NME's own Intune Insights and RTI SQL servers) as if it were a
+        # display name and looks up a service principal by that string, then throws
+        # System.ArgumentException ("...does not match with any service principal display name
+        # '<real display name>'...") when it doesn't match - confirmed live (2026-09-10) against
+        # both servers in the lab. This is a client-side check only: a raw ARM PATCH of just
+        # publicNetworkAccess against these same servers, admin config untouched, succeeds every
+        # time, so nothing about the admin being an application blocks this change at the API.
+        # The previous recovery here (renaming the AAD admin's display name via Microsoft Graph so
+        # it reads as a named principal, then retrying Set-AzSqlServer) was the right idea but
+        # unworkable in practice: it installed Microsoft.Graph.Applications into the same runbook
+        # process that already has Az.Accounts/Az.Sql loaded, and Connect-MgGraph's certificate-auth
+        # path then failed with "The type initializer for 'Azure.Core.Pipeline.RequestActivityPolicy'
+        # threw an exception" - an Azure.Core assembly-version conflict between the Az and
+        # Microsoft.Graph SDKs sharing one PowerShell runspace, also confirmed live against the RTI
+        # SQL server in the lab. Workaround: patch only publicNetworkAccess via a raw ARM REST call
+        # (Invoke-AzRestMethod, part of Az.Accounts - already a required module here), which
+        # bypasses Set-AzSqlServer's client-side admin check entirely and needs no Microsoft Graph
+        # module or permissions at all. -Path (not -ResourceId, which belongs to a different,
+        # -ApiVersion-incompatible parameter set) takes the resource ID with the api-version as a
+        # query string.
+        Write-Verbose "Set-AzSqlServer failed disabling public network access for $DisplayName ($($_.Exception.Message)); retrying via a direct ARM PATCH."
         try {
-            if ($SqlServer.Administrators.Sid.guid -eq $SqlServer.Administrators.login) {
-                # Workaround for an app id (rather than a named principal) being set as the Entra
-                # admin: resolve that identity's display name and set it as the admin, then retry.
-                $AppName = GetEntAppName
-                Set-AzSqlServerActiveDirectoryAdministrator -ResourceGroupName $ResourceGroupName -ServerName $ServerName -DisplayName $AppName
-                Set-AzSqlServer -ServerName $ServerName -ResourceGroupName $ResourceGroupName -PublicNetworkAccess Disabled | Out-Null
-            }
-            else {
-                Write-Output "Disabling $DisplayName public network access failed. Disable in Azure Portal"
-                Write-Output $_
-                Write-Warning "Disabling $DisplayName public network access failed. Disable in Azure Portal"
+            $PatchBody = @{ properties = @{ publicNetworkAccess = 'Disabled' } } | ConvertTo-Json -Compress
+            $Response = Invoke-AzRestMethod -Path "$($SqlServer.ResourceId)?api-version=$NmeSqlApiVersion" -Method PATCH -Payload $PatchBody
+            if ($Response.StatusCode -notin 200, 202) {
+                throw "ARM PATCH returned HTTP $($Response.StatusCode): $($Response.Content)"
             }
         }
         catch {
             Write-Output "Disabling $DisplayName public network access failed. Disable in Azure Portal"
-            Write-Output $_
+            Write-Output "$($_.Exception.Message)"
             Write-Warning "Disabling $DisplayName public network access failed. Disable in Azure Portal"
         }
     }
@@ -1070,14 +985,44 @@ function Set-NmeSqlBaseline {
     )
     try {
         $SqlServer = Get-AzSqlServer -ResourceGroupName $ResourceGroupName -ServerName $ServerName -ErrorAction Stop
-        # MinimalTlsVersion is a string like '1.2'. An unset value means no minimum is enforced.
+        # MinimalTlsVersion is a string like '1.2', and 'None' is a legal ARM value meaning no
+        # minimum is enforced - precisely the value that most needs raising to 1.2. [double]'None'
+        # throws, which used to send that exact case into the outer catch below and report "Unable
+        # to set the minimum TLS version" - inverting the check so the one server that needs the fix
+        # is the one that silently doesn't get it. Compare by ordinal position instead, same idiom
+        # as the sibling Set-NmeStorageBaseline above: IndexOf returns -1 for an unrecognized value,
+        # and -1 -ge 3 is false, so an unknown value falls through to setting TLS 1.2 (fail-safe).
+        # This also avoids [double]'s culture-sensitivity (a decimal comma locale would misparse '1.2').
+        $TlsOrder = @('None', '1.0', '1.1', '1.2', '1.3')
         $CurrentTls = [string]$SqlServer.MinimalTlsVersion
-        if (-not [string]::IsNullOrWhiteSpace($CurrentTls) -and ([double]$CurrentTls -ge 1.2)) {
+        if (-not [string]::IsNullOrWhiteSpace($CurrentTls) -and ($TlsOrder.IndexOf($CurrentTls) -ge $TlsOrder.IndexOf('1.2'))) {
             Write-Output "$DisplayName already requires TLS 1.2"
             return
         }
         Write-Output "Setting $DisplayName minimum TLS version to 1.2"
-        Set-AzSqlServer -ResourceGroupName $ResourceGroupName -ServerName $ServerName -MinimalTlsVersion '1.2' | Out-Null
+        try {
+            Set-AzSqlServer -ResourceGroupName $ResourceGroupName -ServerName $ServerName -MinimalTlsVersion '1.2' | Out-Null
+        }
+        catch {
+            # Same failure mode documented in full in Disable-NmeSqlPublicAccess's catch block:
+            # Set-AzSqlServer resubmits the whole server model including the Administrators block
+            # and does a client-side lookup of the AAD admin, throwing System.ArgumentException when
+            # that admin is an application/service principal - exactly what the RTI and Intune
+            # Insights SQL servers have. Without this fallback, TLS 1.2 was silently never applied to
+            # those two servers and a misleading warning fired on every run. Do not "simplify" this
+            # back to a bare Set-AzSqlServer call.
+            Write-Verbose "Set-AzSqlServer failed setting minimum TLS version for $DisplayName ($($_.Exception.Message)); retrying via a direct ARM PATCH."
+            try {
+                $PatchBody = @{ properties = @{ minimalTlsVersion = '1.2' } } | ConvertTo-Json -Compress
+                $Response = Invoke-AzRestMethod -Path "$($SqlServer.ResourceId)?api-version=$NmeSqlApiVersion" -Method PATCH -Payload $PatchBody
+                if ($Response.StatusCode -notin 200, 202) {
+                    throw "ARM PATCH returned HTTP $($Response.StatusCode): $($Response.Content)"
+                }
+            }
+            catch {
+                Write-Warning "Unable to set the minimum TLS version to 1.2 on $DisplayName server '$ServerName': $($_.Exception.Message). Set it in the Azure Portal if required."
+            }
+        }
     }
     catch {
         Write-Warning "Unable to set the minimum TLS version to 1.2 on $DisplayName server '$ServerName': $($_.Exception.Message). Set it in the Azure Portal if required."
@@ -1773,7 +1718,10 @@ if ($PeerVnetIds -eq 'All') {
         Select-Object -ExpandProperty Id
 }
 else {
-    $VnetIds = if ($PeerVnetIds) { $PeerVnetIds -split ',' } else { @() }
+    # Trim each element and drop empty ones - "id1, id2" (spaces after the comma is the natural way
+    # to type this parameter) splits to "id1" and " id2", and a trailing comma or accidental double
+    # comma produces an empty entry. Either would otherwise be passed to Azure as a bogus VNet id.
+    $VnetIds = if ($PeerVnetIds) { @($PeerVnetIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) } else { @() }
 }
 
 function Get-NmePeerVnetLinkName {
@@ -1802,6 +1750,33 @@ function Get-NmePeerVnetLinkName {
     return $LinkName
 }
 
+# Azure's own reserved subnet names. Excluded from the "lacks the service endpoint" warnings below
+# because no AVD session host runs in one, so naming them would bury the subnet an admin actually
+# needs to act on under noise - and the remedy the warning suggests would be wrong advice for them.
+# Deliberately NOT excluded from eligibility: if one of these somehow does have the service endpoint
+# enabled, it stays on the allow-list exactly as it is today. This list only ever suppresses a
+# warning, never removes a subnet from the allow-list.
+$NmeReservedSubnetNames = @(
+    'GatewaySubnet'
+    'AzureFirewallSubnet'
+    'AzureFirewallManagementSubnet'
+    'AzureBastionSubnet'
+    'RouteServerSubnet'
+)
+
+function Get-NmeCappedNameList {
+    # A VNet with 40 subnets would otherwise dump all 40 names into a single warning line, burying
+    # the VNets an admin actually needs to read about under noise from the one they don't. The
+    # count reported alongside this list (by the caller, not here) is always exact - only the
+    # interpolated names are capped.
+    param([Parameter(Mandatory=$true)][string[]]$Names)
+    if ($Names.Count -le 10) {
+        return $Names -join ', '
+    }
+    $FirstTen = ($Names | Select-Object -First 10) -join ', '
+    return "$FirstTen, and $($Names.Count - 10) more"
+}
+
 function Get-NmeLinkedNetworkSubnetIds {
     # Restricted mode allows a resource's public endpoint only from subnets belonging to VNets NME
     # considers linked (tagged <prefix>_OBJECT_TYPE = LINKED_NETWORK), across every subscription this
@@ -1810,6 +1785,13 @@ function Get-NmeLinkedNetworkSubnetIds {
     # subnet and only take effect if that subnet has the caller's required service endpoint enabled;
     # this function does not enable it on subnets it doesn't own (see the P2-10 precedent for why),
     # it only reports and skips subnets that lack it.
+    #
+    # Returns a single [PSCustomObject] (see the return statement below), not a bare array - callers
+    # need the counts to report coverage gaps, not just the surviving subnet ids. Emits nothing to
+    # the success pipeline besides that one object: Write-Warning is pipeline-safe and is how every
+    # diagnostic below is surfaced, but a stray Write-Output, or any cmdlet call left unassigned and
+    # unpiped, would silently corrupt the return value into an array. Every Azure call in this
+    # function is therefore either assigned to a variable or piped to Out-Null.
     param(
         [Parameter(Mandatory=$true)][string]$Prefix,
         # Accepted service endpoint values for the caller's firewall type. Storage accepts both
@@ -1817,12 +1799,42 @@ function Get-NmeLinkedNetworkSubnetIds {
         # access restrictions accept 'Microsoft.Web' only - there is no .Global variant.
         [Parameter(Mandatory=$true)][string[]]$ServiceEndpointNames,
         # Named in the per-VNet warning so it says which feature cannot cover the VNet.
-        [Parameter(Mandatory=$true)][string]$PurposeDescription
+        [Parameter(Mandatory=$true)][string]$PurposeDescription,
+        # Appended verbatim to every per-VNet warning. Passed in rather than derived from
+        # $ServiceEndpointNames because the correct remedy is caller-specific: storage has a
+        # regional and a cross-region endpoint whose choice depends on the VNet's region relative
+        # to the storage account's, while Microsoft.Web has no .Global variant and no such caveat.
+        [Parameter(Mandatory=$true)][string]$RemedyHint
     )
     $SubnetIds = @()
+    # Counters for the result object below - see its own comments for what each one means and why
+    # the caller needs it.
+    $IneligibleSubnetCount = 0
+    $UncoveredVnetCount = 0
+    $LinkedVnetCount = 0
+    $UnreadableSubscriptions = @()
     $OriginalContext = Get-AzContext
     try {
-        $Subscriptions = Get-AzSubscription -ErrorAction Stop
+        try {
+            $Subscriptions = Get-AzSubscription -ErrorAction Stop
+        }
+        catch {
+            # The per-subscription try/catch blocks below already contain a throttling or RBAC
+            # failure on one subscription's Set-AzContext or Get-AzVirtualNetwork call - but
+            # Get-AzSubscription itself runs once, before the loop even starts, so its failure has no
+            # per-subscription catch to land in. Left unguarded, this is the exact same failure class
+            # that the Add-AzStorageAccountNetworkRule loop (CssaStorageAccount=Restricted) and the
+            # Add-AzWebAppAccessRestrictionRule loop (RtiAppService=Restricted) were fixed to contain -
+            # and this function is called from inside the make-private region, after the primary key
+            # vault and SQL server are already locked down, so an unhandled failure here would abort
+            # the run mid-region and leave the deployment half-configured, exactly what those two loops
+            # exist to prevent. Setting $Subscriptions to an empty array rather than rethrowing lets
+            # the foreach below simply not run, so this function still returns its normal result object
+            # (LinkedVnetCount = 0) instead of propagating.
+            Write-Warning "Could not enumerate the subscriptions this service principal can read, so no LINKED_NETWORK VNet could be looked for in any subscription: $($_.Exception.Message) The caller will apply no firewall changes as a result."
+            $UnreadableSubscriptions += 'all subscriptions (the subscription list itself could not be read)'
+            $Subscriptions = @()
+        }
         foreach ($Subscription in $Subscriptions) {
             try {
                 Set-AzContext -SubscriptionId $Subscription.Id -ErrorAction Stop | Out-Null
@@ -1831,19 +1843,56 @@ function Get-NmeLinkedNetworkSubnetIds {
                 Write-Warning "Skipping subscription '$($Subscription.Name)' ($($Subscription.Id)) while looking for LINKED_NETWORK VNets: could not set context. $($_.Exception.Message)"
                 continue
             }
-            $LinkedVnets = Get-AzVirtualNetwork -ErrorAction SilentlyContinue |
-                Where-Object { $null -ne $_.Tag } |
-                Where-Object { $_.Tag["$Prefix`_OBJECT_TYPE"] -eq 'LINKED_NETWORK' }
+            # -ErrorAction Stop (rather than the SilentlyContinue this used to carry) is required for
+            # the catch below to fire - $ErrorActionPreference = 'Stop' does not apply to a cmdlet
+            # call that already has its own explicit -ErrorAction. SilentlyContinue made an
+            # authorization or throttling failure here indistinguishable from "this subscription
+            # simply has no linked VNets", so a subscription the service principal cannot enumerate
+            # contributed nothing and said nothing. One subscription's failure must not abort
+            # discovery in every other subscription, so it is recorded and the loop continues rather
+            # than propagating.
+            try {
+                $LinkedVnets = Get-AzVirtualNetwork -ErrorAction Stop |
+                    Where-Object { $null -ne $_.Tag } |
+                    Where-Object { $_.Tag["$Prefix`_OBJECT_TYPE"] -eq 'LINKED_NETWORK' }
+            }
+            catch {
+                $UnreadableSubscriptions += "$($Subscription.Name) ($($Subscription.Id))"
+                Write-Warning "Could not enumerate virtual networks in subscription '$($Subscription.Name)' ($($Subscription.Id)) while looking for LINKED_NETWORK VNets, so any linked network there cannot be allowed through by $($PurposeDescription): $($_.Exception.Message) Grant Nerdio Manager's service principal Reader on that subscription and re-run if it holds linked networks whose hosts need access."
+                continue
+            }
             foreach ($LinkedVnet in $LinkedVnets) {
+                $LinkedVnetCount++
                 $EnabledSubnets = @($LinkedVnet.Subnets | Where-Object {
                     $SubnetServices = @($_.ServiceEndpoints.Service)
                     @($SubnetServices | Where-Object { $ServiceEndpointNames -contains $_ }).Count -gt 0
                 })
-                if (-not $EnabledSubnets.Count) {
-                    Write-Warning "LINKED_NETWORK VNet '$($LinkedVnet.Name)' (subscription $($Subscription.Id)) has no subnet with the $($ServiceEndpointNames -join ' or ') service endpoint enabled, so $PurposeDescription cannot allow it through. Enable $($ServiceEndpointNames[0]) on the subnet that needs access and re-run."
-                    continue
-                }
+                # Reserved subnets are excluded from the *warning* list only - see $NmeReservedSubnetNames.
+                $MissingSubnets = @($LinkedVnet.Subnets |
+                    Where-Object { $EnabledSubnets.Name -notcontains $_.Name } |
+                    Where-Object { $NmeReservedSubnetNames -notcontains $_.Name })
                 $SubnetIds += $EnabledSubnets | Select-Object -ExpandProperty Id
+                $IneligibleSubnetCount += $MissingSubnets.Count
+                if (-not $EnabledSubnets.Count) {
+                    # (a) Nothing eligible on this whole VNet - every host on it loses access the
+                    # moment default-deny (storage) or the first Allow rule (RTI) lands.
+                    $UncoveredVnetCount++
+                    $CheckedSubnetNames = if ($MissingSubnets.Count) { Get-NmeCappedNameList -Names $MissingSubnets.Name } else { 'none - this VNet has no subnets' }
+                    Write-Warning "LINKED_NETWORK VNet '$($LinkedVnet.Name)' (subscription $($Subscription.Id)) has no subnet with the $($ServiceEndpointNames -join ' or ') service endpoint enabled, so $PurposeDescription cannot allow any of it through. Subnet(s) checked: $CheckedSubnetNames. Every host on this VNet will lose access over the public endpoint. $RemedyHint"
+                }
+                elseif ($MissingSubnets.Count) {
+                    # (b) Partially covered - the gap this spec closes. Without this warning, the
+                    # subnets in $MissingSubnets are dropped from the allow-list below with nothing
+                    # in the job log to say so. This is the most likely real-world shape (an admin
+                    # enabled the endpoint on the one subnet they were thinking about) and the most
+                    # damaging: it looks identical to full coverage until a session host on the
+                    # denied subnet fails.
+                    Write-Warning "LINKED_NETWORK VNet '$($LinkedVnet.Name)' (subscription $($Subscription.Id)) is only partially covered by $($PurposeDescription): $($EnabledSubnets.Count) subnet(s) have the $($ServiceEndpointNames -join ' or ') service endpoint enabled and will be allowed through ($(Get-NmeCappedNameList -Names $EnabledSubnets.Name)), but $($MissingSubnets.Count) do not and will be denied ($(Get-NmeCappedNameList -Names $MissingSubnets.Name)). Hosts on the denied subnet(s) will lose access over the public endpoint. $RemedyHint"
+                }
+                # (c) Everything eligible: emit nothing here. The caller reports the totals from the
+                # result object below; a per-VNet success line here would both risk the pipeline-
+                # safety this function depends on (see the function comment above) and be noise on
+                # a healthy multi-VNet environment.
             }
         }
     }
@@ -1852,7 +1901,21 @@ function Get-NmeLinkedNetworkSubnetIds {
         # in the script assumes it is running against the NME subscription.
         Set-AzContext -Context $OriginalContext | Out-Null
     }
-    return @($SubnetIds | Select-Object -Unique)
+    return [PSCustomObject]@{
+        # Unchanged from today's return value: the eligible subnet ids, de-duplicated.
+        AllowedSubnetIds         = @($SubnetIds | Select-Object -Unique)
+        # Non-reserved subnets on linked VNets that lack the service endpoint - i.e. exactly the
+        # subnets that were warned about above, and exactly the ones that lose access under default-deny.
+        IneligibleSubnetCount    = $IneligibleSubnetCount
+        # Linked VNets on which no subnet at all is eligible, so the whole VNet is cut off.
+        UncoveredVnetCount       = $UncoveredVnetCount
+        # Every LINKED_NETWORK VNet found, covered or not. Zero means the tag was never found, which
+        # is a different problem than "found, but no endpoint" - see the empty-allow-list diagnosis
+        # at each call site.
+        LinkedVnetCount          = $LinkedVnetCount
+        # Subscription names/ids whose VNets could not be enumerated at all - see the try/catch above.
+        UnreadableSubscriptions  = @($UnreadableSubscriptions)
+    }
 }
 
 function Get-NmeAccessRestrictionRuleName {
@@ -2757,36 +2820,97 @@ switch ($CssaStorageAccount) {
             # regional value would skip a subnet that is in fact correctly configured, warn that it
             # cannot be allowed through the firewall, and then cut off its access when default-deny
             # is applied. Seen live on this lab's own shared VNet.
-            $AllowedSubnetIds = Get-NmeLinkedNetworkSubnetIds -Prefix $Prefix -ServiceEndpointNames 'Microsoft.Storage','Microsoft.Storage.Global' -PurposeDescription 'CssaStorageAccount=Restricted'
-            # Each rule is added independently and its failure is contained. Azure rejects a storage
-            # VNet rule when the subnet uses the *regional* Microsoft.Storage service endpoint and
-            # sits in a region other than the storage account's (or its paired region):
-            # "ResourceBeingAcledHasWrongLocation: Microsoft.Storage resources in <region> cannot be
-            # ACL-ed to virtual network <id> in <other region>". A multi-region AVD deployment - a
-            # linked VNet in a different region than Nerdio Manager - hits this on the *default*
-            # parameter value, and with $ErrorActionPreference = 'Stop' an unhandled failure here
-            # aborted the run in the middle of the make-private region, after the key vault and sql
-            # server had already been locked down but before the storage baseline and the remaining
-            # components were done. Found live (2026-08-12) against a real northcentralus linked VNet
-            # while Nerdio Manager was in eastus2. Being unable to allow one AVD VNet through a
-            # firewall must never leave the deployment half-configured, so each failure is reported
-            # and the run continues.
-            $AllowedSubnetCount = 0
-            $SkippedSubnetIds = @()
-            foreach ($SubnetId in $AllowedSubnetIds) {
-                try {
-                    Add-AzStorageAccountNetworkRule -ResourceGroupName $NmeRg -Name $StorageAccount.StorageAccountName -VirtualNetworkResourceId $SubnetId -ErrorAction Stop | Out-Null
-                    $AllowedSubnetCount++
+            $LinkedNetworkCoverage = Get-NmeLinkedNetworkSubnetIds -Prefix $Prefix -ServiceEndpointNames 'Microsoft.Storage','Microsoft.Storage.Global' -PurposeDescription 'CssaStorageAccount=Restricted' -RemedyHint 'Enable the Microsoft.Storage service endpoint on the subnet(s) whose session hosts need this storage account and re-run - or Microsoft.Storage.Global instead if the subnet is in a different region than the storage account, since the regional endpoint can only be allowed through a storage firewall in its own region or that region''s pair.'
+            # @() is defensive, not decorative: everything below relies on .Count and on foreach
+            # over this variable, and both silently misbehave on a bare string - .Count on a
+            # string is 1 in PowerShell 5.1 regardless of its contents, so an accidental scalar
+            # would pass the emptiness guard below and then be iterated as a single value.
+            $AllowedSubnetIds = @($LinkedNetworkCoverage.AllowedSubnetIds)
+            if (-not $AllowedSubnetIds.Count) {
+                # Mirrors the RTI Restricted branch's empty-allow-list safeguard above (RtiAppService=Restricted).
+                # The mechanism differs - there, adding the first Allow rule is what removes App Service's
+                # implicit "Allow all"; here, it's the explicit -DefaultAction Deny below - but the outcome of
+                # skipping this guard is identical: a firewall with nothing on the allow-list denies everything,
+                # which is exactly CssaStorageAccount=Private, while the admin believes they chose a middle
+                # ground. So an empty list here means apply nothing at all rather than an all-denying rule set.
+                if ($LinkedNetworkCoverage.LinkedVnetCount -eq 0) {
+                    # No LINKED_NETWORK VNet was found in any readable subscription at all - the fix is
+                    # in Nerdio Manager, not on a subnet. Mention any unreadable subscriptions, since a
+                    # linked VNet may exist and simply be invisible to this service principal rather than
+                    # not exist.
+                    $UnreadableNote = if ($LinkedNetworkCoverage.UnreadableSubscriptions.Count) {
+                        " $($LinkedNetworkCoverage.UnreadableSubscriptions.Count) subscription(s) could not be read while looking (see the warnings above): $($LinkedNetworkCoverage.UnreadableSubscriptions -join ', '). A linked VNet may exist there and simply be invisible to this service principal."
+                    } else {
+                        ''
+                    }
+                    Write-Warning "No LINKED_NETWORK VNet was found in any readable subscription, so CssaStorageAccount=Restricted changed nothing on the scripted actions storage account. Its public endpoint firewall was NOT set to default-deny, because a default-deny with an empty allow-list would silently be exactly CssaStorageAccount=Private.$UnreadableNote Link the VNet(s) whose session hosts need this storage account to Nerdio Manager under Settings > Azure environment and re-run, or choose CssaStorageAccount=Private deliberately if cutting off public access is intended."
                 }
-                catch {
-                    $SkippedSubnetIds += $SubnetId
-                    Write-Warning "Could not allow subnet '$SubnetId' through the scripted actions storage account's firewall: $($_.Exception.Message) A storage account can only be ACL-ed to a subnet in its own region (or that region's pair) when the subnet uses the regional Microsoft.Storage service endpoint. To allow a subnet in a different region, enable the cross-region Microsoft.Storage.Global service endpoint on it instead, then re-run. This subnet will lose access to the storage account over the public endpoint until then."
+                else {
+                    Write-Warning "$($LinkedNetworkCoverage.LinkedVnetCount) LINKED_NETWORK VNet(s) were found, but no subnet on any of them has the Microsoft.Storage or Microsoft.Storage.Global service endpoint enabled, so CssaStorageAccount=Restricted changed nothing on the scripted actions storage account. Its public endpoint firewall was NOT set to default-deny, because a default-deny with an empty allow-list would silently be exactly CssaStorageAccount=Private. Enable Microsoft.Storage (or Microsoft.Storage.Global for a subnet in another region) on the subnets whose session hosts need this storage account and re-run, or choose CssaStorageAccount=Private deliberately if cutting off public access is intended."
                 }
             }
-            Update-AzStorageAccountNetworkRuleSet -ResourceGroupName $NmeRg -Name $StorageAccount.StorageAccountName -DefaultAction Deny
-            Write-Output "Restricted the scripted actions storage account's public endpoint to $AllowedSubnetCount of $($AllowedSubnetIds.Count) linked-network subnet(s)"
-            if ($SkippedSubnetIds.Count) {
-                Write-Warning "$($SkippedSubnetIds.Count) linked-network subnet(s) could not be allowed through the scripted actions storage account's firewall (see the warnings above for each). The account's public endpoint is now default-deny, so those subnets cannot reach it. Session hosts on them will fail to run scripted actions that need this storage account until either the cross-region Microsoft.Storage.Global service endpoint is enabled on the subnet, or the VNet is peered to the private endpoint VNet (see PeerVnetIds)."
+            else {
+                # Each rule is added independently and its failure is contained. Azure rejects a storage
+                # VNet rule when the subnet uses the *regional* Microsoft.Storage service endpoint and
+                # sits in a region other than the storage account's (or its paired region):
+                # "ResourceBeingAcledHasWrongLocation: Microsoft.Storage resources in <region> cannot be
+                # ACL-ed to virtual network <id> in <other region>". A multi-region AVD deployment - a
+                # linked VNet in a different region than Nerdio Manager - hits this on the *default*
+                # parameter value, and with $ErrorActionPreference = 'Stop' an unhandled failure here
+                # aborted the run in the middle of the make-private region, after the key vault and sql
+                # server had already been locked down but before the storage baseline and the remaining
+                # components were done. Found live (2026-08-12) against a real northcentralus linked VNet
+                # while Nerdio Manager was in eastus2. Being unable to allow one AVD VNet through a
+                # firewall must never leave the deployment half-configured, so each failure is reported
+                # and the run continues.
+                $AllowedSubnetCount = 0
+                $SkippedSubnetIds = @()
+                foreach ($SubnetId in $AllowedSubnetIds) {
+                    try {
+                        Add-AzStorageAccountNetworkRule -ResourceGroupName $NmeRg -Name $StorageAccount.StorageAccountName -VirtualNetworkResourceId $SubnetId -ErrorAction Stop | Out-Null
+                        $AllowedSubnetCount++
+                    }
+                    catch {
+                        $SkippedSubnetIds += $SubnetId
+                        Write-Warning "Could not allow subnet '$SubnetId' through the scripted actions storage account's firewall: $($_.Exception.Message) A storage account can only be ACL-ed to a subnet in its own region (or that region's pair) when the subnet uses the regional Microsoft.Storage service endpoint. To allow a subnet in a different region, enable the cross-region Microsoft.Storage.Global service endpoint on it instead, then re-run. This subnet will lose access to the storage account over the public endpoint until then."
+                    }
+                }
+                # Same contained-failure reasoning as the Add-AzStorageAccountNetworkRule loop just
+                # above (found live 2026-08-12) and the Add-AzWebAppAccessRestrictionRule loop in the
+                # RtiAppService=Restricted branch: with $ErrorActionPreference = 'Stop', an unhandled
+                # failure on this call would abort the run in the middle of the make-private region,
+                # after the primary key vault and SQL server are already locked down. Piped to Out-Null
+                # like every other state-changing call in this region - unpiped,
+                # Update-AzStorageAccountNetworkRuleSet's return value would otherwise dump the whole
+                # rule-set object into the customer's job log. $DefaultDenyApplied gates the three
+                # messages below: each of them asserts the firewall is now default-deny, which would be
+                # a false statement in the job log if this call failed, so they must only fire once it
+                # has actually succeeded.
+                $DefaultDenyApplied = $false
+                try {
+                    Update-AzStorageAccountNetworkRuleSet -ResourceGroupName $NmeRg -Name $StorageAccount.StorageAccountName -DefaultAction Deny -ErrorAction Stop | Out-Null
+                    $DefaultDenyApplied = $true
+                }
+                catch {
+                    Write-Warning "Could not set the scripted actions storage account's firewall to default-deny: $($_.Exception.Message) The allow rule(s) added above are therefore not yet restricting anything - the account's public endpoint still defaults to Allow and remains reachable from any network. Resolve the error and re-run to complete CssaStorageAccount=Restricted. Nothing else in this run was left half-applied."
+                }
+                if ($DefaultDenyApplied) {
+                    # "eligible" makes the denominator's meaning explicit - $AllowedSubnetIds.Count is the
+                    # subnets that passed the service-endpoint check, not every linked subnet that exists.
+                    # Without the word, "2 of 2" reads as complete coverage even when it followed 8 linked
+                    # subnets and 6 ineligible ones; the warning below is what actually says so.
+                    Write-Output "Restricted the scripted actions storage account's public endpoint to $AllowedSubnetCount of $($AllowedSubnetIds.Count) eligible linked-network subnet(s)"
+                    if ($SkippedSubnetIds.Count) {
+                        Write-Warning "$($SkippedSubnetIds.Count) linked-network subnet(s) could not be allowed through the scripted actions storage account's firewall (see the warnings above for each). The account's public endpoint is now default-deny, so those subnets cannot reach it. Session hosts on them will fail to run scripted actions that need this storage account until either the cross-region Microsoft.Storage.Global service endpoint is enabled on the subnet, or the VNet is peered to the private endpoint VNet (see PeerVnetIds)."
+                    }
+                    if ($LinkedNetworkCoverage.IneligibleSubnetCount) {
+                        # Reports the subnets $AllowedSubnetIds never even contained - dropped before the
+                        # Add-AzStorageAccountNetworkRule loop above ever saw them, for lack of the service
+                        # endpoint rather than a rejected rule. A different failure class than
+                        # $SkippedSubnetIds above, and both can fire in the same run.
+                        Write-Warning "A further $($LinkedNetworkCoverage.IneligibleSubnetCount) linked-network subnet(s) across $($LinkedNetworkCoverage.LinkedVnetCount) LINKED_NETWORK VNet(s) - $($LinkedNetworkCoverage.UncoveredVnetCount) of which have no eligible subnet at all - were not eligible for the scripted actions storage account's firewall because they do not have the Microsoft.Storage or Microsoft.Storage.Global service endpoint enabled (named per VNet in the warnings above). The account's public endpoint is now default-deny, so session hosts on those subnets will fail to run scripted actions that need this storage account."
+                    }
+                }
             }
         }
         Set-NmeStorageBaseline -ResourceGroupName $NmeRg -StorageAccountName $StorageAccount.StorageAccountName -DisplayName 'scripted actions'
@@ -2913,7 +3037,12 @@ if ($NmeRtiWebAppName) {
                 Write-Warning "The RTI app service's public network access is Disabled, most likely from an earlier run with RtiAppService=Private. This script will not re-enable it automatically. Re-enable public network access on the app service in the Azure Portal, then re-run with RtiAppService=Restricted to apply the firewall-restricted configuration."
             }
             else {
-                $AllowedSubnetIds = Get-NmeLinkedNetworkSubnetIds -Prefix $Prefix -ServiceEndpointNames 'Microsoft.Web' -PurposeDescription 'RtiAppService=Restricted'
+                $LinkedNetworkCoverage = Get-NmeLinkedNetworkSubnetIds -Prefix $Prefix -ServiceEndpointNames 'Microsoft.Web' -PurposeDescription 'RtiAppService=Restricted' -RemedyHint 'Enable the Microsoft.Web service endpoint on the subnet(s) whose session hosts report to Real Time Insights and re-run.'
+                # @() is defensive, not decorative: everything below relies on .Count and on foreach
+                # over this variable, and both silently misbehave on a bare string - .Count on a
+                # string is 1 in PowerShell 5.1 regardless of its contents, so an accidental scalar
+                # would pass the emptiness guard below and then be iterated as a single value.
+                $AllowedSubnetIds = @($LinkedNetworkCoverage.AllowedSubnetIds)
                 if (-not $AllowedSubnetIds.Count) {
                     # The single most important safeguard in this branch. App Service access restrictions
                     # have no explicit default-deny to configure - adding the first Allow rule removes the
@@ -2921,7 +3050,21 @@ if ($NmeRtiWebAppName) {
                     # therefore silently produce exactly Private, while the admin believes they chose a
                     # middle ground, so an empty list here means apply nothing at all rather than an
                     # all-denying rule set.
-                    Write-Warning "No LINKED_NETWORK subnet has the Microsoft.Web service endpoint enabled, so RtiAppService=Restricted changed nothing on the RTI app service. Enable Microsoft.Web on the subnets whose session hosts report to Real Time Insights and re-run, or choose RtiAppService=Private deliberately if cutting off all reporting is intended."
+                    if ($LinkedNetworkCoverage.LinkedVnetCount -eq 0) {
+                        # No LINKED_NETWORK VNet was found in any readable subscription at all - the fix
+                        # is in Nerdio Manager, not on a subnet. Mention any unreadable subscriptions,
+                        # since a linked VNet may exist and simply be invisible to this service principal
+                        # rather than not exist.
+                        $UnreadableNote = if ($LinkedNetworkCoverage.UnreadableSubscriptions.Count) {
+                            " $($LinkedNetworkCoverage.UnreadableSubscriptions.Count) subscription(s) could not be read while looking (see the warnings above): $($LinkedNetworkCoverage.UnreadableSubscriptions -join ', '). A linked VNet may exist there and simply be invisible to this service principal."
+                        } else {
+                            ''
+                        }
+                        Write-Warning "No LINKED_NETWORK VNet was found in any readable subscription, so RtiAppService=Restricted changed nothing on the RTI app service.$UnreadableNote Link the VNet(s) whose session hosts report to Real Time Insights to Nerdio Manager under Settings > Azure environment and re-run, or choose RtiAppService=Private deliberately if cutting off all reporting is intended."
+                    }
+                    else {
+                        Write-Warning "$($LinkedNetworkCoverage.LinkedVnetCount) LINKED_NETWORK VNet(s) were found, but no subnet on any of them has the Microsoft.Web service endpoint enabled, so RtiAppService=Restricted changed nothing on the RTI app service. Enable Microsoft.Web on the subnets whose session hosts report to Real Time Insights and re-run, or choose RtiAppService=Private deliberately if cutting off all reporting is intended."
+                    }
                 }
                 else {
                     $RtiAccessWarning = "RtiAppService=Restricted firewalls the RTI app service's public endpoint to only the linked-network subnets that have the Microsoft.Web service endpoint enabled; every other network is denied. Every endpoint that reports to Real Time Insights - AVD session hosts, Windows 365 Cloud PCs and Intune-managed devices - must be able to reach it to post metrics, and any endpoint or device not on an eligible network will simply stop reporting with no error surfaced in Nerdio Manager; the symptom is missing history noticed weeks later. Windows 365 Cloud PCs and roaming Intune-managed devices are not recoverable by peering or by a firewall rule under either Restricted or Private. This script never re-enables public network access or removes a firewall rule on a later run; reversing it is a manual Azure Portal action."
@@ -2974,9 +3117,21 @@ if ($NmeRtiWebAppName) {
                             Write-Warning "Could not allow subnet '$SubnetId' through the RTI app service's firewall: $($_.Exception.Message) This subnet will lose access to Real Time Insights over the public endpoint until the failure above is resolved and this script is re-run."
                         }
                     }
-                    Write-Output "Restricted the RTI app service's public endpoint to $AllowedSubnetCount of $($AllowedSubnetIds.Count) linked-network subnet(s)"
+                    # "eligible" makes the denominator's meaning explicit - $AllowedSubnetIds.Count is
+                    # the subnets that passed the service-endpoint check, not every linked subnet that
+                    # exists. Without the word, "2 of 2" reads as complete coverage even when it
+                    # followed 8 linked subnets and 6 ineligible ones; the warning below is what
+                    # actually says so.
+                    Write-Output "Restricted the RTI app service's public endpoint to $AllowedSubnetCount of $($AllowedSubnetIds.Count) eligible linked-network subnet(s)"
                     if ($FailedSubnetIds.Count) {
                         Write-Warning "$($FailedSubnetIds.Count) linked-network subnet(s) could not be allowed through the RTI app service's firewall (see the warnings above for each). Session hosts on them will fail to report to Real Time Insights until the failure is resolved and this script is re-run."
+                    }
+                    if ($LinkedNetworkCoverage.IneligibleSubnetCount) {
+                        # Reports the subnets $AllowedSubnetIds never even contained - dropped before
+                        # the Add-AzWebAppAccessRestrictionRule loop above ever saw them, for lack of
+                        # the service endpoint rather than a rejected or colliding rule. A different
+                        # failure class than $FailedSubnetIds above, and both can fire in the same run.
+                        Write-Warning "A further $($LinkedNetworkCoverage.IneligibleSubnetCount) linked-network subnet(s) across $($LinkedNetworkCoverage.LinkedVnetCount) LINKED_NETWORK VNet(s) - $($LinkedNetworkCoverage.UncoveredVnetCount) of which have no eligible subnet at all - were not eligible for the RTI app service's firewall because they do not have the Microsoft.Web service endpoint enabled (named per VNet in the warnings above). Session hosts on those subnets will fail to report to Real Time Insights until the endpoint is enabled and this script is re-run."
                     }
                 }
             }
