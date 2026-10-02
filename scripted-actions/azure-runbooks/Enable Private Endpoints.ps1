@@ -441,7 +441,8 @@ $IiSqlPrivateEndpointName = "$Prefix-ii-sql-privateendpoint"
 $RtiKvPrivateEndpointName = "$Prefix-rti-kv-privateendpoint"
 $RtiSqlPrivateEndpointName = "$Prefix-rti-sql-privateendpoint"
 $RtiAppServicePrivateEndpointName = "$Prefix-rti-appservice-privateendpoint"
-$RtiStoragePrivateEndpointName = "$Prefix-rti-storage-privateendpoint"
+$RtiBlobStoragePrivateEndpointName = "$Prefix-rti-storage-blob-privateendpoint"
+$RtiTableStoragePrivateEndpointName = "$Prefix-rti-storage-table-privateendpoint"
 
 # define variables for DNS zone group names 
 $KvDnsZoneGroupName = "$Prefix-app-kv-dnszonegroup"
@@ -460,7 +461,8 @@ $IiAppServiceDnsZoneGroupName = "$Prefix-ii-appservice-dnszonegroup"
 $RtiKvDnsZoneGroupName = "$Prefix-rti-kv-dnszonegroup"
 $RtiSqlDnsZoneGroupName = "$Prefix-rti-sql-dnszonegroup"
 $RtiAppServiceDnsZoneGroupName = "$Prefix-rti-appservice-dnszonegroup"
-$RtiStorageDnsZoneGroupName = "$Prefix-rti-storage-dnszonegroup"
+$RtiBlobStorageDnsZoneGroupName = "$Prefix-rti-storage-blob-dnszonegroup"
+$RtiTableStorageDnsZoneGroupName = "$Prefix-rti-storage-table-dnszonegroup"
 
 
 # define variables for private link service connection names
@@ -480,7 +482,8 @@ $IiSqlServiceConnectionName = "$Prefix-ii-sql-serviceconnection"
 $RtiKvServiceConnectionName = "$Prefix-rti-kv-serviceconnection"
 $RtiSqlServiceConnectionName = "$Prefix-rti-sql-serviceconnection"
 $RtiAppServiceServiceConnectionName = "$Prefix-rti-appservice-serviceconnection"
-$RtiStorageServiceConnectionName = "$Prefix-rti-storage-serviceconnection"
+$RtiBlobStorageServiceConnectionName = "$Prefix-rti-storage-blob-serviceconnection"
+$RtiTableStorageServiceConnectionName = "$Prefix-rti-storage-table-serviceconnection"
 
 # web app subnet delegation
 $WebAppSubnetDelegationName = "$Prefix-app-webapp-subnetdelegation"
@@ -516,9 +519,8 @@ if ($NmeWebApp.DefaultHostName -match "azurewebsites.us") {
 
 # Storage sub-resource -> private DNS zone. One private endpoint can serve exactly one sub-resource,
 # so covering an additional sub-resource means an additional endpoint, not an additional zone config
-# on an existing one. Keeping the mapping in one place is what makes that a one-line change: the
-# Real Time Insights table-zone bug existed because each storage endpoint hardcoded 'blob' and a
-# single zone config. Queue and file are not covered because nothing in NME requests them today; to
+# on an existing one. RTI requires both blob and table endpoints, matching its deployment process.
+# Queue and file are not covered because nothing in NME requests them today; to
 # add one, add its zone name to the cloud if/else above and an entry here.
 $StorageSubresourceDnsZoneNames = @{
     blob  = $StorageDnsZoneName
@@ -1029,32 +1031,63 @@ function Set-NmeSqlBaseline {
     }
 }
 
-# Every component's "does a private endpoint already exist for this resource?" check filters
-# $ExistingPrivateEndpoints by PrivateLinkServiceId with the assumption that at most one match
-# exists. That assumption can be wrong - a customer can have more than one private endpoint pointed
-# at the same resource (manually created, left over from a prior run against a different VNet, or in
-# this test pass's own case, a fixture endpoint coexisting with one this script already created). A
-# plain `Where-Object` returning more than one object silently produces an array, and the very next
-# line always does `$X.Name` expecting a single string - which fails downstream with a confusing
-# "Cannot convert 'System.Object[]' to the type 'System.String'" error that gives no hint about the
-# real cause. Found live (2026-08-12, T20). Centralizing the lookup here means this is checked once
-# for all ~14 call sites instead of relying on each one to guard itself, and the failure mode becomes
-# a clear, actionable error instead of a type-coercion crash several lines away from the real cause.
+# Match the deployment service's resource/subnet/sub-resource identity. Endpoints for another
+# storage API or another subnet are independent resources, not duplicates to delete.
 function Find-NmeExistingPrivateEndpoint {
     param(
-        [Parameter(Mandatory=$true)]$ExistingPrivateEndpoints,
+        [Parameter(Mandatory=$true)][AllowNull()][AllowEmptyCollection()]$ExistingPrivateEndpoints,
         [Parameter(Mandatory=$true)][string]$PrivateLinkServiceId,
-        [Parameter(Mandatory=$true)][string]$DisplayName
+        [Parameter(Mandatory=$true)][string]$SubnetId,
+        [Parameter(Mandatory=$true)][string]$GroupId,
+        [Parameter(Mandatory=$true)][string]$DisplayName,
+        [switch]$All
     )
-    # Named $FoundEndpoints, not $Matches - $Matches is a PowerShell automatic variable populated by
-    # the -match operator, and shadowing it here would be a landmine for any future edit that adds a
-    # -match check in this function or its callers.
-    $FoundEndpoints = @($ExistingPrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $PrivateLinkServiceId })
+    $FoundEndpoints = @($ExistingPrivateEndpoints | Where-Object {
+        $Connections = @($_.PrivateLinkServiceConnections) + @($_.ManualPrivateLinkServiceConnections)
+        $_.Subnet.Id -eq $SubnetId -and @($Connections | Where-Object {
+            $_.PrivateLinkServiceId -eq $PrivateLinkServiceId -and $_.GroupIds -contains $GroupId
+        }).Count -gt 0
+    } | Sort-Object Id)
+    if ($All) { return $FoundEndpoints }
     if ($FoundEndpoints.Count -gt 1) {
-        $MatchDescriptions = ($FoundEndpoints | ForEach-Object { "$($_.Name) (resource group $($_.ResourceGroupName))" }) -join ', '
-        Throw "Found more than one private endpoint pointing at $DisplayName`: $MatchDescriptions. This script cannot tell which one is authoritative and will not guess. Delete the extra endpoint(s) so only one remains, then re-run."
+        Write-Verbose "Multiple private endpoints for $DisplayName ($GroupId) exist in subnet '$SubnetId'; using '$($FoundEndpoints[0].Name)' and leaving the others unchanged."
     }
     return $FoundEndpoints | Select-Object -First 1
+}
+
+function Assert-NmePrivateEndpointNameAvailable {
+    param([Parameter(Mandatory=$true)][string]$Name)
+
+    if ($ExistingPrivateEndpoints | Where-Object { $_.Name -eq $Name -and $_.ResourceGroupName -eq $NmeRg }) {
+        Throw "Private endpoint name '$Name' in resource group '$NmeRg' is already used for another resource, subnet or sub-resource. Choose a different private endpoint name in this script; the existing endpoint will not be overwritten."
+    }
+}
+
+function Set-NmeAppServiceExplicitPublicAccess {
+    param([Parameter(Mandatory=$true)][string]$ResourceId)
+
+    $ApiVersion = '2023-01-01'
+    $App = Get-AzResource -ResourceId $ResourceId -ApiVersion $ApiVersion -ErrorAction Stop
+    if (-not [string]::IsNullOrWhiteSpace([string]$App.Properties.publicNetworkAccess)) { return }
+
+    # An unset value allows public access only when no PE exists. Read the app's connections
+    # rather than relying on our subscription-scoped PE inventory, which may be incomplete.
+    $Connections = Invoke-AzRestMethod -Path "$ResourceId/privateEndpointConnections?api-version=$ApiVersion" -Method GET -ErrorAction Stop
+    if ($Connections.StatusCode -ne 200) {
+        Throw "Unable to determine existing App Service private endpoint connections: HTTP $($Connections.StatusCode): $($Connections.Content)"
+    }
+    if (@(($Connections.Content | ConvertFrom-Json).value | Where-Object { $_ }).Count) { return }
+
+    Write-Output "Preserving the currently public App Service '$($App.Name)' before creating its first private endpoint"
+    $Payload = @{ properties = @{ publicNetworkAccess = 'Enabled' } } | ConvertTo-Json -Compress
+    $Response = Invoke-AzRestMethod -Path "$($ResourceId)?api-version=$ApiVersion" -Method PATCH -Payload $Payload -ErrorAction Stop
+    if ($Response.StatusCode -notin 200, 202) {
+        Throw "Unable to preserve App Service public access: HTTP $($Response.StatusCode): $($Response.Content)"
+    }
+    $App = Get-AzResource -ResourceId $ResourceId -ApiVersion $ApiVersion -ErrorAction Stop
+    if ($App.Properties.publicNetworkAccess -ne 'Enabled') {
+        Throw "App Service public access has not become explicitly Enabled. Re-run once the update completes; no private endpoint has been created for this app."
+    }
 }
 
 function New-NmeStoragePrivateEndpoint {
@@ -1083,31 +1116,26 @@ function New-NmeStoragePrivateEndpoint {
     $ZoneName = $StorageSubresourceDnsZoneNames[$Subresource]
     $Zone = $StorageSubresourceDnsZones[$Subresource]
 
-    $Endpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $StorageAccount.Id -DisplayName "the storage account"
+    $Endpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $StorageAccount.Id `
+        -SubnetId $PrivateEndpointSubnet.Id -GroupId $Subresource -DisplayName "$DisplayName $Subresource storage"
     if ($Endpoint) {
-        Write-Output "Found $DisplayName storage private endpoint"
-        # Earlier versions of this script created some storage endpoints with a hardcoded sub-resource that
-        # did not always match the account's actual storage API (see the Real Time Insights table-zone bug).
-        # A private endpoint's sub-resource (groupId) cannot be changed in place - it has to be recreated.
-        $GroupIds = $Endpoint.PrivateLinkServiceConnections.GroupIds
-        if ($GroupIds -notcontains $Subresource) {
-            Write-Warning "The existing $DisplayName storage private endpoint '$($Endpoint.Name)' uses the '$($GroupIds -join ',')' sub-resource, but $DisplayName requires the '$Subresource' sub-resource. $Subresource storage traffic will continue to use the public endpoint. A private endpoint's sub-resource cannot be changed in place: delete the private endpoint '$($Endpoint.Name)' in the Azure Portal and re-run this script to have it recreated correctly."
-        }
+        Write-Output "Found $DisplayName $Subresource storage private endpoint"
     }
     else {
-        Write-Output "Configuring $DisplayName storage service connection and private endpoint"
+        Write-Output "Configuring $DisplayName $Subresource storage service connection and private endpoint"
         $EndpointStart = Get-Date
         try {
+            Assert-NmePrivateEndpointNameAvailable -Name $PrivateEndpointName
             $ServiceConnection = New-AzPrivateLinkServiceConnection -Name $ServiceConnectionName -PrivateLinkServiceId $StorageAccount.Id -GroupId $Subresource -ErrorAction Stop
             $Endpoint = New-AzPrivateEndpoint -Name $PrivateEndpointName -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ServiceConnection -ErrorAction Stop
         }
         catch {
-            Write-Warning "Could not create the private endpoint for $DisplayName storage: $($_.Exception.Message) The remaining components will still be attempted, and this run will stop before making anything private - see the summary at the end of this region."
-            $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = "$DisplayName storage"; Reason = $_.Exception.Message }
+            Write-Warning "Could not create the private endpoint for $DisplayName $Subresource storage: $($_.Exception.Message) The remaining components will still be attempted, and this run will stop before making anything private - see the summary at the end of this region."
+            $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = "$DisplayName $Subresource storage"; Reason = $_.Exception.Message }
             return
         }
-        Write-Output "Created $DisplayName storage private endpoint '$PrivateEndpointName'"
-        Write-Verbose "Created $DisplayName storage private endpoint in $([math]::Round(((Get-Date) - $EndpointStart).TotalSeconds, 1)) seconds"
+        Write-Output "Created $DisplayName $Subresource storage private endpoint '$PrivateEndpointName'"
+        Write-Verbose "Created $DisplayName $Subresource storage private endpoint in $([math]::Round(((Get-Date) - $EndpointStart).TotalSeconds, 1)) seconds"
     }
 
     if ($SkipDNS) {
@@ -1137,8 +1165,8 @@ function New-NmeStoragePrivateEndpoint {
             $DnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $Endpoint.ResourceGroupName -PrivateEndpointName $Endpoint.Name -Name $DnsZoneGroupName -PrivateDnsZoneConfig $Config -ErrorAction Stop
         }
         catch {
-            Write-Warning "Could not create the DNS zone group for $DisplayName storage: $($_.Exception.Message) The private endpoint itself was created, but $DisplayName will not resolve to it until this is fixed. The remaining components will still be attempted, and this run will stop before making anything private."
-            $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = "$DisplayName storage"; Reason = $_.Exception.Message }
+            Write-Warning "Could not create the DNS zone group for $DisplayName $Subresource storage: $($_.Exception.Message) The private endpoint itself was created, but $DisplayName will not resolve to it until this is fixed. The remaining components will still be attempted, and this run will stop before making anything private."
+            $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = "$DisplayName $Subresource storage"; Reason = $_.Exception.Message }
             return
         }
         Write-Output "Created $DisplayName storage DNS zone group '$DnsZoneGroupName'"
@@ -1174,7 +1202,7 @@ function New-NmeComponentPrivateEndpoint {
     param(
         [Parameter(Mandatory=$true)][string]$TargetResourceId,
         [Parameter(Mandatory=$true)][string]$GroupId,
-        [Parameter(Mandatory=$true)][string]$FindDisplayName,          # passed through to Find-NmeExistingPrivateEndpoint's own -DisplayName; used only in its multiple-match error text
+        [Parameter(Mandatory=$true)][string]$FindDisplayName,
         [Parameter(Mandatory=$true)][string]$FoundMessage,
         [Parameter(Mandatory=$true)][string]$ConfiguringMessage,
         [Parameter(Mandatory=$true)][string]$PrivateEndpointName,
@@ -1186,13 +1214,8 @@ function New-NmeComponentPrivateEndpoint {
         [Parameter(Mandatory=$true)][string]$ConfiguringDnsZoneGroupMessage,
         [Parameter(Mandatory=$true)][string]$SkipDnsZoneGroupMessage
     )
-    # Existence check always goes through Find-NmeExistingPrivateEndpoint (P1-22) rather than a bare
-    # -contains/Where-Object check on $ExistingPrivateEndpoints - two of the 13 blocks this replaces did the
-    # latter, only calling Find- inside the true branch to fetch the object for later use. That duplicated
-    # the match logic and, unlike Find-, could not detect (and Throw on) more than one pre-existing endpoint
-    # already pointing at the same resource. Routing every component through the one Find- call fixes that
-    # without changing either branch's output text.
-    $Endpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $TargetResourceId -DisplayName $FindDisplayName
+    $Endpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $TargetResourceId `
+        -SubnetId $PrivateEndpointSubnet.Id -GroupId $GroupId -DisplayName $FindDisplayName
     if ($Endpoint) {
         Write-Output $FoundMessage
     }
@@ -1200,6 +1223,10 @@ function New-NmeComponentPrivateEndpoint {
         Write-Output $ConfiguringMessage
         $EndpointStart = Get-Date
         try {
+            Assert-NmePrivateEndpointNameAvailable -Name $PrivateEndpointName
+            if ($GroupId -eq 'sites') {
+                Set-NmeAppServiceExplicitPublicAccess -ResourceId $TargetResourceId
+            }
             $ServiceConnection = New-AzPrivateLinkServiceConnection -Name $ServiceConnectionName -PrivateLinkServiceId $TargetResourceId -GroupId $GroupId -ErrorAction Stop
             $Endpoint = New-AzPrivateEndpoint -Name $PrivateEndpointName -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ServiceConnection -ErrorAction Stop
         }
@@ -1289,19 +1316,22 @@ function Set-NmeSubnetConfig {
     param(
         [Parameter(Mandatory=$true)]$VirtualNetwork,
         [Parameter(Mandatory=$true)][string]$SubnetName,
-        [string[]]$ServiceEndpoint,
-        [Parameter(Mandatory=$true)][string]$PrivateEndpointNetworkPoliciesFlag
+        [string[]]$ServiceEndpoint
     )
     $Subnet = Get-AzVirtualNetworkSubnetConfig -Name $SubnetName -VirtualNetwork $VirtualNetwork
     $Params = @{
         Name                               = $SubnetName
         AddressPrefix                      = $Subnet.AddressPrefix
-        PrivateEndpointNetworkPoliciesFlag = $PrivateEndpointNetworkPoliciesFlag
+        PrivateEndpointNetworkPoliciesFlag = $Subnet.PrivateEndpointNetworkPolicies
     }
     if ($ServiceEndpoint)                { $Params['ServiceEndpoint']        = $ServiceEndpoint }
     if ($Subnet.NetworkSecurityGroup.Id) { $Params['NetworkSecurityGroupId'] = $Subnet.NetworkSecurityGroup.Id }
     if ($Subnet.RouteTable.Id)           { $Params['RouteTableId']           = $Subnet.RouteTable.Id }
     if ($Subnet.Delegations)             { $Params['Delegation']             = $Subnet.Delegations }
+    if ($Subnet.ServiceEndpointPolicies) { $Params['ServiceEndpointPolicy']  = $Subnet.ServiceEndpointPolicies }
+    if ($Subnet.PrivateLinkServiceNetworkPolicies) {
+        $Params['PrivateLinkServiceNetworkPoliciesFlag'] = $Subnet.PrivateLinkServiceNetworkPolicies
+    }
     $VirtualNetwork | Set-AzVirtualNetworkSubnetConfig @Params | Set-AzVirtualNetwork
 }
 
@@ -1549,36 +1579,40 @@ function Get-NmeConnectivityExpectedIps {
     # on its own network interface's IP configuration - fetched here as the fallback, and used first if
     # CustomDnsConfigs is empty, since empty turned out to be the common case rather than the exception.
     param(
-        [Parameter(Mandatory=$true)]$PrivateEndpoints,
-        [Parameter(Mandatory=$true)][string]$PrivateLinkServiceId
+        [Parameter(Mandatory=$true)][AllowNull()][AllowEmptyCollection()]$PrivateEndpoints,
+        [Parameter(Mandatory=$true)][string]$PrivateLinkServiceId,
+        [Parameter(Mandatory=$true)][string]$SubnetId,
+        [Parameter(Mandatory=$true)][string]$GroupId
     )
-    $MatchedEndpoint = $PrivateEndpoints | Where-Object { $_.PrivateLinkServiceConnections.PrivateLinkServiceId -eq $PrivateLinkServiceId } | Select-Object -First 1
-    if (-not $MatchedEndpoint) { return @() }
-    $Ips = @($MatchedEndpoint.CustomDnsConfigs.IpAddresses | Where-Object { $_ })
-    if ($Ips.Count -gt 0) { return $Ips }
-
-    $NicIps = @()
-    foreach ($NicRef in $MatchedEndpoint.NetworkInterfaces) {
-        try {
-            $Nic = Get-AzNetworkInterface -ResourceId $NicRef.Id -ErrorAction Stop
-            $NicIps += @($Nic.IpConfigurations | ForEach-Object { $_.PrivateIpAddress } | Where-Object { $_ })
+    $MatchedEndpoints = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $PrivateEndpoints -PrivateLinkServiceId $PrivateLinkServiceId `
+        -SubnetId $SubnetId -GroupId $GroupId -DisplayName $PrivateLinkServiceId -All
+    $Ips = @()
+    # DNS may return any matching PE when more than one serves this resource in the target subnet.
+    foreach ($MatchedEndpoint in $MatchedEndpoints) {
+        $DnsIps = @($MatchedEndpoint.CustomDnsConfigs.IpAddresses | Where-Object { $_ })
+        if ($DnsIps.Count -gt 0) {
+            $Ips += $DnsIps
+            continue
         }
-        catch {
-            Write-Verbose "Get-NmeConnectivityExpectedIps: could not read the network interface for private endpoint '$($MatchedEndpoint.Name)' ($($_.Exception.Message)); falling back to no expected IP for this target."
+        foreach ($NicRef in $MatchedEndpoint.NetworkInterfaces) {
+            try {
+                $Nic = Get-AzNetworkInterface -ResourceId $NicRef.Id -ErrorAction Stop
+                $Ips += @($Nic.IpConfigurations | ForEach-Object { $_.PrivateIpAddress } | Where-Object { $_ })
+            }
+            catch {
+                Write-Verbose "Get-NmeConnectivityExpectedIps: could not read the network interface for private endpoint '$($MatchedEndpoint.Name)' ($($_.Exception.Message)); no expected IP was added for this interface."
+            }
         }
     }
-    return @($NicIps | Where-Object { $_ })
+    return @($Ips | Select-Object -Unique)
 }
 
 #### main script ####
 
 # check to see if NMW app already has vnet integration enabled
 
-# Get all existing private endpoints. This is looked up subscription-wide rather than in $NmeRg
-# alone: every "does an endpoint already exist for this resource" check below matches on
-# PrivateLinkServiceId, which is unique per target resource, so a wider search cannot produce a
-# false match - but a narrower one misses an endpoint a customer created in another resource group
-# and this script then creates a duplicate. Endpoints this script creates still go in $NmeRg.
+# Get all existing private endpoints, including endpoints in other resource groups. Selection
+# below matches resource, subnet and sub-resource. New endpoints still go in $NmeRg.
 # If the subscription-wide list is denied by RBAC, fall back to $NmeRg and say so.
 try {
     $ExistingPrivateEndpoints = Get-AzPrivateEndpoint -ErrorAction Stop
@@ -2320,13 +2354,16 @@ if ($NmeRtiSqlServerName) {
         -FoundDnsZoneGroupMessage "Found RTI SQL DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring RTI sql DNS zone group" `
         -SkipDnsZoneGroupMessage "Skipping RTI SQL DNS zone group configuration (SkipDNS enabled)"
 }
-# add private endpoint for real time insights storage account
+# RTI needs separate blob and table endpoints, as in RealTimeInsightsDeployProcess.
 if ($NmeRtiStorageAccountName) {
     # Get rti storage account
     $NmeRtiStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeRtiStorageAccountName
+    New-NmeStoragePrivateEndpoint -StorageAccount $NmeRtiStorageAccount -Subresource blob `
+        -PrivateEndpointName $RtiBlobStoragePrivateEndpointName -ServiceConnectionName $RtiBlobStorageServiceConnectionName `
+        -DnsZoneGroupName $RtiBlobStorageDnsZoneGroupName -DisplayName 'RTI'
     New-NmeStoragePrivateEndpoint -StorageAccount $NmeRtiStorageAccount -Subresource table `
-        -PrivateEndpointName $RtiStoragePrivateEndpointName -ServiceConnectionName $RtiStorageServiceConnectionName `
-        -DnsZoneGroupName $RtiStorageDnsZoneGroupName -DisplayName 'RTI'
+        -PrivateEndpointName $RtiTableStoragePrivateEndpointName -ServiceConnectionName $RtiTableStorageServiceConnectionName `
+        -DnsZoneGroupName $RtiTableStorageDnsZoneGroupName -DisplayName 'RTI'
 }
 # add private endpoint for real time insights key vault
 if ($NmeRtiKeyVaultName) {
@@ -2429,29 +2466,13 @@ $ServiceEndpoints = @($ExistingServiceEndpoints + $ServiceEndpoints | Select-Obj
 $MissingServiceEndpoints = @($ServiceEndpoints | Where-Object { $ExistingServiceEndpoints -notcontains $_ })
 if ($MissingServiceEndpoints.Count) {
     Write-Output "Adding service endpoints"
-    $VNet = Set-NmeSubnetConfig -VirtualNetwork $VNet -SubnetName $PrivateEndpointSubnetName -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Disabled
+    $VNet = Set-NmeSubnetConfig -VirtualNetwork $VNet -SubnetName $PrivateEndpointSubnetName -ServiceEndpoint $ServiceEndpoints
 }
 else {
     Write-Output "Found service endpoints"
 }
-# enable network policy
 $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
-if ($PrivateEndpointSubnet.PrivateEndpointNetworkPolicies -eq 'Enabled') {
-    Write-Output "Network policies already enabled"
-} else {
-    Write-Output "Enabling network policies"
-    if ($PrivateEndpointSubnet.NetworkSecurityGroup.Id) {
-        Write-Warning "Enabling privateEndpointNetworkPolicies on subnet '$($PrivateEndpointSubnet.Name)' starts enforcing network security group '$($PrivateEndpointSubnet.NetworkSecurityGroup.Id.Split('/')[-1])' rules against the private endpoints in this subnet."
-    }
-    try {
-        $VNet = Set-NmeSubnetConfig -VirtualNetwork $VNet -SubnetName $PrivateEndpointSubnetName -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Enabled
-    }
-    catch {
-        # sometimes can't enable network policies on subnet with private endpoints, e.g. in gov cloud
-        Write-Output "Enabling network policies failed, setting to disabled"
-        $VNet = Set-NmeSubnetConfig -VirtualNetwork $VNet -SubnetName $PrivateEndpointSubnetName -ServiceEndpoint $ServiceEndpoints -PrivateEndpointNetworkPoliciesFlag Disabled
-    }
-}
+Write-Output "Keeping private endpoint network policies unchanged: $($PrivateEndpointSubnet.PrivateEndpointNetworkPolicies)"
 
 
 # Set-NmeSubnetConfig returns the updated VNet, so $VNet is current here without a re-fetch.
@@ -2606,10 +2627,10 @@ catch {
     $ConnectivityPrivateEndpoints = Get-AzPrivateEndpoint -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
 }
 
-($ConnectivityTargets | Where-Object { $_.Name -eq 'Nerdio Manager key vault' }).ExpectedIp = Get-NmeConnectivityExpectedIps -PrivateEndpoints $ConnectivityPrivateEndpoints -PrivateLinkServiceId $NmeKeyVault.ResourceId
-($ConnectivityTargets | Where-Object { $_.Name -eq 'primary sql server' }).ExpectedIp = Get-NmeConnectivityExpectedIps -PrivateEndpoints $ConnectivityPrivateEndpoints -PrivateLinkServiceId $SqlServer.ResourceId
+($ConnectivityTargets | Where-Object { $_.Name -eq 'Nerdio Manager key vault' }).ExpectedIp = Get-NmeConnectivityExpectedIps -PrivateEndpoints $ConnectivityPrivateEndpoints -PrivateLinkServiceId $NmeKeyVault.ResourceId -SubnetId $PrivateEndpointSubnet.Id -GroupId vault
+($ConnectivityTargets | Where-Object { $_.Name -eq 'primary sql server' }).ExpectedIp = Get-NmeConnectivityExpectedIps -PrivateEndpoints $ConnectivityPrivateEndpoints -PrivateLinkServiceId $SqlServer.ResourceId -SubnetId $PrivateEndpointSubnet.Id -GroupId sqlserver
 if ($NmeDpsStorageAccountName) {
-    ($ConnectivityTargets | Where-Object { $_.Name -eq 'DPS storage account' }).ExpectedIp = Get-NmeConnectivityExpectedIps -PrivateEndpoints $ConnectivityPrivateEndpoints -PrivateLinkServiceId $NmeDpsStorageAccount.Id
+    ($ConnectivityTargets | Where-Object { $_.Name -eq 'DPS storage account' }).ExpectedIp = Get-NmeConnectivityExpectedIps -PrivateEndpoints $ConnectivityPrivateEndpoints -PrivateLinkServiceId $NmeDpsStorageAccount.Id -SubnetId $PrivateEndpointSubnet.Id -GroupId blob
 }
 
 # SCM host: prefer the app's own EnabledHostNames (works in every cloud without composing anything).
@@ -2708,7 +2729,7 @@ $NetworkChecksClean = $true
 if ($PrivateEndpointSubnet.NetworkSecurityGroup.Id) {
     $NetworkChecksClean = $false
     $PeNsgName = $PrivateEndpointSubnet.NetworkSecurityGroup.Id.Split('/')[-1]
-    Write-Warning "The private endpoint subnet '$($PrivateEndpointSubnet.Name)' ($($PrivateEndpointSubnet.AddressPrefix)) has network security group '$PeNsgName' attached. This script did not create this NSG and has not inspected its rules. This script has set privateEndpointNetworkPolicies to Enabled on this subnet, which is the flag that decides whether NSG rules are applied to private endpoints in it - rules that were previously inert on this subnet are now enforced. Before public access is disabled, verify that '$PeNsgName' permits traffic from the app service subnet range ($($AppServiceSubnet.AddressPrefix)) to the private endpoint subnet range ($($PrivateEndpointSubnet.AddressPrefix)) on TCP 443."
+    Write-Warning "The private endpoint subnet '$($PrivateEndpointSubnet.Name)' ($($PrivateEndpointSubnet.AddressPrefix)) has network security group '$PeNsgName' attached. This script did not create this NSG and has not inspected its rules. The existing privateEndpointNetworkPolicies setting '$($PrivateEndpointSubnet.PrivateEndpointNetworkPolicies)' was preserved; NSG rules apply to private endpoints only when it is Enabled or NetworkSecurityGroupEnabled. If enforced, verify that '$PeNsgName' permits traffic from the app service subnet range ($($AppServiceSubnet.AddressPrefix)) to the private endpoint subnet range ($($PrivateEndpointSubnet.AddressPrefix)) on TCP 443 and 1433."
 }
 
 if ($AppServiceSubnet.NetworkSecurityGroup.Id) {
