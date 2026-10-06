@@ -1715,25 +1715,6 @@ foreach ($fqdn in $fqdns) {
     return $Results
 }
 
-function Get-NmeScmPreflightBlocker {
-    # TEST-PLAN.md §22.3 "Bucket 2" / §22.5 bullet 1: two causes make the Kudu/SCM probe below
-    # permanently unreachable for a given app service, detectable up front from properties already on
-    # the $NmeWebApp object (Get-AzWebApp's PSSite) - no extra API call needed, and no point spending a
-    # Kudu round trip (and its 180-second timeout on a bad day) discovering something already knowable.
-    # Returns $null when neither applies (the normal case - attempt the probe), or a human-readable
-    # reason to use in the soft warning instead of attempting it.
-    param(
-        [Parameter(Mandatory=$true)]$WebApp
-    )
-    if ($WebApp.HostingEnvironmentProfile) {
-        return "this app service runs in an App Service Environment (ASE). An ILB ASE's SCM/Kudu endpoint is reachable only from inside the ASE's own virtual network, never from the Azure Automation sandbox - this will be true on every future run against this deployment, not just this one."
-    }
-    if ($WebApp.Reserved -or $WebApp.Kind -like '*linux*') {
-        return "this app service runs on Linux. The DNS/TCP diagnostic commands this probe depends on (nameresolver, tcpping, Windows PowerShell) are not available on a Linux worker - this will be true on every future run against this deployment, not just this one."
-    }
-    return $null
-}
-
 function Get-NmeKuduFailureBucket {
     # TEST-PLAN.md §22.3/§22.4: classifies an exception caught around Test-NmeAppServiceConnectivity
     # (in practice, from Invoke-NmeKuduCommand inside it) into one of three buckets, so the gate below
@@ -1745,7 +1726,9 @@ function Get-NmeKuduFailureBucket {
     #   Bucket 2 - deterministic: will fail on every run against this deployment, not just this one
     #              (the command-too-long guard, or customer-configured SCM access restrictions this
     #              script does not and will not touch). Soft-fails so the script does not become
-    #              permanently un-runnable for a customer in this state.
+    #              permanently un-runnable for a customer in this state. (TEST-PLAN.md §22.3 also
+    #              lists an App Service Environment and a Linux app service as Bucket 2 causes - not
+    #              checked for here, because NME cannot be deployed to either, confirmed 2026-10-06.)
     #   Bucket 3 - transient or unclassified: a blip (token failure, SCM still warming up, a 503, a
     #              timeout, an unexpected status) that a retry is expected to clear. Per §22.4 decision
     #              4, an unclassified failure is deliberately bucketed here too rather than assumed
@@ -1792,15 +1775,14 @@ function Get-NmeKuduFailureBucket {
 
     return [pscustomobject]@{
         Bucket = 3
-        Reason = "this does not match a known permanent cause (the app already made private, an App Service Environment, a Linux app service, or SCM access restrictions) and looks transient - a token or Resource Manager blip, the SCM endpoint still warming up, or a brief network failure reaching it."
+        Reason = "this does not match a known permanent cause (the app already made private, or SCM access restrictions) and looks transient - a token or Resource Manager blip, the SCM endpoint still warming up, or a brief network failure reaching it."
     }
 }
 
 function Write-NmeConnectivityUnverifiedWarning {
     # Shared wording for every "the real connectivity probe could not run, so DNS/reachability is
-    # unverified for this run" case - both the pre-flight skip (Get-NmeScmPreflightBlocker) and a
-    # Bucket 1/2 catch (Get-NmeKuduFailureBucket) below call this, so the two paths can never drift
-    # apart in what they tell the customer. TEST-PLAN.md §22.5 bullets 2 and 5.
+    # unverified for this run" case - called from the Bucket 1/2 catch (Get-NmeKuduFailureBucket)
+    # below. TEST-PLAN.md §22.5 bullets 2 and 5.
     param(
         [Parameter(Mandatory=$true)][string]$Reason,
         [Parameter(Mandatory=$true)][string[]]$DnsServers,
@@ -2982,25 +2964,20 @@ Write-Output "Connectivity probe will query DNS server(s): $($ConnectivityDnsSer
 # before, because treating either as a hard failure would make the script permanently un-re-runnable
 # for a customer in that state. Bucket 3 (transient or unclassified) now Throws instead of silently
 # proceeding on unverified DNS - a transient Kudu failure is fixed by one click of Restart Job, which
-# is the whole point of making this terminal rather than soft. See Get-NmeScmPreflightBlocker and
-# Get-NmeKuduFailureBucket, above, for exactly what falls in each bucket.
-$ScmPreflightBlocker = Get-NmeScmPreflightBlocker -WebApp $NmeWebApp
-if ($ScmPreflightBlocker) {
-    Write-NmeConnectivityUnverifiedWarning -Reason $ScmPreflightBlocker -DnsServers $ConnectivityDnsServers -SkipDNS $SkipDNS
-    $ConnectivityResults = $null
+# is the whole point of making this terminal rather than soft. See Get-NmeKuduFailureBucket, above,
+# for exactly what falls in each bucket. (No pre-flight check here for an App Service Environment or a
+# Linux app service, both Bucket 2 causes per TEST-PLAN.md §22.3 - NME cannot be deployed to either,
+# confirmed 2026-10-06, so there is nothing to pre-flight.)
+try {
+    $ConnectivityResults = Test-NmeAppServiceConnectivity -ScmHost $ScmHost -DnsServer $ConnectivityDnsServers -Target $ConnectivityTargets
 }
-else {
-    try {
-        $ConnectivityResults = Test-NmeAppServiceConnectivity -ScmHost $ScmHost -DnsServer $ConnectivityDnsServers -Target $ConnectivityTargets
+catch {
+    $KuduFailure = Get-NmeKuduFailureBucket -Exception $_.Exception -WebAppResourceId $NmeWebApp.Id
+    if ($KuduFailure.Bucket -eq 3) {
+        Throw "Could not run the connectivity probe from inside the app service worker via Kudu ($($_.Exception.Message)). $($KuduFailure.Reason) No public network access has been disabled by this run - the script stopped here before the make-private region. Re-run this script (or use Restart Job) once the underlying issue has cleared; if it recurs every time, this is not actually transient and needs its own investigation."
     }
-    catch {
-        $KuduFailure = Get-NmeKuduFailureBucket -Exception $_.Exception -WebAppResourceId $NmeWebApp.Id
-        if ($KuduFailure.Bucket -eq 3) {
-            Throw "Could not run the connectivity probe from inside the app service worker via Kudu ($($_.Exception.Message)). $($KuduFailure.Reason) No public network access has been disabled by this run - the script stopped here before the make-private region. Re-run this script (or use Restart Job) once the underlying issue has cleared; if it recurs every time, this is not actually transient and needs its own investigation."
-        }
-        Write-NmeConnectivityUnverifiedWarning -Reason $KuduFailure.Reason -DnsServers $ConnectivityDnsServers -SkipDNS $SkipDNS
-        $ConnectivityResults = $null
-    }
+    Write-NmeConnectivityUnverifiedWarning -Reason $KuduFailure.Reason -DnsServers $ConnectivityDnsServers -SkipDNS $SkipDNS
+    $ConnectivityResults = $null
 }
 
 if ($ConnectivityResults) {
