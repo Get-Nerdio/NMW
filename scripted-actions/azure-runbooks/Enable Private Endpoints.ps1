@@ -147,16 +147,8 @@ $script:NmeVnetIntegrationJustEnabled = $false
 
 # True once any branch in the "make resources private" region below - or the NME app service
 # publicNetworkAccess write that immediately follows that region - has actually performed an ARM
-# write. Gates the explicit Restart-AzWebApp at the very end of this script: a run that found
-# every component already in its target state wrote nothing, and a restart with nothing to pick up
-# costs a full Azure Automation job to NME's resubmit-after-restart behavior (see
-# Check-LastRunResults below) for no behavior change. Scoped to make-private specifically, not to
-# every write anywhere in the script, because it is the only region whose effect the app actually
-# needs an explicit restart to observe: private endpoint and private DNS zone creation do not
-# require the app to restart to pick them up, and VNet integration's own virtualNetworkSubnetId
-# write (see $script:NmeVnetIntegrationJustEnabled above) restarts the app implicitly - that is
-# Azure platform behavior triggered by the write itself, not by anything this script calls - so by
-# the time make-private runs, an explicit restart is only ever waiting on make-private's own writes.
+# write. Selects which of the two closing messages this script ends with. It does not gate any
+# action: this script no longer restarts the app service at all (see the end of the file).
 $script:NmeMakePrivateWroteSomething = $false
 
 # E-5 Phase B. How many private endpoint / DNS zone group creations this script keeps in flight at
@@ -681,15 +673,12 @@ function Get-NmeScriptHash {
 #
 # This USED to be gated on `(Get-AzWebApp ...).LastModifiedTimeUtc` being within the last
 # $MinutesAgo minutes, as a cheap proxy for "this script (or something else) recently restarted the
-# app, so it's worth checking for a duplicate run." That proxy is wrong: `Restart-AzWebApp` (called at
-# the very end of this script - unconditionally at the time this was written, though it is now itself
-# gated on whether the make-private region actually wrote anything, see
-# $script:NmeMakePrivateWroteSomething near the top of the file) is a control-plane *action*, not a
-# resource property write, and does not advance `LastModifiedTimeUtc` at all - only an actual property
-# change (VNet integration, publicNetworkAccess, etc.) does. Once a deployment reaches a stable state
+# app, so it's worth checking for a duplicate run." That proxy is wrong: a restart is a control-plane
+# *action*, not a resource property write, and does not advance `LastModifiedTimeUtc` at all - only an
+# actual property change (VNet integration, publicNetworkAccess, etc.) does. Once a deployment reaches a stable state
 # where a run has nothing left to configure (every check is a "Found ..." no-op), no property write
 # ever happens again, `LastModifiedTimeUtc` stops advancing, and this gate goes permanently false - silently
-# disabling duplicate-run detection forever, even though the script still restarts the app every run.
+# disabling duplicate-run detection forever, even though the app kept being restarted.
 # Found live (2026-08-13): NME resubmitting this scripted action after each restart (its own
 # documented behavior - see the coordinator's note) produced an unbounded chain of ~7-minute jobs, each
 # one skipping this entire function (the gate was false), redoing the (idempotent, harmless, but not
@@ -854,9 +843,8 @@ Function Check-LastRunResults {
     # work that already succeeded; a Failed job did not do the work, so there is nothing to skip, and
     # replaying it reports a success that never happened. Observed live 2026-10-02: the connectivity
     # gate aborted (job Failed), NME auto-resubmitted ~2 minutes later, the resubmission matched the
-    # failed job under the old 'completed|Failed' regex, replayed its output, printed the false "App
-    # Service restarted after running this script." (the abort never reached Restart-AzWebApp), and
-    # reported job status Completed - while the key vault, all three SQL servers and every storage
+    # failed job under the old 'completed|Failed' regex, replayed its output as though the work had been
+    # done, and reported job status Completed - while the key vault, all three SQL servers and every storage
     # account were still 100% public. Every failure path in this script is fail-safe, so letting a
     # genuine retry happen (by finding no match here) is both safe and the correct response. Use -eq,
     # not -match, so 'Failed' (or anything else) cannot creep back in via a substring match - -eq on
@@ -864,13 +852,12 @@ Function Check-LastRunResults {
     #
     # This does not reopen the unbounded resubmission chain fixed 2026-08-13 (see the comment above
     # this function) or the replay-of-a-replay chain fixed 2026-09-11 (see the comment below, at
-    # $IsReplayJob): a run that fails before VNet integration never restarts the app service, so NME
-    # has nothing to resubmit and no chain starts; a run that fails after VNet integration gets one
-    # resubmission whose own VNet-integration write is a no-op (already enabled), so a second gate
-    # failure there aborts before Restart-AzWebApp and the chain still terminates; and a fully
-    # successful run still ends in Restart-AzWebApp -> one resubmission -> which finds the previous
-    # Completed (non-deferred, non-replay) job and correctly replays-and-exits, exactly as before this
-    # change.
+    # $IsReplayJob). The only restart this script now causes is the implicit one Azure performs when
+    # virtualNetworkSubnetId is written, which happens at most once per deployment, so at most one
+    # resubmission can follow a run: a run that fails before VNet integration restarts nothing and NME
+    # has nothing to resubmit; a run that writes VNet integration gets exactly one resubmission, whose
+    # own VNet-integration write is then a no-op; and a fully successful run restarts nothing and is
+    # followed by no resubmission at all.
     #
     # Sorted newest-first because the loop below acts on the FIRST match it finds and both outcomes
     # terminate the search (a deferred candidate echoes and returns; a completed one replays and
@@ -899,10 +886,12 @@ Function Check-LastRunResults {
             # with $NmeReplayMarker in front of every line, so any marked record identifies one -
             # this script never emits that prefix anywhere else.
             #
-            # Found live 2026-09-11 (one NME submission -> 3 Azure Automation jobs, because this
-            # script restarts the NME app service twice per run: once writing virtualNetworkSubnetId
-            # for VNet integration, once via the explicit Restart-AzWebApp at the end, and NME
-            # resubmits a running scripted action on each restart). Job 2 correctly replayed job 1,
+            # Found live 2026-09-11, when this script still restarted the NME app service twice per
+            # run (once writing virtualNetworkSubnetId, once explicitly at the end) and NME resubmits
+            # a running scripted action on each restart: one NME submission produced 3 Azure
+            # Automation jobs. Only the implicit restart remains, so a chain that long is no longer
+            # reachable, but the guard stays - it is what keeps $WaitMinutes anchored on the run that
+            # did the work. Job 2 correctly replayed job 1,
             # the real run. Job 3 then matched *job 2* - the newest hash-match in the window - and
             # replayed the replay, producing doubled '[completed run] [completed run] ' lines. Three
             # things were wrong with that, in increasing order of importance:
@@ -972,7 +961,7 @@ Function Check-LastRunResults {
             Write-Output "Output of previous script run:"
             Write-NmeJobOutputReplay -JobOutput $JobOutput -Prefix $NmeReplayMarker
 
-            Write-Output "App Service restarted after running this script."
+            Write-Output "No work was done by this run - the output above is from the previous run."
             # How much of the cooldown window is left, based on the matched previous job's own EndTime -
             # not the web app's LastModifiedTimeUtc (see the note above this function: that stops being a
             # reliable signal once a run stops needing to change anything).
@@ -1094,10 +1083,9 @@ function Disable-NmeSqlPublicAccess {
         return
     }
     Write-Output "Disabling $DisplayName public access"
-    # Set before either write below is attempted, not after - a failed write still leaves this
-    # server in a half-applied state (a VNet rule with public access still enabled, or vice versa),
-    # which is exactly when the app most needs to restart and re-establish its connections, not
-    # less. See $script:NmeMakePrivateWroteSomething's declaration near the top of the file.
+    # Set before either write below is attempted, not after: a failed write still leaves this server
+    # half-applied (a VNet rule with public access still enabled, or vice versa), which the closing
+    # message should reflect.
     $script:NmeMakePrivateWroteSomething = $true
     # Check for an existing rule BY NAME, not just by subnet id. New-AzSqlServerVirtualNetworkRule
     # throws "Virtual Network Rule with name '...' already exists" if a rule with this literal name
@@ -1204,7 +1192,7 @@ function Set-NmeStorageBaseline {
         }
         Write-Output "Applying storage baseline to the $DisplayName storage account ($($SetParams.Keys -join ', '))"
         # Set before the write, not after - see $script:NmeMakePrivateWroteSomething's declaration
-        # near the top of the file for why a failed write still warrants the restart.
+        # near the top of the file for why a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         Set-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $StorageAccountName @SetParams | Out-Null
     }
@@ -1240,7 +1228,7 @@ function Set-NmeSqlBaseline {
         }
         Write-Output "Setting $DisplayName minimum TLS version to 1.2"
         # Set before the write, not after - see $script:NmeMakePrivateWroteSomething's declaration
-        # near the top of the file for why a failed write still warrants the restart.
+        # near the top of the file for why a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         try {
             Set-AzSqlServer -ResourceGroupName $ResourceGroupName -ServerName $ServerName -MinimalTlsVersion '1.2' | Out-Null
@@ -3765,7 +3753,7 @@ if (($NmeKeyVault.NetworkAcls.DefaultAction -eq 'Deny') -and ($NmeKeyVault.Publi
 else {
     Write-Output "Disabling key vault public access"
     # Set before the writes below, not after - see $script:NmeMakePrivateWroteSomething's
-    # declaration near the top of the file for why a failed write still warrants the restart.
+    # declaration near the top of the file for why a half-applied write is still recorded.
     $script:NmeMakePrivateWroteSomething = $true
     # The same lockdown is applied to all four vaults (NME, CCL, Intune Insights, RTI). Two notes that
     # apply to every copy of it:
@@ -3790,7 +3778,7 @@ if ($NmeCclKeyVaultName) {
     else {
         Write-Output "Disabling CCL key vault public access"
         # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-        # before the write, not after, so a failed write still warrants the restart.
+        # before the write, not after, so a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         Add-AzKeyVaultNetworkRule -VaultName $NmeCclKeyVault.VaultName -VirtualNetworkResourceId $PrivateEndpointSubnet.id -ResourceGroupName $NmeRg 
         Update-AzKeyVaultNetworkRuleSet -VaultName $NmeCclKeyVault.VaultName -Bypass None -ResourceGroupName $NmeRg
@@ -3825,7 +3813,7 @@ switch ($CssaStorageAccount) {
         else {
             Write-Output "Disabling storage public access"
             # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-            # before the write, not after, so a failed write still warrants the restart.
+            # before the write, not after, so a half-applied write is still recorded.
             $script:NmeMakePrivateWroteSomething = $true
             Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $StorageAccount.StorageAccountName | Out-Null
         }
@@ -3915,25 +3903,12 @@ switch ($CssaStorageAccount) {
                         $AllowedSubnetCount++
                         continue
                     }
-                    # This branch used to run unconditionally on every invocation, with no
-                    # existence check at all, and CssaStorageAccount=Restricted was this parameter's
-                    # default value at the time (it is now Private) - so a steady-state re-run with
-                    # nothing left to configure hit this call every single time. Left that way,
-                    # $script:NmeMakePrivateWroteSomething would end up set on every run regardless
-                    # of whether anything changed, and the restart-suppression this flag exists for
-                    # would be dead code in the single most common case. Set only on a confirmed
-                    # write below - NOT before the call, unlike most other call sites in this file -
-                    # because a subnet that fails here fails for a structural/deterministic reason
-                    # (wrong region relative to the storage account, or the regional vs. global
-                    # Microsoft.Storage service endpoint mismatch explained in the warning below) that
-                    # reproduces identically on every future run. Restarting the app on that failure
-                    # would mean restarting on every single re-run forever in that configuration -
-                    # exactly the dead-code-defeating bug described above, just triggered by a
-                    # different path. Contrast with the other ~16
-                    # $script:NmeMakePrivateWroteSomething = $true call sites in this file, which are
-                    # simple idempotent toggles where a write either succeeds or hits a genuine/
-                    # transient ARM error - there, the original "set before the write, even on
-                    # failure" reasoning still holds.
+                    # Set only on a confirmed write, NOT before the call as most sites in this file
+                    # do. A subnet that fails here fails for a structural reason - wrong region
+                    # relative to the storage account, or the regional vs. global Microsoft.Storage
+                    # service endpoint mismatch explained in the warning below - that reproduces on
+                    # every future run, so counting it as a write would report "something changed"
+                    # forever in that configuration.
                     try {
                         Add-AzStorageAccountNetworkRule -ResourceGroupName $NmeRg -Name $StorageAccount.StorageAccountName -VirtualNetworkResourceId $SubnetId -ErrorAction Stop | Out-Null
                         $script:NmeMakePrivateWroteSomething = $true
@@ -4021,7 +3996,7 @@ if ($NmeCclStorageAccountName) {
     else {
         Write-Output "Disabling CCL storage public access"
         # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-        # before the write, not after, so a failed write still warrants the restart.
+        # before the write, not after, so a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $NmeCclStorageAccount.StorageAccountName | Out-Null
     }
@@ -4038,7 +4013,7 @@ if ($NmeDpsStorageAccountName) {
     else {
         Write-Output "Disabling DPS storage public access"
         # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-        # before the write, not after, so a failed write still warrants the restart.
+        # before the write, not after, so a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $NmeDpsStorageAccount.StorageAccountName | Out-Null
     }
@@ -4053,7 +4028,7 @@ if ($NmeRtiStorageAccountName) {
     else {
         Write-Output "Disabling RTI storage public access"
         # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-        # before the write, not after, so a failed write still warrants the restart.
+        # before the write, not after, so a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $NmeRtiStorageAccount.StorageAccountName | Out-Null
     }
@@ -4072,7 +4047,7 @@ if ($NmeRtiKeyVaultName) {
     else {
         Write-Output "Disabling RTI key vault public access"
         # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-        # before the write, not after, so a failed write still warrants the restart.
+        # before the write, not after, so a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         Add-AzKeyVaultNetworkRule -VaultName $RtiKeyVault.VaultName -VirtualNetworkResourceId $PrivateEndpointSubnet.id -ResourceGroupName $NmeRg 
         Update-AzKeyVaultNetworkRuleSet -VaultName $RtiKeyVault.VaultName -Bypass None -ResourceGroupName $NmeRg
@@ -4114,7 +4089,7 @@ if ($NmeRtiWebAppName) {
             else {
                 Write-Output "Disabling RTI app service public access"
                 # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file -
-                # set before the write, not after, so a failed write still warrants the restart.
+                # set before the write, not after, so a half-applied write is still recorded.
                 $script:NmeMakePrivateWroteSomething = $true
                 $RtiWebAppResource.Properties.publicNetworkAccess = "Disabled"
                 $RtiWebAppResource | Set-AzResource -Force | Out-Null
@@ -4204,21 +4179,12 @@ if ($NmeRtiWebAppName) {
                             continue
                         }
                         while ($UsedPriorities -contains $NextPriority) { $NextPriority += 10 }
-                        # See $script:NmeMakePrivateWroteSomething's declaration near the top of the
-                        # file - set only on a confirmed write below, NOT before the call, unlike
-                        # most other call sites in this file. A subnet that fails here fails for a
-                        # structural/deterministic reason - a derived rule-name collision (handled by
-                        # the `continue` above) or a missing service endpoint on the source subnet -
-                        # that reproduces identically on every future run. Restarting the app on that
-                        # failure would mean restarting on every single re-run forever in that
-                        # configuration, which would defeat the whole point of this flag. Contrast
-                        # with the other ~16 $script:NmeMakePrivateWroteSomething = $true call sites
-                        # in this file, which are simple idempotent toggles where a write either
-                        # succeeds or hits a genuine/transient ARM error - there, the original "set
-                        # before the write, even on failure" reasoning still holds. Not set on either
-                        # `continue` path above: the subnet was already covered by an existing rule,
-                        # or the write was skipped outright on a name collision, so neither path
-                        # writes anything for a restart to pick up.
+                        # Set only on a confirmed write, NOT before the call as most sites in this
+                        # file do. A subnet that fails here fails for a structural reason - a derived
+                        # rule-name collision (handled by the `continue` above) or a missing service
+                        # endpoint on the source subnet - that reproduces on every future run, so
+                        # counting it as a write would report "something changed" forever. Not set on
+                        # either `continue` path above: neither writes anything.
                         try {
                             Add-AzWebAppAccessRestrictionRule -ResourceGroupName $NmeRg -WebAppName $NmeRtiWebAppName -Name $RuleName -Action Allow -SubnetId $SubnetId -Priority $NextPriority -ErrorAction Stop | Out-Null
                             $script:NmeMakePrivateWroteSomething = $true
@@ -4270,7 +4236,7 @@ if ($NmeIiKeyVaultName) {
     else {
         Write-Output "Disabling Intune Insights key vault public access"
         # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-        # before the write, not after, so a failed write still warrants the restart.
+        # before the write, not after, so a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         Add-AzKeyVaultNetworkRule -VaultName $IiKeyVault.VaultName -VirtualNetworkResourceId $PrivateEndpointSubnet.id -ResourceGroupName $NmeRg 
         Update-AzKeyVaultNetworkRuleSet -VaultName $IiKeyVault.VaultName -Bypass None -ResourceGroupName $NmeRg
@@ -4302,7 +4268,7 @@ if ($NmeCclWebAppName) {
     else {
         Write-Output "Disabling CCL app service public access"
         # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-        # before the write, not after, so a failed write still warrants the restart.
+        # before the write, not after, so a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         $CclWebApp.Properties.publicNetworkAccess = "Disabled"
         $CclWebApp | Set-AzResource -Force | Out-Null
@@ -4324,7 +4290,7 @@ if ($NmeIiWebAppName -and $MakeAppServicePrivate) {
     else {
         Write-Output "Disabling Intune Insights app service public access"
         # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-        # before the write, not after, so a failed write still warrants the restart.
+        # before the write, not after, so a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         $IiWebAppResource.Properties.publicNetworkAccess = "Disabled"
         $IiWebAppResource | Set-AzResource -Force | Out-Null
@@ -4342,13 +4308,9 @@ Write-Output "Make resources private region completed in $([math]::Round(((Get-D
 # is a deliberate act and is left to the Azure Portal.
 if ($MakeAppServicePrivate) {
     $webApp = Get-AzResource -Id $NmeWebApp.id
-    # Used to write "Disabled" here unconditionally, every run, as long as the parameter was true -
-    # including a steady-state re-run where the property was already Disabled from an earlier run.
-    # That makes this site the same default-configuration trap as the CSSA Restricted branch above:
-    # with MakeAppServicePrivate=true (a common, sticky setting) every run would set
-    # $script:NmeMakePrivateWroteSomething and write to ARM, and the restart this flag exists to
-    # suppress would never actually be skipped. Given the same already-disabled/else shape as every
-    # other component in the make-private region above, for the same reason.
+    # Read before writing, like every other component in the make-private region. Without this,
+    # MakeAppServicePrivate=true - a sticky setting - would PATCH ARM on every single run even when
+    # the property already reads Disabled.
     if ($webApp.Properties.publicNetworkAccess -eq 'Disabled') {
         Write-Output "NME app service public access already disabled"
     }
@@ -4363,40 +4325,44 @@ else {
     Write-Output "MakeAppServicePrivate is not set to true - leaving NME app service public network access unchanged."
 }
 
-# restart the app service
+# This script does not restart the NME app service, and must not start doing so again without new
+# evidence. It used to, unconditionally, at this point.
 #
-# The restart exists so the NME app service re-establishes its outbound connections and re-resolves
-# DNS after the resources it talks to - key vault, SQL, storage, the other app services - stop
-# accepting public traffic and start answering only on their private endpoint addresses. If this run
-# disabled nothing and changed no firewall ($script:NmeMakePrivateWroteSomething is still $false, set
-# near the top of the file and flipped true by every write site in the make-private region and in the
-# NME app service publicNetworkAccess block just above), there is nothing new for the app to pick up,
-# and restarting it changes no observable behavior.
+# A restart here would only be justified if the app had to re-establish outbound connections and
+# re-resolve DNS once its key vault, SQL servers, storage accounts and sibling app services stopped
+# answering publicly. Two instrumented runs measured exactly that, on a build identical to this one
+# except that it logged the restart instead of performing it, sampling the app continuously from the
+# moment the make-private region finished:
 #
-# That makes skipping the restart more than a 30-second saving on a no-op run. Nerdio Manager
-# resubmits a running scripted action after its own app service restarts (see Check-LastRunResults
-# above), so an unconditional restart here costs a whole extra Azure Automation job every time this
-# script is re-run against an already-converged environment - the resubmitted job then matches the
-# previous Completed job in Check-LastRunResults and replays its output and exits, but only after
-# actually running. In the steady state - which, by definition, is the state a deployment spends most
-# of its life in once everything is configured - that is one extra ~7-minute job per invocation for no
-# reason. Suppressing the restart here ends that chain one job sooner.
+#   - 12 components disabled on a settled deployment: 132 front-door and 66 data-plane samples over
+#     68 minutes, zero failures.
+#   - A greenfield build-out, the app rerouted into the VNet fifteen minutes earlier, 11 components
+#     disabled: 45 front-door and 31 data-plane samples to T+60, 17 more to T+73, zero failures.
 #
-# This does not interact with the deferral/replay design between the "app service vnet integration"
-# and "private DNS and network preflight checks" regions above: that deferral relies on the implicit
-# restart Azure performs the moment virtualNetworkSubnetId is written, not on this explicit call, so
-# the phase 1 -> phase 2 continuation it depends on is unaffected by gating the restart below.
+# The data-plane sample is the one that carries the result: it drives the NME worker through Entra,
+# Key Vault and SQL, all of which those runs had just made private, so "the app answers on its front
+# end but can no longer reach its own back end" would have surfaced there while the front door stayed
+# green. A single self-healing blip was defined in advance as a failure. There were none.
 #
-# One gap is accepted here rather than worked around: a run that creates a new private endpoint and
-# DNS record for a resource whose public access a human had already disabled manually writes nothing
-# in the make-private region (there was nothing left for make-private to disable) and therefore does
-# not restart, so the NME app service picks up the new private DNS resolution on its own TTL expiry
-# rather than immediately. The alternative - restarting on every private endpoint or DNS zone creation
-# regardless of whether make-private wrote anything - is exactly the unconditional-restart behavior
-# this change removes, so it is left as a known, deliberate gap rather than reintroduced.
+# The remaining case was the one write that changes the NME app service's own configuration,
+# publicNetworkAccess, which those runs never performed. Measured separately against a scratch app
+# service, because taking the real one private removes the management path: writing
+# publicNetworkAccess from Enabled to Disabled through the same Get-AzResource / Set-AzResource -Force
+# path used above did NOT recycle the worker - same process ids and start times either side - while
+# the site returned 403 to public callers. An explicit Restart-AzWebApp on the same app, as a control,
+# did change both process ids. The property is enforced at the front door; the worker neither
+# restarts for it nor needs to.
+#
+# So no path through this script leaves the app needing a restart. That matters beyond the thirty
+# seconds a restart costs: Nerdio Manager resubmits a running scripted action whenever its own app
+# service restarts, so each restart cost a whole extra Azure Automation job, which then matched the
+# previous Completed job, replayed its output and exited - several minutes of runtime to do nothing.
+#
+# The deferral between the "app service vnet integration" and "private DNS and network preflight
+# checks" regions above is unaffected: it rides on the implicit restart Azure performs when
+# virtualNetworkSubnetId is written, not on any call here.
 if ($script:NmeMakePrivateWroteSomething) {
-    Write-Output "Restarting app service"
-    $restart = Restart-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
+    Write-Output "Resources were made private in this run. The app service does not need to be restarted for that to take effect."
 }
 else {
     Write-Output "Nothing was changed in the make-private step, so the app service does not need to be restarted."
