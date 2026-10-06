@@ -62,9 +62,9 @@ recovery, and the app-service-private matrix - is available on our help site: ht
     "DefaultValue": ""
   },
   "CssaStorageAccount": {
-    "Description": "Network access for the scripted actions storage account: Restricted (default) = private endpoint plus public access firewalled to linked networks; Public = unchanged; Private = private endpoint and public access fully disabled. See the KB article for details - a more restrictive setting is never relaxed automatically on a later run.",
+    "Description": "Network access for the scripted actions storage account: Private (default) = private endpoint and public access fully disabled; Restricted = private endpoint plus public access firewalled to linked networks; Public = unchanged. See the KB article for details - a more restrictive setting is never relaxed automatically on a later run.",
     "IsRequired": false,
-    "DefaultValue": "Restricted"
+    "DefaultValue": "Private"
   },
   "PeerVnetIds": {
     "Description": "'All', or a comma-separated list of Azure resource IDs of VNets to peer to the private endpoint VNet. VNets (or their resource groups) must be linked to Nerdio Manager and in the same subscription. External VNets must be peered manually.",
@@ -183,7 +183,7 @@ function ConvertTo-NmeBoolean {
 # Three-valued equivalent of ConvertTo-NmeBoolean above, for the Public/Restricted/Private access
 # parameters. The default is passed in rather than hardcoded because NME may pass an empty string
 # for a parameter left at its default rather than the literal default value, and the two parameters
-# that use this have different defaults: CssaStorageAccount defaults to Restricted,
+# that use this have different defaults: CssaStorageAccount defaults to Private,
 # RtiAppService to Public.
 function ConvertTo-NmeAccessMode {
     param(
@@ -200,7 +200,7 @@ function ConvertTo-NmeAccessMode {
     }
 }
 
-$CssaStorageAccount    = ConvertTo-NmeAccessMode -Value $CssaStorageAccount -Name 'CssaStorageAccount' -Default 'Restricted'
+$CssaStorageAccount    = ConvertTo-NmeAccessMode -Value $CssaStorageAccount -Name 'CssaStorageAccount' -Default 'Private'
 $RtiAppService         = ConvertTo-NmeAccessMode -Value $RtiAppService      -Name 'RtiAppService'      -Default 'Public'
 $MakeAppServicePrivate = ConvertTo-NmeBoolean    -Value $MakeAppServicePrivate -Name 'MakeAppServicePrivate'
 $SkipDNS               = ConvertTo-NmeBoolean    -Value $SkipDNS               -Name 'SkipDNS'
@@ -291,13 +291,18 @@ function Set-NmeVars {
     }
     if ($key) {
         $cclwebapp = Get-AzWebApp -ResourceGroupName $NmeRg | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'}
+        # make sure there's only one web app in $cclwebapp. Without this, $NmeCclWebAppName becomes an
+        # array and the later Get-AzWebApp -Name fails on parameter binding rather than with a message.
+        if (@($cclwebapp).Count -gt 1) {
+            Throw "Found more than one Cost Optimizer web app. Please remove any Cost Optimizer web apps no longer in use."
+        }
         if ($cclwebapp) {
             Write-Verbose "Found CCL web app"
             $script:NmeCclWebAppName = $cclwebapp.Name
             write-verbose "Getting CCL Key Vault"
             $script:NmeCclKeyVaultName = Get-AzKeyVault -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'} | Select-Object -ExpandProperty VaultName
             write-verbose "Getting CCL Storage Account"
-            $script:NmeCclStorageAccountName = $script:NmeCclStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'} | Select-Object -ExpandProperty StorageAccountName
+            $script:NmeCclStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'} | Select-Object -ExpandProperty StorageAccountName
         }
         # get intune insights web app. tag value is INTUNE_INSIGHTS_DEPLOYMENT_RESOURCE
         $iiwebapp = Get-AzWebApp -ResourceGroupName $NmeRg | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'INTUNE_INSIGHTS_DEPLOYMENT_RESOURCE'}
@@ -324,7 +329,11 @@ function Set-NmeVars {
         Write-Verbose "DPS storage account not found by tag, trying by name pattern"
         $script:NmeDpsStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.StorageAccountName -match "^dps" } | Select-Object -ExpandProperty StorageAccountName
     }
-    if ($script:NmeDpsStorageAccountName.count -ne 1) {
+    if (@($script:NmeDpsStorageAccountName).Count -ne 1) {
+        # Null it rather than leaving $null-or-array in place: Get-AzStorageAccount -Name is a Mandatory
+        # [string], so an array fails on parameter binding (which -ErrorAction cannot suppress) instead of
+        # taking the intended "skip this component" path below.
+        $script:NmeDpsStorageAccountName = $null
         Write-Warning "Unable to find DPS storage account. If you are using dps and would like the to put storage account on private endpoints, please add the tag '$NmeResourceTagName' with value 'DPS_STORAGE_ACCOUNT' to the DPS storage account used by Nerdio Manager and rerun this script."
     }
 
@@ -345,7 +354,9 @@ function Set-NmeVars {
         Write-Verbose "Scripted actions storage account not found by name pattern, trying '$NmeResourceTagName' fallback tag"
         $script:NmeScriptedActionsStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.tags[$NmeResourceTagName] -eq 'CUSTOM_SCRIPTS_STORAGE_ACCOUNT' } | Select-Object -ExpandProperty StorageAccountName
     }
-    if ($script:NmeScriptedActionsStorageAccountName.count -ne 1) {
+    if (@($script:NmeScriptedActionsStorageAccountName).Count -ne 1) {
+        # Same reason as the DPS lookup above - see the comment there.
+        $script:NmeScriptedActionsStorageAccountName = $null
         Write-Warning "Unable to find the scripted actions storage account. Please add the tag '$NmeResourceTagName' with value 'CUSTOM_SCRIPTS_STORAGE_ACCOUNT' to the scripted actions storage account (its name usually contains 'cssa') used by Nerdio Manager and rerun this script."
     }
 
@@ -792,9 +803,16 @@ Function Check-LastRunResults {
     # successful run still ends in Restart-AzWebApp -> one resubmission -> which finds the previous
     # Completed (non-deferred, non-replay) job and correctly replays-and-exits, exactly as before this
     # change.
+    #
+    # Sorted newest-first because the loop below acts on the FIRST match it finds and both outcomes
+    # terminate the search (a deferred candidate echoes and returns; a completed one replays and
+    # Exits). Phase 3 of a greenfield chain sees both phase 1 (deferred) and phase 2 (completed)
+    # inside the window, so without an explicit sort which one it picks depends on
+    # Get-AzAutomationJob's ordering - and $WaitMinutes below anchors on whichever was picked.
     $jobs = Get-AzAutomationJob -ResourceGroupName $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName |
         Where-Object { $_.Status -eq 'Completed' } |
-        Where-Object { $_.EndTime.UtcDateTime -gt $JobCutoffUtc }
+        Where-Object { $_.EndTime.UtcDateTime -gt $JobCutoffUtc } |
+        Sort-Object { $_.EndTime.UtcDateTime } -Descending
     foreach ($job in $jobs){
         $details = Get-AzAutomationJob -id $job.JobId -resourcegroupname $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
         $JobScriptText = Get-NmeJobScriptText -JobParameters $details.JobParameters
@@ -904,7 +922,18 @@ Check-LastRunResults
 # Check if nme app service is already vnet integrated
 if ($NmeWebApp.virtualNetworkSubnetId){
     Write-Output "NME App service VNet integration already enabled. Confirming subnet matches current parameters"
-    if (($NmeWebApp.virtualNetworkSubnetId -notmatch $AppServiceSubnetName) -or ($NmeWebApp.virtualNetworkSubnetId -notmatch $PrivateLinkVnetName)) {
+    # Compare the id's own /virtualNetworks/<x>/subnets/<y> segments with -eq rather than running the
+    # parameter values as regexes against the whole id: -notmatch is an unanchored substring match, so
+    # an app integrated with 'nmw-app-subnet-old' passed a check for 'nmw-app-subnet', and any regex
+    # metacharacter in a VNet or subnet name was interpreted rather than compared. -eq on strings is
+    # case-insensitive, which is correct here - ARM returns inconsistent casing in resource ids.
+    $IntegratedVnetName   = $null
+    $IntegratedSubnetName = $null
+    if ($NmeWebApp.virtualNetworkSubnetId -match '/virtualNetworks/([^/]+)/subnets/([^/]+)') {
+        $IntegratedVnetName   = $Matches[1]
+        $IntegratedSubnetName = $Matches[2]
+    }
+    if (($IntegratedSubnetName -ne $AppServiceSubnetName) -or ($IntegratedVnetName -ne $PrivateLinkVnetName)) {
         Write-output "NME App service is already VNet integrated, but the subnet does not match the specified PrivateLinkVnetName or AppServiceSubnetName parameters provided."
         write-error "NME App service is already VNet integrated, but the subnet does not match the specified PrivateLinkVnetName or AppServiceSubnetName parameters provided." 
         throw "NME App service is already VNet integrated, but the subnet does not match the specified PrivateLinkVnetName or AppServiceSubnetName parameters provided."
@@ -1922,7 +1951,7 @@ if ($VNet) {
     } else {
         Write-Output "Creating private endpoint subnet"
         $PrivateEndpointSubnet = New-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnetRange -PrivateEndpointNetworkPoliciesFlag Disabled 
-        $VNet | Add-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnetRange -PrivateEndpointNetworkPoliciesFlag Disabled 
+        $VNet | Add-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -AddressPrefix $PrivateEndpointSubnetRange -PrivateEndpointNetworkPoliciesFlag Disabled | Out-Null
         $vnetUpdated = $true
     }
  
@@ -1961,7 +1990,7 @@ if ($VNet) {
     } else {
         Write-Output "Creating app service subnet"
         $AppServiceSubnet = New-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -AddressPrefix $AppServiceSubnetRange 
-        $VNet | Add-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -AddressPrefix $AppServiceSubnetRange
+        $VNet | Add-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -AddressPrefix $AppServiceSubnetRange | Out-Null
         $vnetUpdated = $true
     }
  
@@ -2003,6 +2032,20 @@ else {
     # to type this parameter) splits to "id1" and " id2", and a trailing comma or accidental double
     # comma produces an empty entry. Either would otherwise be passed to Azure as a bogus VNet id.
     $VnetIds = if ($PeerVnetIds) { @($PeerVnetIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) } else { @() }
+}
+
+# Validated here, before the DNS and private-endpoint regions, rather than where the ids are first
+# used: the peering loop runs Get-AzResource -ResourceId in the Nerdio Manager subscription, so an id
+# from another subscription fails there with a generic not-found - roughly twenty minutes of endpoint
+# creation later. PeerVnetIds is documented as same-subscription only; say so immediately instead.
+# The 'All' branch above reads VNets from this subscription, so only an explicit list can be wrong.
+foreach ($PeerVnetId in $VnetIds) {
+    if ($PeerVnetId -notmatch '^/subscriptions/([^/]+)/') {
+        Throw "PeerVnetIds contains '$PeerVnetId', which is not a virtual network resource id. Supply full resource ids of the form /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<name>, separated by commas."
+    }
+    if ($Matches[1] -ne $NmeSubscriptionId) {
+        Throw "PeerVnetIds contains a virtual network in subscription $($Matches[1]), but this script can only peer virtual networks in the Nerdio Manager subscription ($NmeSubscriptionId). Remove '$PeerVnetId' and create that peering manually, or re-run without it."
+    }
 }
 
 function Get-NmePeerVnetLinkName {
@@ -2514,6 +2557,11 @@ if ($NmeScriptedActionsAccountName) {
     if ($CssaStorageAccount -ne 'Public') {
         # Both Private and Restricted need the private endpoint - only Public skips it.
         # Get scripted actions storage account (resolved in Set-NmeVars via tag, then name pattern, then the NMW_RESOURCE fallback tag)
+        # Guard before the Get: -Name is a Mandatory [string], so calling it with $null throws a parameter
+        # binding error and the friendly message below would never be reached.
+        if (-not $NmeScriptedActionsStorageAccountName) {
+            throw "No scripted actions storage account found in resource group $NmeRg. Please add the tag '$NmeResourceTagName' with value 'CUSTOM_SCRIPTS_STORAGE_ACCOUNT' to the scripted actions storage account used by Nerdio Manager and rerun this script."
+        }
         $ScriptedActionsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeScriptedActionsStorageAccountName -ErrorAction SilentlyContinue
         # throw error if no scripted actions storage account found
         if (-not $ScriptedActionsStorageAccount) {
@@ -3232,9 +3280,9 @@ switch ($CssaStorageAccount) {
                         continue
                     }
                     # This branch used to run unconditionally on every invocation, with no
-                    # existence check at all, and CssaStorageAccount=Restricted is this parameter's
-                    # default value - so a steady-state re-run with nothing left to configure hit
-                    # this call every single time. Left that way,
+                    # existence check at all, and CssaStorageAccount=Restricted was this parameter's
+                    # default value at the time (it is now Private) - so a steady-state re-run with
+                    # nothing left to configure hit this call every single time. Left that way,
                     # $script:NmeMakePrivateWroteSomething would end up set on every run regardless
                     # of whether anything changed, and the restart-suppression this flag exists for
                     # would be dead code in the single most common case. Set only on a confirmed
