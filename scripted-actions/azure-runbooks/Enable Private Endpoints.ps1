@@ -795,6 +795,14 @@ Function Check-LastRunResults {
     # would be a false alarm in the customer's job history. Re-running later is safe and idempotent,
     # which is what the message tells the admin to do.
     #
+    # Only an OLDER sibling wins. This check does not run until roughly three minutes into a job
+    # (the Az module import dominates), so two runs started within that window would each find the
+    # other already Running and both would exit, leaving nothing done. Yielding only to a job that
+    # started earlier - with the job id as a stable tiebreaker for the same start time, since
+    # Automation reports these to the second - makes exactly one of any set of concurrent runs
+    # proceed. The case this fix is really for, a Nerdio Manager resubmission landing while the
+    # original job is still in the sandbox, is unaffected: the original is always the older job.
+    #
     # $AllJobs is listed once and used by both scans - Get-AzAutomationJob with no filter pages
     # through every job in the account, which is the expensive part of this function.
     $AllJobs = @(Get-AzAutomationJob -ResourceGroupName $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName)
@@ -802,7 +810,17 @@ Function Check-LastRunResults {
     $SiblingJobs = $AllJobs |
         Where-Object { $RunningStatuses -contains $_.Status } |
         Where-Object { $_.JobId -ne $ThisJob.JobId }
+    # StartTime is null until Automation actually dispatches the job, so fall back to CreationTime -
+    # a queued job that has not started yet is still a sibling worth yielding to.
+    $ThisJobStartUtc = if ($ThisJob.StartTime) { $ThisJob.StartTime.UtcDateTime } else { $ThisJob.CreationTime.UtcDateTime }
     foreach ($SiblingJob in $SiblingJobs) {
+        $SiblingStartUtc = if ($SiblingJob.StartTime) { $SiblingJob.StartTime.UtcDateTime } else { $SiblingJob.CreationTime.UtcDateTime }
+        $SiblingIsOlder = ($SiblingStartUtc -lt $ThisJobStartUtc) -or
+                          (($SiblingStartUtc -eq $ThisJobStartUtc) -and ([string]$SiblingJob.JobId -lt [string]$ThisJob.JobId))
+        if (-not $SiblingIsOlder) {
+            Write-Verbose "Ignoring running job $($SiblingJob.JobId): it started after this one, so it is the job that will yield."
+            continue
+        }
         $SiblingDetails = Get-AzAutomationJob -Id $SiblingJob.JobId -ResourceGroupName $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
         $SiblingHash = Get-NmeScriptHash -ScriptText (Get-NmeJobScriptText -JobParameters $SiblingDetails.JobParameters)
         if (-not $SiblingHash) {
@@ -810,8 +828,7 @@ Function Check-LastRunResults {
             continue
         }
         if ($SiblingHash -eq $ThisScriptHash) {
-            $SiblingStart = if ($SiblingJob.StartTime) { $SiblingJob.StartTime.UtcDateTime.ToString('u') } else { $SiblingJob.CreationTime.UtcDateTime.ToString('u') }
-            Write-Output "Another run of this script is already in progress (job $($SiblingJob.JobId), status $($SiblingJob.Status), started $SiblingStart) - exiting so the two runs do not configure the same resources at the same time. Nothing was changed by this run. If that run does not finish the deployment, re-run this script once it has ended; it is safe to re-run and will pick up wherever the other run stopped."
+            Write-Output "Another run of this script is already in progress (job $($SiblingJob.JobId), status $($SiblingJob.Status), started $($SiblingStartUtc.ToString('u'))) - exiting so the two runs do not configure the same resources at the same time. Nothing was changed by this run. If that run does not finish the deployment, re-run this script once it has ended; it is safe to re-run and will pick up wherever the other run stopped."
             Exit
         }
     }
