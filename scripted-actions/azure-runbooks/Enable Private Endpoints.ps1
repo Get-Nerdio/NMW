@@ -159,6 +159,19 @@ $script:NmeVnetIntegrationJustEnabled = $false
 # the time make-private runs, an explicit restart is only ever waiting on make-private's own writes.
 $script:NmeMakePrivateWroteSomething = $false
 
+# E-5 Phase B. How many private endpoint / DNS zone group creations this script keeps in flight at
+# once. A constant, deliberately not a Nerdio Manager parameter: the limit here is ARM's own
+# serialization of writes against the parent virtual network, not client-side latency, so a
+# customer-facing knob would invite tuning against a bottleneck nobody on either side can observe.
+# Raise it only on measured evidence that conflicts stay rare (SPEC-E5-Parallelize.md Phase B, D3).
+$script:NmePrivateEndpointConcurrency = 4
+
+# Base delay in milliseconds for Invoke-NmeWithRetry's exponential backoff (2s, 4s, 8s, 16s plus
+# jitter). A variable rather than a literal so the retry path can be exercised in milliseconds by a
+# test harness; the production value is sized for ARM's write-serialization latency, not for how fast
+# the loop can spin.
+$script:NmeRetryBaseDelayMs = 2000
+
 # Nerdio Manager passes these parameters in as strings. Normalize them to real booleans once, here,
 # rather than comparing against 'True' at each use site with inconsistent casing. Doing the
 # conversion up front also means a typo like "yes" or "1" is caught before the script changes
@@ -1317,18 +1330,326 @@ function Set-NmeAppServiceExplicitPublicAccess {
     }
 }
 
+# E-5 Phase B concurrency helpers (SPEC-E5-Parallelize.md, B1/B2). Their behavior against the real
+# Automation sandbox - what an -AsJob failure actually looks like there - is recorded in TEST-PLAN.md
+# section 24.3; read that before changing the error classification below.
+
+function Test-NmeRetryableError {
+    # Classifies whether an error is worth retrying. Kept separate from Invoke-NmeWithRetry (rather
+    # than inlined in its catch block) so the classification itself is independently testable against
+    # synthesized Az-shaped errors, without needing a scriptblock, Start-Sleep, or a real Azure call
+    # in the way.
+    #
+    # Deliberately untyped parameter rather than [System.Management.Automation.ErrorRecord]: callers
+    # may hand this an ErrorRecord (the normal case, from a catch block's $_), or the raw exception
+    # when unwrapping a nested CloudException/ErrorResponseException, or - in the test harness - a
+    # lightweight pscustomobject standing in for one of those shapes. A strict ErrorRecord type
+    # constraint would make PowerShell attempt (and fail) a type conversion on any of the latter two
+    # before this function's own body ever runs.
+    param(
+        [Parameter(Mandatory=$true)]$ErrorObject
+    )
+
+    # Normalize to "the exception": the caller may pass an ErrorRecord (has an .Exception property)
+    # or the exception object itself.
+    $Exception = $ErrorObject
+    if ($ErrorObject.PSObject.Properties.Name -contains 'Exception' -and $ErrorObject.Exception) {
+        $Exception = $ErrorObject.Exception
+    }
+
+    # A cancellation/timeout is never retryable here, regardless of what its message happens to say -
+    # retrying a deliberate cancellation would fight whatever cancelled it (e.g. the caller's own
+    # timeout), not recover from a transient Azure condition.
+    if ($Exception -is [System.OperationCanceledException]) {
+        return $false
+    }
+
+    # --- 1. Structured Azure error code, preferred over message text --------------------------------
+    # Az's exception shape for "what went wrong" varies by version and by which layer (Az.Network vs
+    # the underlying ARM client) surfaced the failure, so every property below is probed defensively
+    # via PSObject.Properties.Name rather than accessed directly - a direct access to a property this
+    # Az version does not have would itself throw under $ErrorActionPreference = 'Stop', turning "is
+    # this retryable" into a new source of unhandled errors instead of an answer.
+    $Code = $null
+    if ($Exception.PSObject.Properties.Name -contains 'Body' -and $Exception.Body -and
+        $Exception.Body.PSObject.Properties.Name -contains 'Code') {
+        $Code = $Exception.Body.Code
+    }
+    elseif ($Exception.PSObject.Properties.Name -contains 'Code' -and $Exception.Code) {
+        $Code = $Exception.Code
+    }
+    elseif ($Exception.PSObject.Properties.Name -contains 'InnerException' -and $Exception.InnerException) {
+        # CloudException / ErrorResponseException sometimes hang off InnerException instead of being
+        # the top-level exception Az throws.
+        $Inner = $Exception.InnerException
+        if ($Inner.PSObject.Properties.Name -contains 'Body' -and $Inner.Body -and
+            $Inner.Body.PSObject.Properties.Name -contains 'Code') {
+            $Code = $Inner.Body.Code
+        }
+        elseif ($Inner.PSObject.Properties.Name -contains 'Code' -and $Inner.Code) {
+            $Code = $Inner.Code
+        }
+    }
+
+    if ($Code) {
+        $RetryableCodes = @('AnotherOperationInProgress', 'RetryableError', 'Conflict', 'TooManyRequests')
+        if ($RetryableCodes -contains [string]$Code) {
+            return $true
+        }
+        # A structured code we have (AuthorizationFailed, InvalidParameter, or anything else not on
+        # the retryable list above) is authoritative - do not fall through to the message-text
+        # heuristic below. That heuristic exists to cover Az versions that surface no code at all,
+        # not to second-guess a code that IS present. A permissions error must not be retried
+        # MaxAttempts times before surfacing just because its message happens to contain a
+        # retryable-looking word.
+        return $false
+    }
+
+    # --- 2. HTTP status code, if the exception carries an HTTP response ------------------------------
+    if ($Exception.PSObject.Properties.Name -contains 'Response' -and $Exception.Response -and
+        $Exception.Response.PSObject.Properties.Name -contains 'StatusCode') {
+        $StatusText = [string]$Exception.Response.StatusCode
+        # An empty or whitespace StatusCode means this exception declares the property but carries no
+        # status, so there is nothing authoritative here and the message-text branch below must still
+        # get its turn. Measured in the real sandbox (TEST-PLAN.md section 24.3, Az.Network 7.3.0):
+        # the NetworkCloudException an -AsJob failure surfaces does exactly that, putting the real
+        # "StatusCode: 404 / ErrorCode: ResourceNotFound" only in the message text. Note the emptiness
+        # check cannot be done on the [int] cast - PowerShell converts an empty string to 0 without
+        # throwing, so a "resolved" 0 would look like a real status and suppress the fallback for
+        # every -AsJob failure in this environment, including a genuine AnotherOperationInProgress,
+        # which is the one error this whole function exists to catch.
+        if (-not [string]::IsNullOrWhiteSpace($StatusText)) {
+            # StatusCode is an HttpStatusCode enum on some Az/HttpClient versions and a plain int on
+            # others; [int] on either succeeds, and on an already-stringified enum name
+            # (e.g. "TooManyRequests") it throws, hence the wrapped cast and the name comparison.
+            $StatusNum = $null
+            try { $StatusNum = [int]$Exception.Response.StatusCode } catch { $StatusNum = $null }
+            if ($StatusNum -eq 429 -or $StatusNum -eq 503 -or
+                $StatusText -eq 'TooManyRequests' -or $StatusText -eq 'ServiceUnavailable') {
+                return $true
+            }
+            # Same reasoning as the structured-code branch above: a status we understood and that is
+            # not 429/503 is authoritative, not a cue to go check message text too.
+            return $false
+        }
+    }
+
+    # --- 3. Message text, only as a last resort ------------------------------------------------------
+    # Reached only when neither an error code nor an HTTP status code was available at all - the
+    # oldest Az versions in the field surface conflicts this way. Note 'Conflict' is deliberately NOT
+    # in this list: as a structured code (above) it is specific enough to trust, but as free text it
+    # is far too common in legitimate, non-retryable messages (e.g. "a resource with that name
+    # already exists") to match safely. The two status numbers are matched only in the parenthesized
+    # form .NET's WebException uses ("The remote server returned an error: (429) Too Many Requests.")
+    # - a bare '429'/'503' substring would also match a resource name, an IP octet or a byte count.
+    $Message = ''
+    if ($Exception.PSObject.Properties.Name -contains 'Message' -and $Exception.Message) {
+        $Message = [string]$Exception.Message
+    }
+    $RetryablePhrases = @(
+        'AnotherOperationInProgress',
+        'RetryableError',
+        'another operation is in progress',
+        'TooManyRequests',
+        'Too Many Requests',
+        'ServiceUnavailable',
+        'Service Unavailable',
+        '(429)',
+        '(503)'
+    )
+    foreach ($Phrase in $RetryablePhrases) {
+        # -like is case-insensitive by default (no -c prefix), matching ARM's inconsistent casing of
+        # these phrases across API versions.
+        if ($Message -like "*$Phrase*") {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Invoke-NmeWithRetry {
+    # Runs $ScriptBlock, retrying on a retryable error (Test-NmeRetryableError above) with exponential
+    # backoff, and returns whatever $ScriptBlock produced. Exists because concurrent -AsJob operations
+    # all write into the same subnet, and ARM serializes writes on the parent VNet
+    # (SPEC-E5-Parallelize.md Phase B2) - at a concurrency cap of 4, "AnotherOperationInProgress" /
+    # Conflict / 429 responses are the expected cost of that parallelism, not a sign anything is
+    # actually broken, and must be absorbed here rather than surfaced to the customer.
+    param(
+        [Parameter(Mandatory=$true)][scriptblock]$ScriptBlock,
+        [Parameter(Mandatory=$true)][string]$DisplayName,
+        [int]$MaxAttempts = 5
+    )
+
+    $Attempt = 0
+    while ($true) {
+        $Attempt++
+        try {
+            return & $ScriptBlock
+        }
+        catch {
+            if (-not (Test-NmeRetryableError -ErrorObject $_)) {
+                # Non-retryable (permissions, validation, anything unrecognized): surface immediately.
+                # Spending MaxAttempts retries on an error no amount of waiting will fix only delays
+                # the customer finding out what is actually wrong. Bare 'throw' re-raises the current
+                # ErrorRecord as-is, preserving the original Azure error text and stack.
+                throw
+            }
+            if ($Attempt -ge $MaxAttempts) {
+                # Retryable, but we are out of attempts: this is a genuine failure (ARM never released
+                # the lock, or throttling never cleared), not a transient blip - rethrow the last error
+                # rather than synthesizing a generic one, so the customer's log still shows the real
+                # Azure error text that caused it.
+                throw
+            }
+            # Exponential backoff (2s, 4s, 8s, 16s at the production base delay) plus a small random
+            # jitter. The jitter exists so that when several concurrent -AsJob operations collide on
+            # the same ARM conflict at roughly the same moment, they do not all wake up and retry on
+            # the exact same tick and collide again.
+            $BackoffMs = $script:NmeRetryBaseDelayMs * [math]::Pow(2, $Attempt - 1)
+            $JitterMs = Get-Random -Minimum 0 -Maximum 1000
+            $DelayMs = $BackoffMs + $JitterMs
+            # Write-Verbose, not Write-Warning: a retried-and-succeeded conflict is the expected cost
+            # of running components concurrently, not a problem - it must not read as one in a
+            # customer's job log.
+            Write-Verbose "Retrying $DisplayName (attempt $Attempt of $MaxAttempts) after a retryable error: $($_.Exception.Message) Waiting $([math]::Round($DelayMs))ms."
+            Start-Sleep -Milliseconds $DelayMs
+        }
+    }
+}
+
+function Invoke-NmeJobBatch {
+    # Waits on a batch of background jobs (Az -AsJob results in production; plain Start-Job in tests)
+    # and collects one result per job, in the caller's input order, regardless of completion order -
+    # SPEC-E5-Parallelize.md B3 requires component messages emitted in table order, not job-finish
+    # order, so the caller needs results indexable by the same position it submitted them in.
+    #
+    # Does not itself retry anything and writes no customer-visible output - the caller (which knows
+    # which stage this is and owns the component table) decides what to do with a failed or timed-out
+    # result, including re-driving it through Invoke-NmeWithRetry synchronously per B2.
+    param(
+        [Parameter(Mandatory=$true)][AllowEmptyCollection()][array]$Jobs,
+        [Parameter(Mandatory=$true)][AllowEmptyCollection()][array]$DisplayNames,
+        [int]$TimeoutSeconds = 900
+    )
+
+    if ($Jobs.Count -ne $DisplayNames.Count) {
+        Throw "Invoke-NmeJobBatch: internal error - received $($Jobs.Count) job(s) but $($DisplayNames.Count) display name(s). Every job must have exactly one corresponding display name; this is a caller bug, not an Azure failure."
+    }
+
+    if ($Jobs.Count -eq 0) {
+        # A stage with nothing to submit - e.g. every component in this run already had a private
+        # endpoint, the common case on a re-run - is not an edge case, it is the steady state once a
+        # deployment is idempotent. Wait-Job also throws on an empty -Job array, so this must be
+        # short-circuited rather than handled by the loop below.
+        #
+        # The leading comma is not decoration: PowerShell unrolls an array written to the output
+        # stream, so a bare `return @()` reaches `$x = Invoke-NmeJobBatch ...` as $null, not an empty
+        # array - the same output-stream-flattening trap this file's New-NmeStoragePrivateEndpoint
+        # documents for Write-Output, just hitting a `return` here instead. The unary comma wraps the
+        # array so it survives as a single array object through the pipeline.
+        return ,@()
+    }
+
+    # Timeout here is what stands between a single hung job and Azure Automation's own 3-hour
+    # fair-share limit for the whole runbook - without it, one stuck New-AzPrivateEndpoint call would
+    # silently burn the entire job's remaining budget before anything downstream even got a chance to
+    # fail cleanly.
+    try {
+        Wait-Job -Job $Jobs -Timeout $TimeoutSeconds | Out-Null
+    }
+    catch {
+        # Prefer to still collect whatever each job has over losing all results because Wait-Job
+        # itself (as opposed to a job it was waiting on) raised an error - fall through to the per-job
+        # collection below, which treats a job not yet in a terminal state the same as a real timeout.
+        Write-Verbose "Invoke-NmeJobBatch: Wait-Job raised an error, continuing to collect per-job results: $($_.Exception.Message)"
+    }
+
+    $Results = New-Object System.Collections.Generic.List[object]
+    try {
+        $TerminalStates = @('Completed', 'Failed', 'Stopped')
+        for ($i = 0; $i -lt $Jobs.Count; $i++) {
+            $Job = $Jobs[$i]
+            $Name = $DisplayNames[$i]
+            $TimedOut = $TerminalStates -notcontains $Job.State
+            $Output = $null
+            $ErrorText = $null
+
+            if ($TimedOut) {
+                # Still running (or blocked/disconnected) after Wait-Job's own timeout: stop it so it
+                # cannot keep running unattended past this stage, then synthesize an error naming which
+                # component hung and how long we waited - a job in this state carries no useful message
+                # of its own to surface instead.
+                Stop-Job -Job $Job -ErrorAction SilentlyContinue
+                $ErrorText = "Timed out waiting for '$Name' after $TimeoutSeconds seconds; the job was stopped."
+            }
+            else {
+                try {
+                    $Output = Receive-Job -Job $Job -ErrorAction Stop
+                }
+                catch {
+                    $ErrorText = $_.Exception.Message
+                }
+                if (-not $ErrorText -and $Job.State -eq 'Failed') {
+                    # Which path carries the failure depends on the Az module version: some re-throw
+                    # it through Receive-Job (caught above), others leave Receive-Job silent and only
+                    # record it on the job's own .Error collection, or on a child job's .Error when the
+                    # cmdlet fanned out into child jobs internally. Check both rather than trusting
+                    # either alone.
+                    $JobError = $Job.Error | Select-Object -First 1
+                    if (-not $JobError -and $Job.ChildJobs) {
+                        $JobError = $Job.ChildJobs | ForEach-Object { $_.Error } | Where-Object { $_ } | Select-Object -First 1
+                    }
+                    if ($JobError) {
+                        $ErrorText = [string]$JobError
+                    }
+                    else {
+                        $ErrorText = "Job for '$Name' failed with no further detail available."
+                    }
+                }
+            }
+
+            $Results.Add([pscustomobject]@{
+                DisplayName = $Name
+                Output      = $Output
+                Error       = $ErrorText
+                State       = $Job.State
+                TimedOut    = $TimedOut
+            })
+        }
+    }
+    finally {
+        # Every job is removed here - success, failure, or timed-out, and whether or not the loop above
+        # ran to completion - so nothing from this stage leaks into the next stage's Get-Job view or
+        # into Automation's job history. Results already collected are still returned; only the jobs
+        # themselves are cleaned up here.
+        Remove-Job -Job $Jobs -Force -ErrorAction SilentlyContinue
+    }
+
+    # Leading comma again, same reason as the empty-batch early return above: with exactly one result,
+    # `return $Results.ToArray()` would unroll to that single pscustomobject rather than a one-element
+    # array, so `$x = Invoke-NmeJobBatch ...` would silently stop being indexable/Count-able the one
+    # time a stage happens to submit exactly one job. The comma keeps the return type an array no
+    # matter how many results it holds - 0, 1, or many.
+    return ,$Results.ToArray()
+}
+
 function New-NmeStoragePrivateEndpoint {
-    # This function depends on script scope: it reads $ExistingPrivateEndpoints, $NmeRg,
-    # $VnetLocation, $PrivateEndpointSubnet, $SkipDNS, $StorageSubresourceDnsZoneNames and
-    # $StorageSubresourceDnsZones, all of which must be set before this function is called.
-    # Deliberately returns nothing (bare `return`, not `return $Endpoint`): every call site invokes
-    # this as a bare statement with no assignment, specifically so the Write-Output progress messages
-    # below reach the job log directly. `$x = New-NmeStoragePrivateEndpoint ...` or `... | Out-Null`
-    # captures the ENTIRE success stream of the call - every Write-Output in this function, not just
-    # a final return value - silencing all of them. Found live 2026-08-13 (R1 of TEST-PLAN.md §11):
-    # every call site here already piped to `| Out-Null` for exactly this reason before the fix, which
-    # is what caused it. No caller has ever used the endpoint object this returned - do not add a
-    # return value back without also changing every call site to not capture/discard the pipeline.
+    # This function depends on script scope: it reads $NmeRg, $SkipDNS, $StorageSubresourceDnsZoneNames
+    # and $StorageSubresourceDnsZones, all of which must be set before this function is called.
+    #
+    # Since E-5 Phase B this ENQUEUES one component descriptor and does no Azure work of its own; the
+    # creation, the existence checks and every message below are performed by
+    # Invoke-NmeEndpointComponentQueue, which drains the queue in two batched stages at the end of the
+    # "create private endpoints" region. Call sites are unchanged, and so are the message strings -
+    # every one of them is composed here, at enqueue time, exactly as it used to be composed at
+    # execution time, so that the wording cannot drift just because the execution moved.
+    #
+    # Still deliberately returns nothing (bare `return`, never `return $Endpoint`): every call site
+    # invokes this as a bare statement with no assignment. `$x = New-NmeStoragePrivateEndpoint ...` or
+    # `... | Out-Null` would capture the ENTIRE success stream of the call, which before Phase B
+    # silenced every progress message in this function. Found live 2026-08-13 (R1 of TEST-PLAN.md
+    # §11). The hazard is smaller now that the output happens in the coordinator, but the rule stands -
+    # do not add a return value back without also changing every call site.
     param(
         [Parameter(Mandatory=$true)]$StorageAccount,          # the object from Get-AzStorageAccount
         [Parameter(Mandatory=$true)][string]$Subresource,     # 'blob' or 'table'
@@ -1343,61 +1664,34 @@ function New-NmeStoragePrivateEndpoint {
     $ZoneName = $StorageSubresourceDnsZoneNames[$Subresource]
     $Zone = $StorageSubresourceDnsZones[$Subresource]
 
-    $Endpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $StorageAccount.Id `
-        -SubnetId $PrivateEndpointSubnet.Id -GroupId $Subresource -DisplayName "$DisplayName $Subresource storage"
-    if ($Endpoint) {
-        Write-Output "Found $DisplayName $Subresource storage private endpoint"
+    $script:NmePendingEndpointComponents += [pscustomobject]@{
+        TargetResourceId               = $StorageAccount.Id
+        GroupId                        = $Subresource
+        FindDisplayName                = "$DisplayName $Subresource storage"
+        FailureComponentName           = "$DisplayName $Subresource storage"
+        PrivateEndpointName            = $PrivateEndpointName
+        ServiceConnectionName          = $ServiceConnectionName
+        FoundMessage                   = "Found $DisplayName $Subresource storage private endpoint"
+        ConfiguringMessage             = "Configuring $DisplayName $Subresource storage service connection and private endpoint"
+        CreatedMessage                 = "Created $DisplayName $Subresource storage private endpoint '$PrivateEndpointName'"
+        CreateFailureMessage           = "Could not create the private endpoint for $DisplayName $Subresource storage: {0} The remaining components will still be attempted, and this run will stop before making anything private - see the summary at the end of this region."
+        DnsZoneName                    = $ZoneName
+        DnsZone                        = $Zone
+        DnsZoneGroupName               = $DnsZoneGroupName
+        FoundDnsZoneGroupMessage       = "Found $DisplayName storage DNS zone group"
+        ConfiguringDnsZoneGroupMessage = "Configuring $DisplayName storage DNS zone group"
+        CreatedDnsZoneGroupMessage     = "Created $DisplayName storage DNS zone group '$DnsZoneGroupName'"
+        SkipDnsZoneGroupMessage        = "Skipping $DisplayName storage DNS zone group configuration (SkipDNS enabled)"
+        DnsFailureMessage              = "Could not create the DNS zone group for $DisplayName $Subresource storage: {0} The private endpoint itself was created, but $DisplayName will not resolve to it until this is fixed. The remaining components will still be attempted, and this run will stop before making anything private."
+        # Storage only. Earlier versions of this script linked some zone groups to the wrong zone for
+        # the account's sub-resource, so a zone group that already exists is checked for that drift.
+        # The warning text needs the FOUND zone group's own name, which is not known until the
+        # coordinator reads it, so the template carries a {0} placeholder like the failure messages.
+        DriftZoneResourceId            = $Zone.ResourceId
+        DriftWarningMessage            = "The existing $DisplayName storage DNS zone group '{0}' is not linked to the '$ZoneName' private DNS zone, so $DisplayName $Subresource storage will not resolve to the private endpoint. Delete the private endpoint '{1}' in the Azure Portal and re-run this script to have the endpoint and its DNS zone group recreated correctly."
+        Endpoint                       = $null
     }
-    else {
-        Write-Output "Configuring $DisplayName $Subresource storage service connection and private endpoint"
-        $EndpointStart = Get-Date
-        try {
-            Assert-NmePrivateEndpointNameAvailable -Name $PrivateEndpointName
-            $ServiceConnection = New-AzPrivateLinkServiceConnection -Name $ServiceConnectionName -PrivateLinkServiceId $StorageAccount.Id -GroupId $Subresource -ErrorAction Stop
-            $Endpoint = New-AzPrivateEndpoint -Name $PrivateEndpointName -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ServiceConnection -ErrorAction Stop
-        }
-        catch {
-            Write-Warning "Could not create the private endpoint for $DisplayName $Subresource storage: $($_.Exception.Message) The remaining components will still be attempted, and this run will stop before making anything private - see the summary at the end of this region."
-            $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = "$DisplayName $Subresource storage"; Reason = $_.Exception.Message }
-            return
-        }
-        Write-Output "Created $DisplayName $Subresource storage private endpoint '$PrivateEndpointName'"
-        Write-Verbose "Created $DisplayName $Subresource storage private endpoint in $([math]::Round(((Get-Date) - $EndpointStart).TotalSeconds, 1)) seconds"
-    }
-
-    if ($SkipDNS) {
-        Write-Output "Skipping $DisplayName storage DNS zone group configuration (SkipDNS enabled)"
-        return
-    }
-
-    # -ResourceGroupName is the endpoint's own resource group, not $NmeRg: a pre-existing endpoint
-    # found by PrivateLinkServiceId (P2-7's subscription-wide discovery) is not necessarily in $NmeRg
-    # - that is the whole point of supporting a pre-existing endpoint under a non-convention name in
-    # another resource group (P1-2, T15/T20). Every zone-group call in this script follows the same
-    # rule: use the resolved endpoint object's own .ResourceGroupName, never $NmeRg, since a Get/New
-    # call scoped to the wrong resource group fails with a plain "resource not found" that gives no
-    # hint the endpoint was simply looked for in the wrong place. Found live (2026-08-12, T20).
-    $DnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $Endpoint.ResourceGroupName -PrivateEndpointName $Endpoint.Name -ErrorAction SilentlyContinue
-    if ($DnsZoneGroup) {
-        Write-Output "Found $DisplayName storage DNS zone group"
-        # Earlier versions of this script linked some zone groups to the wrong zone for the account's sub-resource
-        if ($DnsZoneGroup.PrivateDnsZoneConfigs.PrivateDnsZoneId -notcontains $Zone.ResourceId) {
-            Write-Warning "The existing $DisplayName storage DNS zone group '$($DnsZoneGroup.Name)' is not linked to the '$ZoneName' private DNS zone, so $DisplayName $Subresource storage will not resolve to the private endpoint. Delete the private endpoint '$($Endpoint.Name)' in the Azure Portal and re-run this script to have the endpoint and its DNS zone group recreated correctly."
-        }
-    }
-    else {
-        Write-Output "Configuring $DisplayName storage DNS zone group"
-        try {
-            $Config = New-AzPrivateDnsZoneConfig -Name $ZoneName -PrivateDnsZoneId $Zone.ResourceId -ErrorAction Stop
-            $DnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $Endpoint.ResourceGroupName -PrivateEndpointName $Endpoint.Name -Name $DnsZoneGroupName -PrivateDnsZoneConfig $Config -ErrorAction Stop
-        }
-        catch {
-            Write-Warning "Could not create the DNS zone group for $DisplayName $Subresource storage: $($_.Exception.Message) The private endpoint itself was created, but $DisplayName will not resolve to it until this is fixed. The remaining components will still be attempted, and this run will stop before making anything private."
-            $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = "$DisplayName $Subresource storage"; Reason = $_.Exception.Message }
-            return
-        }
-        Write-Output "Created $DisplayName storage DNS zone group '$DnsZoneGroupName'"
-    }
+    return
 }
 
 function New-NmeComponentPrivateEndpoint {
@@ -1406,17 +1700,10 @@ function New-NmeComponentPrivateEndpoint {
     # 13 non-storage components (key vaults, sql servers, automation accounts, app services) in the "create
     # private endpoints" region. Those 13 hand-maintained copies are exactly where P1-2, P1-22 and P1-23
     # lived - collapsing them here removes the copy-paste substrate that produced all three, rather than
-    # just patching them again. This function depends on script scope: it reads $ExistingPrivateEndpoints,
-    # $NmeRg, $VnetLocation, $PrivateEndpointSubnet and $SkipDNS, all of which must be set before this
-    # function is called.
+    # just patching them again.
     #
-    # Deliberately returns nothing: see New-NmeStoragePrivateEndpoint's comment above for why. This
-    # function originally ended with `return $Endpoint` and every one of the 13 call sites assigned it
-    # to a `$XxxPrivateEndpoint` variable - which silenced every Write-Output below (Found/Configuring
-    # for both the endpoint and its DNS zone group) across every component, since assignment captures
-    # the function's entire success stream, not just the last object. None of those 13 variables were
-    # ever read again (confirmed by grep before removing them). Found live 2026-08-13 (R1 of
-    # TEST-PLAN.md §11) - the private-endpoints region produced zero progress output for ~4.5 minutes.
+    # Since E-5 Phase B this ENQUEUES one component descriptor and does no Azure work of its own - see
+    # New-NmeStoragePrivateEndpoint above for the full note, including why it still returns nothing.
     #
     # Every Write-Output/Write-Warning string is supplied by the caller rather than derived from a single
     # display-name parameter, because the 13 blocks this replaces were never worded consistently - for
@@ -1441,60 +1728,329 @@ function New-NmeComponentPrivateEndpoint {
         [Parameter(Mandatory=$true)][string]$ConfiguringDnsZoneGroupMessage,
         [Parameter(Mandatory=$true)][string]$SkipDnsZoneGroupMessage
     )
-    $Endpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints -PrivateLinkServiceId $TargetResourceId `
-        -SubnetId $PrivateEndpointSubnet.Id -GroupId $GroupId -DisplayName $FindDisplayName
-    if ($Endpoint) {
-        Write-Output $FoundMessage
+    $script:NmePendingEndpointComponents += [pscustomobject]@{
+        TargetResourceId               = $TargetResourceId
+        GroupId                        = $GroupId
+        FindDisplayName                = $FindDisplayName
+        FailureComponentName           = $FindDisplayName
+        PrivateEndpointName            = $PrivateEndpointName
+        ServiceConnectionName          = $ServiceConnectionName
+        FoundMessage                   = $FoundMessage
+        ConfiguringMessage             = $ConfiguringMessage
+        CreatedMessage                 = "Created $FindDisplayName private endpoint '$PrivateEndpointName'"
+        CreateFailureMessage           = "Could not create the private endpoint for $FindDisplayName`: {0} The remaining components will still be attempted, and this run will stop before making anything private - see the summary at the end of this region."
+        DnsZoneName                    = $DnsZoneName
+        DnsZone                        = $DnsZone
+        DnsZoneGroupName               = $DnsZoneGroupName
+        FoundDnsZoneGroupMessage       = $FoundDnsZoneGroupMessage
+        ConfiguringDnsZoneGroupMessage = $ConfiguringDnsZoneGroupMessage
+        CreatedDnsZoneGroupMessage     = "Created $FindDisplayName DNS zone group '$DnsZoneGroupName'"
+        SkipDnsZoneGroupMessage        = $SkipDnsZoneGroupMessage
+        DnsFailureMessage              = "Could not create the DNS zone group for $FindDisplayName`: {0} The private endpoint itself was created, but $FindDisplayName will not resolve to it until this is fixed. The remaining components will still be attempted, and this run will stop before making anything private."
+        DriftZoneResourceId            = $null
+        DriftWarningMessage            = $null
+        Endpoint                       = $null
     }
-    else {
-        Write-Output $ConfiguringMessage
-        $EndpointStart = Get-Date
-        try {
-            Assert-NmePrivateEndpointNameAvailable -Name $PrivateEndpointName
-            if ($GroupId -eq 'sites') {
-                Set-NmeAppServiceExplicitPublicAccess -ResourceId $TargetResourceId
-            }
-            $ServiceConnection = New-AzPrivateLinkServiceConnection -Name $ServiceConnectionName -PrivateLinkServiceId $TargetResourceId -GroupId $GroupId -ErrorAction Stop
-            $Endpoint = New-AzPrivateEndpoint -Name $PrivateEndpointName -ResourceGroupName $NmeRg -Location $VnetLocation -Subnet $PrivateEndpointSubnet -PrivateLinkServiceConnection $ServiceConnection -ErrorAction Stop
-        }
-        catch {
-            Write-Warning "Could not create the private endpoint for $FindDisplayName`: $($_.Exception.Message) The remaining components will still be attempted, and this run will stop before making anything private - see the summary at the end of this region."
-            $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = $FindDisplayName; Reason = $_.Exception.Message }
-            return
-        }
-        Write-Output "Created $FindDisplayName private endpoint '$PrivateEndpointName'"
-        Write-Verbose "Created $FindDisplayName private endpoint in $([math]::Round(((Get-Date) - $EndpointStart).TotalSeconds, 1)) seconds"
-    }
+    return
+}
 
-    if (-not $SkipDNS) {
-        # Use the resolved endpoint's own .ResourceGroupName (P1-23) and .Name (P1-2) for BOTH the Get and
-        # the New below - never $NmeRg and never a name-convention variable. A pre-existing endpoint found
-        # by PrivateLinkServiceId is not necessarily in $NmeRg or named per this script's convention (that
-        # is the whole point of supporting one under a different name in another resource group), so a
-        # zone-group call scoped to the wrong resource group or name fails with a plain "resource not
-        # found" that gives no hint the endpoint was simply looked for in the wrong place. Do not swap
-        # either of these back to a convention variable or to $NmeRg - that is exactly how P1-2/P1-23
-        # happened the first time.
-        $DnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $Endpoint.ResourceGroupName -PrivateEndpointName $Endpoint.Name -ErrorAction SilentlyContinue
-        if ($DnsZoneGroup) {
-            Write-Output $FoundDnsZoneGroupMessage
+function Invoke-NmeEndpointComponentQueue {
+    # Drains $script:NmePendingEndpointComponents, which the two New-Nme*PrivateEndpoint helpers above
+    # fill as the "create private endpoints" region runs. E-5 Phase B, SPEC-E5-Parallelize.md B1:
+    # -AsJob covers one cmdlet call, not a whole unit, and a component's DNS zone group cannot be
+    # created until its endpoint exists - so the region is two fan-out stages over the queue rather
+    # than N independent per-component pipelines.
+    #
+    # The existence checks (Find-NmeExistingPrivateEndpoint, Get-AzPrivateDnsZoneGroup) stay
+    # sequential: they are reads, they are cheap, and keeping them in table order is what lets every
+    # customer-visible message be emitted in table order no matter which job finishes first.
+    #
+    # This function depends on script scope: $ExistingPrivateEndpoints (fetched once, subscription
+    # wide, P2-7), $PrivateEndpointSubnet, $NmeRg, $VnetLocation, $SkipDNS,
+    # $script:NmePrivateEndpointConcurrency and $script:NmeSupportsAsJob.
+    #
+    # Error model, and it is deliberately different from the rest of this file (SPEC B4): a batch in
+    # flight cannot fail fast, so a failed component records itself in
+    # $script:NmeFailedEndpointComponents and the stage carries on. The single Throw lives at the end
+    # of the region, upstream of the connectivity gate and every lockdown, so no partial-lockdown
+    # state is reachable from here.
+    $Components = @($script:NmePendingEndpointComponents)
+    if (-not $Components.Count) { return }
+
+    # ---------- Stage 1: private endpoints ----------
+    $ToCreate = New-Object System.Collections.Generic.List[object]
+    foreach ($Component in $Components) {
+        $Component.Endpoint = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $ExistingPrivateEndpoints `
+            -PrivateLinkServiceId $Component.TargetResourceId -SubnetId $PrivateEndpointSubnet.Id `
+            -GroupId $Component.GroupId -DisplayName $Component.FindDisplayName
+        if ($Component.Endpoint) {
+            Write-Output $Component.FoundMessage
         }
         else {
-            Write-Output $ConfiguringDnsZoneGroupMessage
-            try {
-                $Config = New-AzPrivateDnsZoneConfig -Name $DnsZoneName -PrivateDnsZoneId $DnsZone.ResourceId -ErrorAction Stop
-                $DnsZoneGroup = New-AzPrivateDnsZoneGroup -ResourceGroupName $Endpoint.ResourceGroupName -PrivateEndpointName $Endpoint.Name -Name $DnsZoneGroupName -PrivateDnsZoneConfig $Config -ErrorAction Stop
-            }
-            catch {
-                Write-Warning "Could not create the DNS zone group for $FindDisplayName`: $($_.Exception.Message) The private endpoint itself was created, but $FindDisplayName will not resolve to it until this is fixed. The remaining components will still be attempted, and this run will stop before making anything private."
-                $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = $FindDisplayName; Reason = $_.Exception.Message }
-                return
-            }
-            Write-Output "Created $FindDisplayName DNS zone group '$DnsZoneGroupName'"
+            # The per-component "Configuring ..." line moves to the verbose stream under Phase B. On
+            # the output stream it is replaced by one "Submitting N ..." line below, because with
+            # several creations in flight a sequential "Configuring X" / "Created X" pair no longer
+            # describes what is happening (D4, TEST-PLAN.md §23.5). The string itself is unchanged, so
+            # a -Verbose run still shows exactly what earlier builds showed.
+            Write-Verbose $Component.ConfiguringMessage
+            $ToCreate.Add($Component) | Out-Null
         }
     }
-    else {
-        Write-Output $SkipDnsZoneGroupMessage
+
+    if ($ToCreate.Count) {
+        Write-Output "Submitting $($ToCreate.Count) private endpoint(s) for creation, up to $script:NmePrivateEndpointConcurrency at a time"
+        $StageStart = Get-Date
+        $CreatedCount = 0
+        for ($Offset = 0; $Offset -lt $ToCreate.Count; $Offset += $script:NmePrivateEndpointConcurrency) {
+            $Last = [math]::Min($Offset + $script:NmePrivateEndpointConcurrency, $ToCreate.Count) - 1
+            $Batch = @($ToCreate[$Offset..$Last])
+            $Jobs = New-Object System.Collections.Generic.List[object]
+            $JobNames = New-Object System.Collections.Generic.List[object]
+            $Submitted = New-Object System.Collections.Generic.List[object]
+
+            foreach ($Component in $Batch) {
+                # Everything in this try is a precondition that must still run one component at a
+                # time: Assert-NmePrivateEndpointNameAvailable is a local check, and
+                # Set-NmeAppServiceExplicitPublicAccess is an ARM PATCH against the app itself, which
+                # has nothing to do with the subnet and must not be fanned out.
+                # New-AzPrivateLinkServiceConnection only builds a local object.
+                try {
+                    Assert-NmePrivateEndpointNameAvailable -Name $Component.PrivateEndpointName
+                    if ($Component.GroupId -eq 'sites') {
+                        Set-NmeAppServiceExplicitPublicAccess -ResourceId $Component.TargetResourceId
+                    }
+                    $ServiceConnection = New-AzPrivateLinkServiceConnection -Name $Component.ServiceConnectionName `
+                        -PrivateLinkServiceId $Component.TargetResourceId -GroupId $Component.GroupId -ErrorAction Stop
+                }
+                catch {
+                    Write-Warning ($Component.CreateFailureMessage -f $_.Exception.Message)
+                    $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = $Component.FailureComponentName; Reason = $_.Exception.Message }
+                    continue
+                }
+
+                if ($script:NmeSupportsAsJob) {
+                    try {
+                        $Jobs.Add((New-AzPrivateEndpoint -Name $Component.PrivateEndpointName -ResourceGroupName $NmeRg `
+                            -Location $VnetLocation -Subnet $PrivateEndpointSubnet `
+                            -PrivateLinkServiceConnection $ServiceConnection -ErrorAction Stop -AsJob)) | Out-Null
+                        $JobNames.Add($Component.FindDisplayName) | Out-Null
+                        $Submitted.Add($Component) | Out-Null
+                    }
+                    catch {
+                        # A failure at SUBMIT time (as opposed to inside the job) is a parameter or
+                        # client-side problem, not an ARM conflict - record it and move on.
+                        Write-Warning ($Component.CreateFailureMessage -f $_.Exception.Message)
+                        $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = $Component.FailureComponentName; Reason = $_.Exception.Message }
+                    }
+                }
+                else {
+                    # Sequential fallback for an Az.Network without -AsJob. Same retry policy, because
+                    # ARM still serializes writes on the parent VNet even when this script is not the
+                    # one creating the contention.
+                    try {
+                        $Component.Endpoint = Invoke-NmeWithRetry -DisplayName $Component.FindDisplayName -ScriptBlock {
+                            New-AzPrivateEndpoint -Name $Component.PrivateEndpointName -ResourceGroupName $NmeRg `
+                                -Location $VnetLocation -Subnet $PrivateEndpointSubnet `
+                                -PrivateLinkServiceConnection $ServiceConnection -ErrorAction Stop
+                        }
+                        Write-Output $Component.CreatedMessage
+                        $CreatedCount++
+                    }
+                    catch {
+                        Write-Warning ($Component.CreateFailureMessage -f $_.Exception.Message)
+                        $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = $Component.FailureComponentName; Reason = $_.Exception.Message }
+                    }
+                }
+            }
+
+            if ($Jobs.Count) {
+                $Results = Invoke-NmeJobBatch -Jobs $Jobs.ToArray() -DisplayNames $JobNames.ToArray()
+                for ($Index = 0; $Index -lt $Submitted.Count; $Index++) {
+                    $Component = $Submitted[$Index]
+                    $Result = $Results[$Index]
+                    if ($Result.Error) {
+                        # SPEC B2: a failed job is re-driven SYNCHRONOUSLY, one at a time, after the
+                        # batch. You cannot retry inside a job that has already failed, and a serial
+                        # retry cannot itself create new conflicts.
+                        try {
+                            $Component.Endpoint = Invoke-NmeWithRetry -DisplayName $Component.FindDisplayName -ScriptBlock {
+                                # Check ARM first. A job can report an error for an operation that
+                                # nevertheless landed - a receive-side timeout is the obvious case -
+                                # and blindly re-PUTting an endpoint that already exists is how this
+                                # lab ended up with two permanently wedged endpoints in the first
+                                # place (TEST-PLAN.md §15.3a).
+                                $Already = Get-AzPrivateEndpoint -ResourceGroupName $NmeRg -Name $Component.PrivateEndpointName -ErrorAction SilentlyContinue
+                                if ($Already -and $Already.ProvisioningState -eq 'Succeeded') {
+                                    Write-Verbose "$($Component.FindDisplayName): the background job reported an error but the private endpoint exists and is Succeeded; using it."
+                                    return $Already
+                                }
+                                # Rebuilt from $Component rather than reusing the $ServiceConnection
+                                # variable from the submit loop above: that loop has finished by the
+                                # time this runs, so the variable holds the LAST component's
+                                # connection, not this one's - which would point this endpoint at the
+                                # wrong target resource entirely.
+                                $RetryServiceConnection = New-AzPrivateLinkServiceConnection -Name $Component.ServiceConnectionName `
+                                    -PrivateLinkServiceId $Component.TargetResourceId -GroupId $Component.GroupId -ErrorAction Stop
+                                New-AzPrivateEndpoint -Name $Component.PrivateEndpointName -ResourceGroupName $NmeRg `
+                                    -Location $VnetLocation -Subnet $PrivateEndpointSubnet `
+                                    -PrivateLinkServiceConnection $RetryServiceConnection -ErrorAction Stop
+                            }
+                        }
+                        catch {
+                            Write-Warning ($Component.CreateFailureMessage -f $_.Exception.Message)
+                            $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = $Component.FailureComponentName; Reason = $_.Exception.Message }
+                            continue
+                        }
+                    }
+                    else {
+                        $Component.Endpoint = $Result.Output
+                    }
+                    if ($Component.Endpoint) {
+                        Write-Output $Component.CreatedMessage
+                        $CreatedCount++
+                    }
+                }
+            }
+        }
+        Write-Output "Created $CreatedCount private endpoint(s) in $([math]::Round(((Get-Date) - $StageStart).TotalSeconds, 1)) seconds"
+    }
+
+    # ---------- Stage 2: DNS zone groups ----------
+    if ($SkipDNS) {
+        foreach ($Component in $Components) {
+            if ($Component.Endpoint) { Write-Output $Component.SkipDnsZoneGroupMessage }
+        }
+        Assert-NmeNoLeakedJobs
+        return
+    }
+
+    $ZoneGroupsToCreate = New-Object System.Collections.Generic.List[object]
+    foreach ($Component in $Components) {
+        if (-not $Component.Endpoint) { continue }
+        # -ResourceGroupName is the ENDPOINT's own resource group (P1-23) and -PrivateEndpointName its
+        # own .Name (P1-2), for both the Get here and the New below - never $NmeRg and never a
+        # name-convention variable. A pre-existing endpoint found by PrivateLinkServiceId is not
+        # necessarily in $NmeRg or named per this script's convention (that is the whole point of
+        # supporting one under a different name in another resource group), so a zone-group call
+        # scoped to the wrong resource group or name fails with a plain "resource not found" that
+        # gives no hint the endpoint was simply looked for in the wrong place. Do not swap either of
+        # these back - that is exactly how P1-2/P1-23 happened the first time. Found live 2026-08-12.
+        $DnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $Component.Endpoint.ResourceGroupName `
+            -PrivateEndpointName $Component.Endpoint.Name -ErrorAction SilentlyContinue
+        if ($DnsZoneGroup) {
+            Write-Output $Component.FoundDnsZoneGroupMessage
+            if ($Component.DriftZoneResourceId -and
+                $DnsZoneGroup.PrivateDnsZoneConfigs.PrivateDnsZoneId -notcontains $Component.DriftZoneResourceId) {
+                Write-Warning ($Component.DriftWarningMessage -f $DnsZoneGroup.Name, $Component.Endpoint.Name)
+            }
+        }
+        else {
+            Write-Verbose $Component.ConfiguringDnsZoneGroupMessage
+            $ZoneGroupsToCreate.Add($Component) | Out-Null
+        }
+    }
+
+    if (-not $ZoneGroupsToCreate.Count) {
+        Assert-NmeNoLeakedJobs
+        return
+    }
+
+    Write-Output "Submitting $($ZoneGroupsToCreate.Count) DNS zone group(s) for creation, up to $script:NmePrivateEndpointConcurrency at a time"
+    $StageStart = Get-Date
+    $CreatedCount = 0
+    for ($Offset = 0; $Offset -lt $ZoneGroupsToCreate.Count; $Offset += $script:NmePrivateEndpointConcurrency) {
+        $Last = [math]::Min($Offset + $script:NmePrivateEndpointConcurrency, $ZoneGroupsToCreate.Count) - 1
+        $Batch = @($ZoneGroupsToCreate[$Offset..$Last])
+        $Jobs = New-Object System.Collections.Generic.List[object]
+        $JobNames = New-Object System.Collections.Generic.List[object]
+        $Submitted = New-Object System.Collections.Generic.List[object]
+
+        foreach ($Component in $Batch) {
+            try {
+                $Config = New-AzPrivateDnsZoneConfig -Name $Component.DnsZoneName -PrivateDnsZoneId $Component.DnsZone.ResourceId -ErrorAction Stop
+            }
+            catch {
+                Write-Warning ($Component.DnsFailureMessage -f $_.Exception.Message)
+                $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = $Component.FailureComponentName; Reason = $_.Exception.Message }
+                continue
+            }
+            if ($script:NmeSupportsAsJob) {
+                try {
+                    $Jobs.Add((New-AzPrivateDnsZoneGroup -ResourceGroupName $Component.Endpoint.ResourceGroupName `
+                        -PrivateEndpointName $Component.Endpoint.Name -Name $Component.DnsZoneGroupName `
+                        -PrivateDnsZoneConfig $Config -ErrorAction Stop -AsJob)) | Out-Null
+                    $JobNames.Add($Component.FindDisplayName) | Out-Null
+                    $Submitted.Add($Component) | Out-Null
+                }
+                catch {
+                    Write-Warning ($Component.DnsFailureMessage -f $_.Exception.Message)
+                    $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = $Component.FailureComponentName; Reason = $_.Exception.Message }
+                }
+            }
+            else {
+                try {
+                    Invoke-NmeWithRetry -DisplayName "$($Component.FindDisplayName) DNS zone group" -ScriptBlock {
+                        New-AzPrivateDnsZoneGroup -ResourceGroupName $Component.Endpoint.ResourceGroupName `
+                            -PrivateEndpointName $Component.Endpoint.Name -Name $Component.DnsZoneGroupName `
+                            -PrivateDnsZoneConfig $Config -ErrorAction Stop
+                    } | Out-Null
+                    Write-Output $Component.CreatedDnsZoneGroupMessage
+                    $CreatedCount++
+                }
+                catch {
+                    Write-Warning ($Component.DnsFailureMessage -f $_.Exception.Message)
+                    $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = $Component.FailureComponentName; Reason = $_.Exception.Message }
+                }
+            }
+        }
+
+        if ($Jobs.Count) {
+            $Results = Invoke-NmeJobBatch -Jobs $Jobs.ToArray() -DisplayNames $JobNames.ToArray()
+            for ($Index = 0; $Index -lt $Submitted.Count; $Index++) {
+                $Component = $Submitted[$Index]
+                $Result = $Results[$Index]
+                if ($Result.Error) {
+                    try {
+                        Invoke-NmeWithRetry -DisplayName "$($Component.FindDisplayName) DNS zone group" -ScriptBlock {
+                            $Already = Get-AzPrivateDnsZoneGroup -ResourceGroupName $Component.Endpoint.ResourceGroupName `
+                                -PrivateEndpointName $Component.Endpoint.Name -ErrorAction SilentlyContinue
+                            if ($Already) {
+                                Write-Verbose "$($Component.FindDisplayName): the background job reported an error but the DNS zone group exists; using it."
+                                return $Already
+                            }
+                            New-AzPrivateDnsZoneGroup -ResourceGroupName $Component.Endpoint.ResourceGroupName `
+                                -PrivateEndpointName $Component.Endpoint.Name -Name $Component.DnsZoneGroupName `
+                                -PrivateDnsZoneConfig (New-AzPrivateDnsZoneConfig -Name $Component.DnsZoneName -PrivateDnsZoneId $Component.DnsZone.ResourceId -ErrorAction Stop) `
+                                -ErrorAction Stop
+                        } | Out-Null
+                    }
+                    catch {
+                        Write-Warning ($Component.DnsFailureMessage -f $_.Exception.Message)
+                        $script:NmeFailedEndpointComponents += [pscustomobject]@{ Component = $Component.FailureComponentName; Reason = $_.Exception.Message }
+                        continue
+                    }
+                }
+                Write-Output $Component.CreatedDnsZoneGroupMessage
+                $CreatedCount++
+            }
+        }
+    }
+    Write-Output "Created $CreatedCount DNS zone group(s) in $([math]::Round(((Get-Date) - $StageStart).TotalSeconds, 1)) seconds"
+
+    Assert-NmeNoLeakedJobs
+}
+
+function Assert-NmeNoLeakedJobs {
+    # Invoke-NmeJobBatch removes every job it waited on in a finally block, so this should never find
+    # anything. It exists because a leaked background job in an Azure Automation sandbox is invisible
+    # until it starts competing with the runbook for the same 3-hour fair-share budget, and the
+    # spike (TEST-PLAN.md section 24.3) established that Get-Job is empty in this sandbox at the start
+    # of a run - so anything here is ours and is a bug. Verbose, not a warning: it is a developer
+    # signal, and cleaning up is the right customer-visible behavior either way.
+    $LeakedJobs = @(Get-Job)
+    if ($LeakedJobs.Count) {
+        Write-Verbose "Invoke-NmeEndpointComponentQueue left $($LeakedJobs.Count) background job(s) behind; removing them. This is a bug in the batch helpers - jobs should be removed by Invoke-NmeJobBatch."
+        $LeakedJobs | Remove-Job -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -2518,8 +3074,29 @@ $StorageSubresourceDnsZones = @{
 # continue to the make-private region with an incomplete endpoint set.
 $script:NmeFailedEndpointComponents = @()
 
+# E-5 Phase B. The component descriptors New-NmeComponentPrivateEndpoint and
+# New-NmeStoragePrivateEndpoint enqueue instead of acting on directly, drained by
+# Invoke-NmeEndpointComponentQueue at the end of the region below. The call sites keep their original
+# shape and their original message strings; what changed is that the work is now done in two batched
+# stages (endpoints, then DNS zone groups) rather than one component at a time. Table order is the
+# order the call sites run in, and every customer-visible message is still emitted in that order
+# regardless of which job finishes first.
+$script:NmePendingEndpointComponents = @()
+
 #region create private endpoints
 $RegionStart = Get-Date
+# Whether this Automation account's Az.Network is new enough to create endpoints concurrently.
+# Measured at runtime rather than assumed: the sandbox's module version is whatever the customer's
+# automation account happens to have, and it is older than a current workstation's (7.3.0 against
+# 7.26.0 when this was written). Resolved here rather than at the top of the file because
+# Get-Command would force an Az.Network auto-load before the module preflight above has had its say.
+# When false, every create below runs one at a time, exactly as it did before E-5 Phase B, and one
+# line in the log says why.
+$script:NmeSupportsAsJob = (Get-Command New-AzPrivateEndpoint).Parameters.ContainsKey('AsJob') -and
+                           (Get-Command New-AzPrivateDnsZoneGroup).Parameters.ContainsKey('AsJob')
+if (-not $script:NmeSupportsAsJob) {
+    Write-Output "This automation account's Az.Network module does not support background jobs (-AsJob), so private endpoints will be created one at a time. This is slower but otherwise identical - update Az.Network in the scripted actions automation account to speed it up."
+}
 # $VNet is already current here - nothing between its creation/resolution above and this point
 # modifies it - so it is not re-fetched. Get-AzVirtualNetworkSubnetConfig reads the in-memory object
 # and costs no API call.
@@ -2727,6 +3304,10 @@ if ($NmeRtiKeyVaultName) {
         -FoundDnsZoneGroupMessage "Found RTI Key Vault DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring RTI Key Vault DNS zone group" `
         -SkipDnsZoneGroupMessage "Skipping RTI Key Vault DNS zone group configuration (SkipDNS enabled)"
 }
+
+# Everything above only ENQUEUED work (E-5 Phase B). This is where it actually happens, in two
+# batched stages over the queue in table order.
+Invoke-NmeEndpointComponentQueue
 
 Write-Output "Private endpoints region completed in $([math]::Round(((Get-Date) - $RegionStart).TotalSeconds, 1)) seconds"
 
