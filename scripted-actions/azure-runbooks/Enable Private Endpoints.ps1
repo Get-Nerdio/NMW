@@ -2647,6 +2647,22 @@ foreach ($PeerVnetId in $VnetIds) {
     }
 }
 
+# Every CssaStorageAccount mode except Public needs the scripted actions storage account by name, in
+# three places: the private endpoint in the endpoint region, and the Private and Restricted branches
+# of the make-private region. Set-NmeVars resolves the name by tag, then by name pattern, then by the
+# NMW_RESOURCE fallback tag, and deliberately leaves it $null when that does not land on exactly one
+# account - so all three call sites can receive $null.
+#
+# Checked once, here, rather than at each of those sites. Get-AzStorageAccount's -Name is a mandatory
+# [string], so $null fails parameter binding before the cmdlet body runs; that is a binding
+# exception, which -ErrorAction SilentlyContinue does not suppress, and it surfaces as an
+# unrecognisable PowerShell error naming a parameter rather than a missing tag. Doing it here also
+# means the run fails before it has created anything, instead of twenty minutes of private-endpoint
+# creation later in the two make-private branches, which are the furthest downstream of the three.
+if ($CssaStorageAccount -ne 'Public' -and -not $NmeScriptedActionsStorageAccountName) {
+    Throw "No scripted actions storage account found in resource group $NmeRg. Please add the tag '$NmeResourceTagName' with value 'CUSTOM_SCRIPTS_STORAGE_ACCOUNT' to the scripted actions storage account used by Nerdio Manager and rerun this script."
+}
+
 function Get-NmePeerVnetLinkName {
     # Private DNS zone link names must be stable across runs: naming them by an index that restarts
     # at 0 each run meant a peer VNet added later reused an existing name that pointed at a different
@@ -3177,11 +3193,9 @@ if ($NmeScriptedActionsAccountName) {
     if ($CssaStorageAccount -ne 'Public') {
         # Both Private and Restricted need the private endpoint - only Public skips it.
         # Get scripted actions storage account (resolved in Set-NmeVars via tag, then name pattern, then the NMW_RESOURCE fallback tag)
-        # Guard before the Get: -Name is a Mandatory [string], so calling it with $null throws a parameter
-        # binding error and the friendly message below would never be reached.
-        if (-not $NmeScriptedActionsStorageAccountName) {
-            throw "No scripted actions storage account found in resource group $NmeRg. Please add the tag '$NmeResourceTagName' with value 'CUSTOM_SCRIPTS_STORAGE_ACCOUNT' to the scripted actions storage account used by Nerdio Manager and rerun this script."
-        }
+        # The $null case is already handled by the CssaStorageAccount -ne 'Public' check near the
+        # PeerVnetIds validation above, which covers this site and the two make-private branches
+        # together; it used to be guarded here, which left those two uncovered.
         $ScriptedActionsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeScriptedActionsStorageAccountName -ErrorAction SilentlyContinue
         # throw error if no scripted actions storage account found
         if (-not $ScriptedActionsStorageAccount) {
