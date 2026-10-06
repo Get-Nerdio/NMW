@@ -701,6 +701,14 @@ $NmeDeferralMarker = '[deferred run] '
 # itself a replay candidate, wrongly treating phase 2's real work as a mere echo of something else.
 $NmePhaseEchoMarker = '[phase 1] '
 
+# Leads the Throw in Invoke-NmeKuduCommand for the command-too-long guard (see that function, below)
+# so Get-NmeKuduFailureBucket (TEST-PLAN.md §22) can recognize that one specific, deterministic
+# failure cause by matching this marker instead of parsing the rest of the message, which is free to
+# change. Declared up here with the other markers, not inside Invoke-NmeKuduCommand itself, purely so
+# a reader scanning this file's markers finds all of them in one place - it is otherwise unrelated to
+# the job-replay markers above.
+$script:NmeKuduCommandTooLongMarker = 'Invoke-NmeKuduCommand: the command to run on the app service worker is'
+
 # Writes one prior job's output onto this job's own streams, record by record, each line prefixed
 # with $Prefix, preserving the original record's stream (Error/Warning/Verbose/Debug/Output) so NME
 # surfaces it the same way it would have surfaced live. Progress records are skipped - they were
@@ -1476,6 +1484,11 @@ function Invoke-NmeKuduCommand {
     # resolve and reach, rather than what Azure Resource Manager reports about the private endpoints
     # and DNS zones it created - the two can disagree (DNS not yet propagated, a blocking NSG, bad
     # routing) and ARM has no visibility into that disagreement.
+    #
+    # The command-too-long Throw below leads with $script:NmeKuduCommandTooLongMarker (defined near
+    # $NmeReplayMarker/$NmeDeferralMarker above) so Get-NmeKuduFailureBucket (TEST-PLAN.md §22) can
+    # tell that specific, deterministic cause apart from every other way this function can fail, by
+    # matching the marker rather than parsing free text.
     param(
         [Parameter(Mandatory=$true)][string]$ScmHost,
         [Parameter(Mandatory=$true)][string]$ScriptText
@@ -1513,7 +1526,7 @@ function Invoke-NmeKuduCommand {
     # NME deployment can have longer FQDNs than this lab's, so fail clearly here too rather than risk
     # the same silent-looking failure recurring for a customer with long resource names.
     if ($RemoteCommand.Length -gt 8000) {
-        Throw "Invoke-NmeKuduCommand: the command to run on the app service worker is $($RemoteCommand.Length) characters, over the safe threshold for cmd.exe's command-line length limit (Kudu's /api/command runs commands through cmd.exe, which caps total command-line length at roughly 8191 characters). Sending it anyway would likely fail with Kudu returning ExitCode 1 and Error 'The command line is too long.', which the caller cannot distinguish from a real probe failure. This is almost always caused by long resource FQDNs multiplying across several targets; if this is the connectivity probe, consider it a sign this deployment's resource names are unusually long and would need protocol changes (e.g. writing the remote script to a temp file via Kudu's VFS API instead of -EncodedCommand) to support reliably."
+        Throw "$($script:NmeKuduCommandTooLongMarker) $($RemoteCommand.Length) characters, over the safe threshold for cmd.exe's command-line length limit (Kudu's /api/command runs commands through cmd.exe, which caps total command-line length at roughly 8191 characters). Sending it anyway would likely fail with Kudu returning ExitCode 1 and Error 'The command line is too long.', which the caller cannot distinguish from a real probe failure. This is almost always caused by long resource FQDNs multiplying across several targets; if this is the connectivity probe, consider it a sign this deployment's resource names are unusually long and would need protocol changes (e.g. writing the remote script to a temp file via Kudu's VFS API instead of -EncodedCommand) to support reliably."
     }
 
     $Body = @{ command = $RemoteCommand; dir = 'site\wwwroot' } | ConvertTo-Json
@@ -1702,6 +1715,106 @@ foreach ($fqdn in $fqdns) {
     return $Results
 }
 
+function Get-NmeScmPreflightBlocker {
+    # TEST-PLAN.md §22.3 "Bucket 2" / §22.5 bullet 1: two causes make the Kudu/SCM probe below
+    # permanently unreachable for a given app service, detectable up front from properties already on
+    # the $NmeWebApp object (Get-AzWebApp's PSSite) - no extra API call needed, and no point spending a
+    # Kudu round trip (and its 180-second timeout on a bad day) discovering something already knowable.
+    # Returns $null when neither applies (the normal case - attempt the probe), or a human-readable
+    # reason to use in the soft warning instead of attempting it.
+    param(
+        [Parameter(Mandatory=$true)]$WebApp
+    )
+    if ($WebApp.HostingEnvironmentProfile) {
+        return "this app service runs in an App Service Environment (ASE). An ILB ASE's SCM/Kudu endpoint is reachable only from inside the ASE's own virtual network, never from the Azure Automation sandbox - this will be true on every future run against this deployment, not just this one."
+    }
+    if ($WebApp.Reserved -or $WebApp.Kind -like '*linux*') {
+        return "this app service runs on Linux. The DNS/TCP diagnostic commands this probe depends on (nameresolver, tcpping, Windows PowerShell) are not available on a Linux worker - this will be true on every future run against this deployment, not just this one."
+    }
+    return $null
+}
+
+function Get-NmeKuduFailureBucket {
+    # TEST-PLAN.md §22.3/§22.4: classifies an exception caught around Test-NmeAppServiceConnectivity
+    # (in practice, from Invoke-NmeKuduCommand inside it) into one of three buckets, so the gate below
+    # can treat "the Automation sandbox could not even reach Kudu" as something other than one
+    # undifferentiated soft-fail:
+    #   Bucket 1 - benign: this app's public network access (and therefore its own SCM endpoint) was
+    #              already disabled by an earlier run of this script. DNS was already proven by the run
+    #              that did that locking down - nothing to verify here.
+    #   Bucket 2 - deterministic: will fail on every run against this deployment, not just this one
+    #              (the command-too-long guard, or customer-configured SCM access restrictions this
+    #              script does not and will not touch). Soft-fails so the script does not become
+    #              permanently un-runnable for a customer in this state.
+    #   Bucket 3 - transient or unclassified: a blip (token failure, SCM still warming up, a 503, a
+    #              timeout, an unexpected status) that a retry is expected to clear. Per §22.4 decision
+    #              4, an unclassified failure is deliberately bucketed here too rather than assumed
+    #              benign - a Throw is one click (Restart Job) away from recovery, where silently
+    #              proceeding on unverified DNS is not.
+    # Classification is deliberately independent of $SkipDNS - whether the probe could reach Kudu has
+    # nothing to do with who manages DNS; $SkipDNS only changes how the resulting warning is worded
+    # (see Write-NmeConnectivityUnverifiedWarning).
+    param(
+        [Parameter(Mandatory=$true)]$Exception,
+        [Parameter(Mandatory=$true)][string]$WebAppResourceId
+    )
+    if (([string]$Exception.Message).StartsWith($script:NmeKuduCommandTooLongMarker)) {
+        return [pscustomobject]@{
+            Bucket = 2
+            Reason = "the connectivity probe's command line is too long for this deployment's resource names to fit Kudu's command-line limit (see the error above). This will recur on every future run against this deployment."
+        }
+    }
+
+    $StatusCode = $null
+    try { $StatusCode = [int]$Exception.Response.StatusCode } catch {}
+
+    if ($StatusCode -in 401, 403) {
+        # Re-check live rather than trust $NmeWebApp, which may be stale relative to this run (and
+        # which an earlier run, not this one, would have been the one to disable public access on).
+        $PublicNetworkAccessDisabled = $false
+        try {
+            $PublicNetworkAccessDisabled = (Get-AzResource -ResourceId $WebAppResourceId -ApiVersion '2023-01-01' -ErrorAction Stop).Properties.publicNetworkAccess -eq 'Disabled'
+        }
+        catch {
+            Write-Verbose "Get-NmeKuduFailureBucket: could not re-check the app service's publicNetworkAccess to distinguish Bucket 1 from Bucket 2 ($($_.Exception.Message)). Assuming Bucket 2 (access restrictions) rather than Bucket 1, since Bucket 1 cannot be confirmed."
+        }
+        if ($PublicNetworkAccessDisabled) {
+            return [pscustomobject]@{
+                Bucket = 1
+                Reason = "this app service's public network access has already been disabled by an earlier run of this script, which also blocks this probe from reaching its own SCM/Kudu endpoint. This is expected, not a new problem: DNS was already verified by the run that performed that lockdown."
+            }
+        }
+        return [pscustomobject]@{
+            Bucket = 2
+            Reason = "the app service's SCM/Kudu endpoint returned an access-denied response (HTTP $StatusCode). This is most commonly customer-configured SCM access restrictions (scmIpSecurityRestrictions, or ScmSiteUseMainSiteRestrictionConfig inheriting the main site's rules) that this script does not and will not modify - if so, this will recur on every future run against this deployment."
+        }
+    }
+
+    return [pscustomobject]@{
+        Bucket = 3
+        Reason = "this does not match a known permanent cause (the app already made private, an App Service Environment, a Linux app service, or SCM access restrictions) and looks transient - a token or Resource Manager blip, the SCM endpoint still warming up, or a brief network failure reaching it."
+    }
+}
+
+function Write-NmeConnectivityUnverifiedWarning {
+    # Shared wording for every "the real connectivity probe could not run, so DNS/reachability is
+    # unverified for this run" case - both the pre-flight skip (Get-NmeScmPreflightBlocker) and a
+    # Bucket 1/2 catch (Get-NmeKuduFailureBucket) below call this, so the two paths can never drift
+    # apart in what they tell the customer. TEST-PLAN.md §22.5 bullets 2 and 5.
+    param(
+        [Parameter(Mandatory=$true)][string]$Reason,
+        [Parameter(Mandatory=$true)][string[]]$DnsServers,
+        [Parameter(Mandatory=$true)][bool]$SkipDNS
+    )
+    $VerificationNote = if ($SkipDNS) {
+        "SkipDNS is enabled, so no other DNS check runs either - DNS resolution for every private endpoint is completely unverified for this run."
+    }
+    else {
+        "The weaker private-DNS-zone-record check below will run instead. That only confirms Azure's private DNS zone holds the expected record - it says nothing about whether the app service worker actually resolves or can reach anything."
+    }
+    Write-Warning "DNS and reachability for this app service's required targets could not be verified from inside the VNet-integrated worker: $Reason This script's verification method queries DNS server(s) [$($DnsServers -join ', ')] (the VNet's own configured DNS) directly from inside that worker; that check could not run this time. $VerificationNote Neither this probe nor the fallback can detect a customer-managed DNS server that does not forward unresolved queries to Azure DNS - if private endpoint resolution is not actually working, verify DNS forwarding (to 168.63.129.16, or your custom resolver's own forwarder configuration) independently before trusting this script's checks."
+}
+
 function Get-NmeConnectivityExpectedIps {
     # CustomDnsConfigs is NOT a reliable source for a private endpoint's actual private IP - live
     # testing (T01, P1-16) found it persistently empty (not just briefly, immediately after creation:
@@ -1713,16 +1826,33 @@ function Get-NmeConnectivityExpectedIps {
     # The one value that is always present and authoritative once the endpoint exists is the private IP
     # on its own network interface's IP configuration - fetched here as the fallback, and used first if
     # CustomDnsConfigs is empty, since empty turned out to be the common case rather than the exception.
+    #
+    # TEST-PLAN.md §22.5a: matches on PrivateLinkServiceId + GroupId only - deliberately NOT scoped to
+    # a subnet, unlike every other caller of Find-NmeExistingPrivateEndpoint (which is why this
+    # function does its own inline filtering below instead of calling that shared function). In a
+    # hub-and-spoke deployment with customer-managed DNS (the SkipDNS=true case), the customer's own
+    # private endpoint for an NME resource can legitimately live in a different VNet/subnet than the
+    # one this script manages, and the customer's DNS correctly resolves to it. Scoping the expected-IP
+    # list to this script's own subnet - correct for Find-NmeExistingPrivateEndpoint's create/
+    # idempotency callers, where a same-name endpoint in another subnet really is a different resource
+    # - would make the connectivity probe see a resolved IP that is not on its "expected" list for a
+    # perfectly healthy deployment, and the gate would Throw on a correctly configured customer, not a
+    # broken one. The TCP-connect check in Test-NmeAppServiceConnectivity still has to succeed against
+    # whatever IP was resolved, so an endpoint that resolves but is genuinely unreachable (wrong VNet,
+    # no peering/routing) still fails the probe correctly - widening what counts as "expected" here
+    # does not weaken that check. Not reproduced live as of 2026-10-05: this lab has no hub-and-spoke
+    # fixture and no second private endpoint for any NME resource (see TEST-PLAN.md §22.5a).
     param(
         [Parameter(Mandatory=$true)][AllowNull()][AllowEmptyCollection()]$PrivateEndpoints,
         [Parameter(Mandatory=$true)][string]$PrivateLinkServiceId,
-        [Parameter(Mandatory=$true)][string]$SubnetId,
         [Parameter(Mandatory=$true)][string]$GroupId
     )
-    $MatchedEndpoints = Find-NmeExistingPrivateEndpoint -ExistingPrivateEndpoints $PrivateEndpoints -PrivateLinkServiceId $PrivateLinkServiceId `
-        -SubnetId $SubnetId -GroupId $GroupId -DisplayName $PrivateLinkServiceId -All
+    $MatchedEndpoints = @($PrivateEndpoints | Where-Object {
+        $Connections = @($_.PrivateLinkServiceConnections) + @($_.ManualPrivateLinkServiceConnections)
+        @($Connections | Where-Object { $_.PrivateLinkServiceId -eq $PrivateLinkServiceId -and $_.GroupIds -contains $GroupId }).Count -gt 0
+    } | Sort-Object Id)
     $Ips = @()
-    # DNS may return any matching PE when more than one serves this resource in the target subnet.
+    # DNS may return any matching PE when more than one serves this resource.
     foreach ($MatchedEndpoint in $MatchedEndpoints) {
         $DnsIps = @($MatchedEndpoint.CustomDnsConfigs.IpAddresses | Where-Object { $_ })
         if ($DnsIps.Count -gt 0) {
@@ -2818,10 +2948,10 @@ catch {
     $ConnectivityPrivateEndpoints = Get-AzPrivateEndpoint -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
 }
 
-($ConnectivityTargets | Where-Object { $_.Name -eq 'Nerdio Manager key vault' }).ExpectedIp = Get-NmeConnectivityExpectedIps -PrivateEndpoints $ConnectivityPrivateEndpoints -PrivateLinkServiceId $NmeKeyVault.ResourceId -SubnetId $PrivateEndpointSubnet.Id -GroupId vault
-($ConnectivityTargets | Where-Object { $_.Name -eq 'primary sql server' }).ExpectedIp = Get-NmeConnectivityExpectedIps -PrivateEndpoints $ConnectivityPrivateEndpoints -PrivateLinkServiceId $SqlServer.ResourceId -SubnetId $PrivateEndpointSubnet.Id -GroupId sqlserver
+($ConnectivityTargets | Where-Object { $_.Name -eq 'Nerdio Manager key vault' }).ExpectedIp = Get-NmeConnectivityExpectedIps -PrivateEndpoints $ConnectivityPrivateEndpoints -PrivateLinkServiceId $NmeKeyVault.ResourceId -GroupId vault
+($ConnectivityTargets | Where-Object { $_.Name -eq 'primary sql server' }).ExpectedIp = Get-NmeConnectivityExpectedIps -PrivateEndpoints $ConnectivityPrivateEndpoints -PrivateLinkServiceId $SqlServer.ResourceId -GroupId sqlserver
 if ($NmeDpsStorageAccountName) {
-    ($ConnectivityTargets | Where-Object { $_.Name -eq 'DPS storage account' }).ExpectedIp = Get-NmeConnectivityExpectedIps -PrivateEndpoints $ConnectivityPrivateEndpoints -PrivateLinkServiceId $NmeDpsStorageAccount.Id -SubnetId $PrivateEndpointSubnet.Id -GroupId blob
+    ($ConnectivityTargets | Where-Object { $_.Name -eq 'DPS storage account' }).ExpectedIp = Get-NmeConnectivityExpectedIps -PrivateEndpoints $ConnectivityPrivateEndpoints -PrivateLinkServiceId $NmeDpsStorageAccount.Id -GroupId blob
 }
 
 # SCM host: prefer the app's own EnabledHostNames (works in every cloud without composing anything).
@@ -2845,17 +2975,32 @@ if ($ConnectivityDnsServers.Count -eq 0) {
 }
 Write-Output "Connectivity probe will query DNS server(s): $($ConnectivityDnsServers -join ', ')"
 
-try {
-    $ConnectivityResults = Test-NmeAppServiceConnectivity -ScmHost $ScmHost -DnsServer $ConnectivityDnsServers -Target $ConnectivityTargets
-}
-catch {
-    # "Could not run the probe" is NOT a failure. Disabling public network access on the app service
-    # also blocks its own SCM/Kudu endpoint, so on any deployment where MakeAppServicePrivate was set
-    # by an earlier run, a later re-run of this script cannot reach Kudu at all - treating that as a
-    # failure would make the script permanently un-re-runnable on exactly the deployments that took
-    # its advice. Warn and proceed; only a probe that ran and reported a bad result throws.
-    Write-Warning "Could not run the connectivity probe from inside the app service worker via Kudu ($($_.Exception.Message)). This is expected when the app service's public network access - and therefore its SCM endpoint - has already been disabled by an earlier run of this script. Proceeding without this check."
+# TEST-PLAN.md §22: "could not run the probe at all" is not automatically treated as benign anymore.
+# Bucket 1 (this app's public access was already disabled by an earlier run - DNS was already proven
+# by the run that did that) and Bucket 2 (a deterministic, every-run cause: SCM access restrictions,
+# or the command-too-long guard) still warn and proceed with reachability unverified, exactly as
+# before, because treating either as a hard failure would make the script permanently un-re-runnable
+# for a customer in that state. Bucket 3 (transient or unclassified) now Throws instead of silently
+# proceeding on unverified DNS - a transient Kudu failure is fixed by one click of Restart Job, which
+# is the whole point of making this terminal rather than soft. See Get-NmeScmPreflightBlocker and
+# Get-NmeKuduFailureBucket, above, for exactly what falls in each bucket.
+$ScmPreflightBlocker = Get-NmeScmPreflightBlocker -WebApp $NmeWebApp
+if ($ScmPreflightBlocker) {
+    Write-NmeConnectivityUnverifiedWarning -Reason $ScmPreflightBlocker -DnsServers $ConnectivityDnsServers -SkipDNS $SkipDNS
     $ConnectivityResults = $null
+}
+else {
+    try {
+        $ConnectivityResults = Test-NmeAppServiceConnectivity -ScmHost $ScmHost -DnsServer $ConnectivityDnsServers -Target $ConnectivityTargets
+    }
+    catch {
+        $KuduFailure = Get-NmeKuduFailureBucket -Exception $_.Exception -WebAppResourceId $NmeWebApp.Id
+        if ($KuduFailure.Bucket -eq 3) {
+            Throw "Could not run the connectivity probe from inside the app service worker via Kudu ($($_.Exception.Message)). $($KuduFailure.Reason) No public network access has been disabled by this run - the script stopped here before the make-private region. Re-run this script (or use Restart Job) once the underlying issue has cleared; if it recurs every time, this is not actually transient and needs its own investigation."
+        }
+        Write-NmeConnectivityUnverifiedWarning -Reason $KuduFailure.Reason -DnsServers $ConnectivityDnsServers -SkipDNS $SkipDNS
+        $ConnectivityResults = $null
+    }
 }
 
 if ($ConnectivityResults) {
