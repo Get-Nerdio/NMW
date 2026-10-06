@@ -113,26 +113,19 @@ $RequiredModules = @(
 )
 $MissingModules = @($RequiredModules | Where-Object { -not (Get-Module -ListAvailable -Name $_) })
 if ($MissingModules.Count) {
-    # Without Az.PrivateDns in this list, this check passed and the script instead failed later,
-    # inside DNS-zone resolution, with an opaque "term is not recognized" error - and in the
-    # $ExistingDNSZonesRG branch that failure is caught and reported as "Unable to find one or more
-    # of the DNS zones in resource group X", which blames the customer's DNS zones for what is
-    # actually a missing module. This preflight is what turns that into an actionable error instead.
+    # Without Az.PrivateDns listed here, a missing module instead surfaces later as an opaque error
+    # during DNS-zone resolution - and in the $ExistingDNSZonesRG branch, as a message blaming the
+    # customer's DNS zones instead of the real cause. This preflight turns that into an actionable error.
     Throw "This script requires the following PowerShell modules, which are not available in this Automation account: $($MissingModules -join ', '). Add them to the Nerdio Manager scripted actions automation account (Modules -> Browse gallery) and re-run this script."
 }
 
-# Cheap and permanently useful for field diagnosis of exactly this class of question: the Azure
-# Automation sandbox runs PowerShell 5.1 by default, which rules out ForEach-Object -Parallel and
-# Start-ThreadJob for any future concurrency work in this file (see SPEC-E5-Parallelize.md) - this
-# line is what lets that be confirmed from a customer's job log instead of assumed.
+# The Azure Automation sandbox runs PowerShell 5.1 by default, which rules out ForEach-Object
+# -Parallel and Start-ThreadJob for any future concurrency work in this file.
 Write-Output "PowerShell $($PSVersionTable.PSVersion) / $($PSVersionTable.PSEdition)"
 
-# A1 timing instrumentation. $ScriptStart anchors the total elapsed time reported at the very end of
-# the script; each #region below sets its own $RegionStart and reports its own elapsed time the same
-# way. Write-Output, not Write-Verbose - a customer's slow run must be diagnosable from the log they
-# already have, not from a re-run with -Verbose. This is measurement only and changes no other
-# behavior; it exists so a future decision to parallelize part of this file starts from data about
-# which region is actually slow, rather than a guess.
+# $ScriptStart anchors the total elapsed time reported at the end of the script; each #region below
+# sets its own $RegionStart and reports elapsed time the same way. Write-Output, not Write-Verbose -
+# a customer's slow run must be diagnosable from the log they already have, not a re-run with -Verbose.
 $ScriptStart = Get-Date
 
 # True only when THIS execution newly enables VNet integration on the Nerdio Manager app service -
@@ -141,8 +134,7 @@ $ScriptStart = Get-Date
 # Insights / RTI branches further down that same region: the connectivity gate this flag defers (see
 # "private DNS and network preflight checks" below) probes from inside the NME app service worker
 # specifically, and NME's resubmission-after-restart behavior - the mechanism the deferral relies on -
-# is triggered by a restart of the NME app service, not the others. Initialized here, next to
-# $ScriptStart, so the flag's scope and default are visible from the top of the file.
+# is triggered by a restart of the NME app service, not the others.
 $script:NmeVnetIntegrationJustEnabled = $false
 
 # True once any branch in the "make resources private" region below - or the NME app service
@@ -151,11 +143,11 @@ $script:NmeVnetIntegrationJustEnabled = $false
 # action: this script no longer restarts the app service at all (see the end of the file).
 $script:NmeMakePrivateWroteSomething = $false
 
-# E-5 Phase B. How many private endpoint / DNS zone group creations this script keeps in flight at
-# once. A constant, deliberately not a Nerdio Manager parameter: the limit here is ARM's own
-# serialization of writes against the parent virtual network, not client-side latency, so a
-# customer-facing knob would invite tuning against a bottleneck nobody on either side can observe.
-# Raise it only on measured evidence that conflicts stay rare (SPEC-E5-Parallelize.md Phase B, D3).
+# How many private endpoint / DNS zone group creations this script keeps in flight at once. A
+# constant, deliberately not a Nerdio Manager parameter: the limit here is ARM's own serialization of
+# writes against the parent virtual network, not client-side latency, so a customer-facing knob would
+# invite tuning against a bottleneck nobody on either side can observe. Raise it only on measured
+# evidence that conflicts stay rare.
 $script:NmePrivateEndpointConcurrency = 4
 
 # Base delay in milliseconds for Invoke-NmeWithRetry's exponential backoff (2s, 4s, 8s, 16s plus
@@ -216,10 +208,8 @@ $SkipDNS               = ConvertTo-NmeBoolean    -Value $SkipDNS               -
 # value fails to normalize to falsy. Trim() on $null throws, hence the IsNullOrWhiteSpace guard.
 $PeerVnetIds           = if ([string]::IsNullOrWhiteSpace($PeerVnetIds)) { '' } else { ([string]$PeerVnetIds).Trim() }
 
-# Reject parameter combinations where one parameter silently discards another, before anything is
-# created. Both of these were previously accepted and then quietly ignored further down, which looks
-# like the script honored a setting it actually dropped - the worst kind of failure here, because the
-# run reports success while the DNS configuration is not what was asked for.
+# Reject parameter combinations where one parameter would silently discard another, before anything is
+# created: the run would otherwise report success while the DNS configuration is not what was asked for.
 if ($SkipDNS -and $ExistingDNSZonesRG) {
     Throw "SkipDNS is true and ExistingDNSZonesRG is set to '$ExistingDNSZonesRG', but these are contradictory: SkipDNS skips every DNS operation, including linking existing zones, so ExistingDNSZonesRG would be ignored entirely. Set SkipDNS to false to use the existing zones in '$ExistingDNSZonesRG', or clear ExistingDNSZonesRG to confirm you are managing DNS yourself."
 }
@@ -227,7 +217,6 @@ if ($ExistingDNSZonesSubId -and -not $ExistingDNSZonesRG) {
     Throw "ExistingDNSZonesSubId is set to '$ExistingDNSZonesSubId' but ExistingDNSZonesRG is empty. The subscription id is only used to locate the resource group holding your existing private DNS zones, so on its own it would be ignored and this script would create new DNS zones in Nerdio Manager's own resource group instead. Set ExistingDNSZonesRG to the resource group holding the zones, or clear ExistingDNSZonesSubId."
 }
 
-# Set variables
 function Set-NmeVars {
     param(
         [Parameter(Mandatory=$true)]
@@ -237,14 +226,12 @@ function Set-NmeVars {
     Write-Verbose "Getting Nerdio Manager key vault"
     $script:NmeKeyVault = Get-AzKeyVault -VaultName $keyvaultName
     $script:NmeRg = $NmeKeyVault.ResourceGroupName
-    # NMW_RESOURCE is NOT part of NME's own deployment tagging scheme - it's a convention specific to this
-    # Enable Private Endpoints script, used only as a last-resort fallback to disambiguate a resource that the
-    # tag- and name-based checks below couldn't reliably identify. When none of those checks find a resource,
-    # this script tells the user to manually add this tag (with the expected value) to the correct resource so
-    # that the *next* run can find it here.
-    # Script-scoped: the throw in the main body's scripted-actions storage account lookup (private-endpoints
-    # region, ~line 2176) interpolates this into a customer-facing recovery instruction, and a function-local
-    # variable would already be out of scope there, leaving the message reading "add the tag ''".
+    # NMW_RESOURCE is NOT part of NME's own deployment tagging scheme - it's a last-resort fallback
+    # convention specific to this script, used only when the tag- and name-based checks below can't
+    # identify a resource; this script then tells the user to manually tag it so the next run finds it.
+    # Must stay script-scoped: the throw in the scripted-actions storage account lookup further down
+    # interpolates this into a customer-facing recovery instruction, and a function-local variable would
+    # already be out of scope there, leaving the message reading "add the tag ''".
     $script:NmeResourceTagName = "NMW_RESOURCE"
     $keyvaultTags = $NmeKeyVault.Tags
     # $key becomes the name of this deployment's "_OBJECT_TYPE" tag (e.g. "NMW_OBJECT_TYPE"), found by looking
@@ -268,27 +255,22 @@ function Set-NmeVars {
         $key = 'NMW_OBJECT_TYPE'
     }
     Write-Verbose "Getting Nerdio Manager sql server"
-    # First check to see if there's a sql server with tag "$Prefix`_RESOURCE" and value "PRIMARY_SQL_SERVER"
     $SqlServer = Get-AzSqlServer -ResourceGroupName $nmerg | Where-Object {$_.tags[$NmeResourceTagName] -eq 'PRIMARY_SQL_SERVER'}
 
-    # if we didn't find a sql server, fall back to previous method of finding the sql server
     if (!$SqlServer) {
         # $key always has a value by this point (the derivation above falls back to 'NMW_OBJECT_TYPE'),
-        # so these if ($key) guards are always true. The else branches they used to have were dead, and
-        # three of them ran an unfiltered Get over the whole resource group and bound an arbitrary
-        # resource as "the RTI resource" - do not re-add them.
+        # so these if ($key) guards are always true. Their old else branches ran an unfiltered Get over
+        # the whole resource group and bound an arbitrary resource as "the RTI resource" - do not re-add them.
         if ($key){
             $SqlServer = Get-AzSqlServer -ResourceGroupName $nmerg | Where-Object ServerName -NotMatch '-secondary' | Where-Object {$_.tags[$key] -ne 'INTUNE_INSIGHTS_DEPLOYMENT_RESOURCE' -and $_.tags[$key] -ne 'EIDO_DEPLOYMENT_RESOURCE' -and $_.tags[$key] -ne 'REAL_TIME_INSIGHTS_DEPLOYMENT_RESOURCE' -and $_.tags[$key] -ne'NERDIO_COPILOT_DEPLOYMENT_RESOURCE'}
         }
     }
-    # Validate and assign for both the tag-based and fallback lookups. This assignment used to live
-    # inside the fallback block, which left $NmeSqlServerName null whenever the PRIMARY_SQL_SERVER
-    # tag was found.
+    # Keep this assignment outside the fallback block above - moving it inside leaves $NmeSqlServerName
+    # null whenever the PRIMARY_SQL_SERVER tag lookup succeeds.
     if (@($SqlServer).Count -ne 1) {
         Throw "Unable to find NME sql server. Please add the tag '$NmeResourceTagName' with value 'PRIMARY_SQL_SERVER' to the primary sql server used by Nerdio Manager and rerun this script."
     }
     $script:NmeSqlServerName = @($SqlServer)[0].ServerName
-    # look for secondary sql server with tag "$NmeResourceTagName" and value "SECONDARY_SQL_SERVER"
     $SqlSecondary = Get-AzSqlServer -ResourceGroupName $nmerg | Where-Object {$_.tags[$NmeResourceTagName] -eq 'SECONDARY_SQL_SERVER'}
     if (!($SqlSecondary)){ $SqlSecondary = Get-AzSqlServer -ResourceGroupName $nmerg | Where-Object ServerName -Match '-secondary' }
     if ($SqlSecondary) {
@@ -309,14 +291,11 @@ function Set-NmeVars {
             write-verbose "Getting CCL Storage Account"
             $script:NmeCclStorageAccountName = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'CC_DEPLOYMENT_RESOURCE'} | Select-Object -ExpandProperty StorageAccountName
         }
-        # get intune insights web app. tag value is INTUNE_INSIGHTS_DEPLOYMENT_RESOURCE
         $iiwebapp = Get-AzWebApp -ResourceGroupName $NmeRg | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'INTUNE_INSIGHTS_DEPLOYMENT_RESOURCE'}
-        # make sure there's only one web app in $iiwebapp
         if ($iiwebapp.count -gt 1) {
             Throw "Found more than one Intune Insights web app. Please remove any Intune Insights web apps no longer in use."
         }
         if ($iiwebapp) {
-            # get key vault and sql server with tag INTUNE_INSIGHTS_DEPLOYMENT_RESOURCE
             Write-Verbose "Found Intune Insights web app"
             $script:NmeIiWebAppName = $iiwebapp.Name
             Write-Verbose "Getting Intune Insights Key Vault"
@@ -328,7 +307,6 @@ function Set-NmeVars {
     }
    
     Write-Verbose "Getting DPS Storage Account"
-    # try get dps storage account by tag using nmeresourcetagname
     $script:NmeDpsStorageAccountName = get-azstorageaccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object {$_.tags[$NmeResourceTagName] -eq 'DPS_STORAGE_ACCOUNT'} | Select-Object -ExpandProperty StorageAccountName
     if (!$script:NmeDpsStorageAccountName) {
         Write-Verbose "DPS storage account not found by tag, trying by name pattern"
@@ -366,10 +344,8 @@ function Set-NmeVars {
     }
 
     Write-Verbose "Getting Nerdio Manager web app"
-    # try get nme web app by tag using nmeresourcetagname
     $script:NmeWebApp = Get-AzWebApp -ResourceGroupName $NmeRg | Where-Object {$_.tags[$NmeResourceTagName] -eq 'NERDIO_MANAGER_WEBAPP'}
     if (!$NmeWebApp) {
-        # get web app with tag 
         $script:NmeWebApp = Get-AzWebApp -ResourceGroupName $NmeRg | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'PAAS'}
     }
     if (!$NmeWebApp) {
@@ -393,13 +369,11 @@ function Set-NmeVars {
     $script:NmeRegion = $NmeKeyVault.Location
 
     # Find Real Time Insights components if they exist
-    # Find RTI sql server
     # These lookups are for optional components: a failed tag lookup is expected to fall through to the
     # next discovery method, so the exception is intentionally swallowed here. It is still surfaced on the
     # verbose stream so a throttling error or RBAC denial can be told apart from "not deployed".
     try {$RtiSqlServer = Get-AzSqlServer -ResourceGroupName $nmerg | Where-Object {$_.tags[$NmeResourceTagName] -eq 'REAL_TIME_INSIGHTS_SQL_SERVER'}}
     catch { Write-Verbose "Lookup of Real Time Insights SQL server by tag failed: $($_.Exception.Message)" }
-    # if not found, try previous method
     if (!$RtiSqlServer) {
         if ($key){
             $RtiSqlServer = Get-AzSqlServer -ResourceGroupName $nmerg | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'REAL_TIME_INSIGHTS_DEPLOYMENT_RESOURCE'}
@@ -409,11 +383,9 @@ function Set-NmeVars {
         Write-Verbose "Found Real Time Insights sql server"
         $script:NmeRtiSqlServerName = $RtiSqlServer.ServerName
     }
-    # find RTI web app
     try {
         $RtiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg | Where-Object {$_.tags[$NmeResourceTagName] -eq 'REAL_TIME_INSIGHTS_WEBAPP'}
     } catch { Write-Verbose "Lookup of Real Time Insights web app by tag failed: $($_.Exception.Message)" }
-    # if not found, try previous method
     if (!$RtiWebApp) {
         if ($key){
             $RtiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'REAL_TIME_INSIGHTS_DEPLOYMENT_RESOURCE'}
@@ -423,11 +395,9 @@ function Set-NmeVars {
         Write-Verbose "Found Real Time Insights web app"
         $script:NmeRtiWebAppName = $RtiWebApp.Name
     }
-    # find RTI key vault
     try {
         $RtiKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object {$_.tags[$NmeResourceTagName] -eq 'REAL_TIME_INSIGHTS_KEYVAULT'}
     } catch { Write-Verbose "Lookup of Real Time Insights key vault by tag failed: $($_.Exception.Message)" }
-    # if not found, try previous method
     if (!$RtiKeyVault) {
         if ($key){
             $RtiKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'REAL_TIME_INSIGHTS_DEPLOYMENT_RESOURCE'}
@@ -437,11 +407,9 @@ function Set-NmeVars {
         Write-Verbose "Found Real Time Insights key vault"
         $script:NmeRtiKeyVaultName = $RtiKeyVault.VaultName
     }
-    # find RTI storage account
     try {
         $RtiStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object {$_.tags[$NmeResourceTagName] -eq 'REAL_TIME_INSIGHTS_STORAGE_ACCOUNT'}
     } catch { Write-Verbose "Lookup of Real Time Insights storage account by tag failed: $($_.Exception.Message)" }
-    # if not found, try previous method
     if (!$RtiStorageAccount) {
         if ($key){
             $RtiStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue | Where-Object { $_.Tags.Keys -contains $key } | Where-Object {$_.tags[$key] -eq 'REAL_TIME_INSIGHTS_DEPLOYMENT_RESOURCE'}
@@ -671,23 +639,14 @@ function Get-NmeScriptHash {
 
 # Check if the web app has been restarted recently and if the script has been run before.
 #
-# This USED to be gated on `(Get-AzWebApp ...).LastModifiedTimeUtc` being within the last
-# $MinutesAgo minutes, as a cheap proxy for "this script (or something else) recently restarted the
-# app, so it's worth checking for a duplicate run." That proxy is wrong: a restart is a control-plane
-# *action*, not a resource property write, and does not advance `LastModifiedTimeUtc` at all - only an
-# actual property change (VNet integration, publicNetworkAccess, etc.) does. Once a deployment reaches a stable state
-# where a run has nothing left to configure (every check is a "Found ..." no-op), no property write
-# ever happens again, `LastModifiedTimeUtc` stops advancing, and this gate goes permanently false - silently
-# disabling duplicate-run detection forever, even though the app kept being restarted.
-# Found live (2026-08-13): NME resubmitting this scripted action after each restart (its own
-# documented behavior - see the coordinator's note) produced an unbounded chain of ~7-minute jobs, each
-# one skipping this entire function (the gate was false), redoing the (idempotent, harmless, but not
-# free) checks, and restarting the app again - which triggered the next resubmission, forever, with
-# nothing to ever make the gate true again. Observed and manually broken via `az automation job stop`
-# after 4 real jobs; without intervention this had no natural end. Fixed by removing the gate entirely
-# - the loop below is already bounded to jobs that *ended* within the last $MinutesAgo minutes via
-# $JobCutoffUtc, which is the correct signal (a job actually ran recently), so nothing is lost by no
-# longer requiring the web app's own timestamp to agree.
+# Do not gate this on (Get-AzWebApp ...).LastModifiedTimeUtc: a restart is a control-plane action, not
+# a resource property write, so it never advances that timestamp - only an actual property change
+# (VNet integration, publicNetworkAccess, etc.) does. Once a deployment is stable and every check is a
+# no-op, no property write ever happens again, so that gate would go permanently false and silently
+# disable duplicate-run detection forever, even though NME keeps resubmitting and restarting the app.
+# The loop below is already bounded to jobs that *ended* within the last $MinutesAgo minutes via
+# $JobCutoffUtc, which is the correct signal - nothing is lost by not also requiring the web app's own
+# timestamp to agree.
 # The prefix every replayed line below is emitted with, and the exact string the replay-detection
 # in the loop matches on. Deliberately ONE variable rather than the literal repeated in both places:
 # emitter and detector must never drift apart, or a replay job stops being recognizable as one and
@@ -715,11 +674,11 @@ $NmeDeferralMarker = '[deferred run] '
 $NmePhaseEchoMarker = '[phase 1] '
 
 # Leads the Throw in Invoke-NmeKuduCommand for the command-too-long guard (see that function, below)
-# so Get-NmeKuduFailureBucket (TEST-PLAN.md §22) can recognize that one specific, deterministic
-# failure cause by matching this marker instead of parsing the rest of the message, which is free to
-# change. Declared up here with the other markers, not inside Invoke-NmeKuduCommand itself, purely so
-# a reader scanning this file's markers finds all of them in one place - it is otherwise unrelated to
-# the job-replay markers above.
+# so Get-NmeKuduFailureBucket can recognize that one specific, deterministic failure cause by matching
+# this marker instead of parsing the rest of the message, which is free to change. Declared up here
+# with the other markers, not inside Invoke-NmeKuduCommand itself, purely so a reader scanning this
+# file's markers finds all of them in one place - it is otherwise unrelated to the job-replay markers
+# above.
 $script:NmeKuduCommandTooLongMarker = 'Invoke-NmeKuduCommand: the command to run on the app service worker is'
 
 # Writes one prior job's output onto this job's own streams, record by record, each line prefixed
@@ -741,11 +700,8 @@ function Write-NmeJobOutputReplay {
         }
         switch ($record.Type) {
             'Error' {
-                # -ErrorAction Continue is required here: this script sets $ErrorActionPreference = 'Stop',
-                # and a bare Write-Error would throw under that preference, aborting the replay/echo before
-                # reaching whatever is supposed to follow it (the "App Service restarted" message and
-                # wait-time calculation for the exit-path replay; this job's own real work for the
-                # deferred-job echo). Do not remove.
+                # -ErrorAction Continue is required: $ErrorActionPreference = 'Stop' would let a bare
+                # Write-Error abort the replay/echo before the caller's own logic runs afterward.
                 Write-Error "$Prefix$Summary" -ErrorAction Continue
             }
             'Warning' {
@@ -780,33 +736,20 @@ Function Check-LastRunResults {
         return
     }
 
-    # Before looking for a run that already FINISHED, look for one that is still going (To-Do H5).
-    # Everything below this block reasons about completed jobs only, so two copies of this script
-    # running at the same time were invisible to each other and raced: both would pass the same
-    # existence checks, then both would create the same subnet rules, endpoints and DNS zone groups.
-    # That is the exact shape of the ARM race that left two automation-account endpoints permanently
-    # wedged in provisioningState Failed on the lab, and concurrent endpoint creation makes it worse,
-    # because each sibling fans several writes at the same parent VNet.
+    # Look for a still-running sibling before reasoning about completed jobs below: two concurrent
+    # copies of this script are otherwise invisible to each other, pass the same existence checks, and
+    # race to create the same subnet rules, endpoints and DNS zone groups. Concurrency happens because
+    # Nerdio Manager resubmits a scripted action it believes is still running whenever the app service
+    # restarts, and this script causes that restart itself. Exit (not Throw): the sibling is doing the
+    # work, nothing has failed, and re-running later is safe and idempotent.
     #
-    # Concurrency is not hypothetical here: Nerdio Manager resubmits a scripted action it believes is
-    # still running whenever the app service restarts, and this script restarts it (implicitly on the
-    # VNet-integration write, explicitly at the end when make-private changed something). If a
-    # resubmission lands while the original job is still in the sandbox, this is what catches it.
+    # Only an OLDER sibling is yielded to - job id as a tiebreaker for an equal start time - because
+    # yielding to any running sibling would let two near-simultaneous starts each see the other and
+    # both exit, leaving nothing done. This makes exactly one of any concurrent set proceed; a
+    # resubmission's original job is always the older one, so that case is unaffected.
     #
-    # Exit, not Throw: the sibling is doing the work, so nothing has failed, and a Failed job here
-    # would be a false alarm in the customer's job history. Re-running later is safe and idempotent,
-    # which is what the message tells the admin to do.
-    #
-    # Only an OLDER sibling wins. This check does not run until roughly three minutes into a job
-    # (the Az module import dominates), so two runs started within that window would each find the
-    # other already Running and both would exit, leaving nothing done. Yielding only to a job that
-    # started earlier - with the job id as a stable tiebreaker for the same start time, since
-    # Automation reports these to the second - makes exactly one of any set of concurrent runs
-    # proceed. The case this fix is really for, a Nerdio Manager resubmission landing while the
-    # original job is still in the sandbox, is unaffected: the original is always the older job.
-    #
-    # $AllJobs is listed once and used by both scans - Get-AzAutomationJob with no filter pages
-    # through every job in the account, which is the expensive part of this function.
+    # $AllJobs is listed once and reused by both scans below: Get-AzAutomationJob with no filter pages
+    # through every job in the account, the expensive part of this function.
     $AllJobs = @(Get-AzAutomationJob -ResourceGroupName $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName)
     $RunningStatuses = @('Running','Queued','Activating','New','Starting','Resuming')
     $SiblingJobs = $AllJobs |
@@ -838,32 +781,25 @@ Function Check-LastRunResults {
     # EndTime is a DateTimeOffset; compare both sides in UTC explicitly rather than
     # relying on the sandbox's local timezone happening to be UTC.
     $JobCutoffUtc = (Get-Date).ToUniversalTime().AddMinutes(-$MinutesAgo)
-    # Candidates are restricted to jobs that genuinely completed - Failed is deliberately excluded,
-    # reversing this function's previous behavior. Duplicate-run detection exists to avoid redoing
-    # work that already succeeded; a Failed job did not do the work, so there is nothing to skip, and
-    # replaying it reports a success that never happened. Observed live 2026-10-02: the connectivity
-    # gate aborted (job Failed), NME auto-resubmitted ~2 minutes later, the resubmission matched the
-    # failed job under the old 'completed|Failed' regex, replayed its output as though the work had been
-    # done, and reported job status Completed - while the key vault, all three SQL servers and every storage
-    # account were still 100% public. Every failure path in this script is fail-safe, so letting a
-    # genuine retry happen (by finding no match here) is both safe and the correct response. Use -eq,
-    # not -match, so 'Failed' (or anything else) cannot creep back in via a substring match - -eq on
-    # strings is case-insensitive by default, so 'Completed' still matches regardless of casing.
+    # Candidates are restricted to jobs that genuinely completed - Failed is deliberately excluded.
+    # Duplicate-run detection exists to avoid redoing work that already succeeded; a Failed job did not
+    # do the work, so there is nothing to skip, and replaying it would report a success that never
+    # happened while the real lockdown is still incomplete. Every failure path in this script is
+    # fail-safe, so letting a genuine retry happen (by finding no match here) is both safe and correct.
+    # Use -eq, not -match, so 'Failed' cannot creep back in via a substring match - -eq on strings is
+    # case-insensitive by default, so 'Completed' still matches regardless of casing.
     #
-    # This does not reopen the unbounded resubmission chain fixed 2026-08-13 (see the comment above
-    # this function) or the replay-of-a-replay chain fixed 2026-09-11 (see the comment below, at
-    # $IsReplayJob). The only restart this script now causes is the implicit one Azure performs when
+    # The only restart this script now causes is the implicit one Azure performs when
     # virtualNetworkSubnetId is written, which happens at most once per deployment, so at most one
-    # resubmission can follow a run: a run that fails before VNet integration restarts nothing and NME
-    # has nothing to resubmit; a run that writes VNet integration gets exactly one resubmission, whose
-    # own VNet-integration write is then a no-op; and a fully successful run restarts nothing and is
-    # followed by no resubmission at all.
+    # resubmission can follow a run: a run that fails before VNet integration restarts nothing; a run
+    # that writes VNet integration gets exactly one resubmission, whose own VNet-integration write is
+    # then a no-op; and a fully successful run restarts nothing and triggers no resubmission at all.
     #
-    # Sorted newest-first because the loop below acts on the FIRST match it finds and both outcomes
+    # Sorted newest-first because the loop below acts on the FIRST match it finds, and both outcomes
     # terminate the search (a deferred candidate echoes and returns; a completed one replays and
-    # Exits). Phase 3 of a greenfield chain sees both phase 1 (deferred) and phase 2 (completed)
-    # inside the window, so without an explicit sort which one it picks depends on
-    # Get-AzAutomationJob's ordering - and $WaitMinutes below anchors on whichever was picked.
+    # Exits). A run can see both a deferred and a completed candidate inside the window, so without an
+    # explicit sort which one is picked depends on Get-AzAutomationJob's ordering - and $WaitMinutes
+    # below anchors on whichever was picked.
     $jobs = $AllJobs |
         Where-Object { $_.Status -eq 'Completed' } |
         Where-Object { $_.EndTime.UtcDateTime -gt $JobCutoffUtc } |
@@ -881,45 +817,22 @@ Function Check-LastRunResults {
             # Note: Get-AzAutomationJobOutput only returns a truncated summary of each record.
             # If the full, untruncated text is ever needed, use Get-AzAutomationJobOutputRecord -Id <record id> instead.
 
-            # Skip a candidate that is itself a replay, and keep looking for the run that actually
-            # did the work. A replay job's own output is just the previous run's output re-emitted
-            # with $NmeReplayMarker in front of every line, so any marked record identifies one -
-            # this script never emits that prefix anywhere else.
-            #
-            # Found live 2026-09-11, when this script still restarted the NME app service twice per
-            # run (once writing virtualNetworkSubnetId, once explicitly at the end) and NME resubmits
-            # a running scripted action on each restart: one NME submission produced 3 Azure
-            # Automation jobs. Only the implicit restart remains, so a chain that long is no longer
-            # reachable, but the guard stays - it is what keeps $WaitMinutes anchored on the run that
-            # did the work. Job 2 correctly replayed job 1,
-            # the real run. Job 3 then matched *job 2* - the newest hash-match in the window - and
-            # replayed the replay, producing doubled '[completed run] [completed run] ' lines. Three
-            # things were wrong with that, in increasing order of importance:
-            #   1. The doubled prefix is confusing to read.
-            #   2. $WaitMinutes below was computed from the matched job's EndTime, so it anchored on
-            #      the replay rather than on the real run: job 3 reported "wait 1 minutes" when,
-            #      measured from the real run's EndTime, the cooldown had already expired by 4
-            #      minutes and no wait message was due at all.
-            #   3. Worse, each replay's own EndTime re-armed the $MinutesAgo window, so the
-            #      effective cooldown ratcheted forward off replays instead of off the work: real
-            #      work ended 18:04:27 and should have unblocked at 18:14:27, but re-runs stayed
-            #      blocked until 18:28:43 - 24 minutes - and every further generation would have
-            #      pushed that out again.
-            # Each generation also re-emitted an ever-growing output set (3175 -> 4659 -> 6143 job
-            # stream records; 4m52s -> 7m01s runtime), since a replay replays everything the
-            # previous replay emitted.
-            #
-            # Anchoring on the original fixes all three at once. If the real run has aged out of the
-            # window and only a replay is left, this skips it, finds nothing, and lets the run
-            # proceed - which is correct: the work finished more than $MinutesAgo ago, so a re-run
-            # is exactly what should be allowed.
-            # Also skip a candidate that is a deferred job (see $NmeDeferralMarker's declaration,
-            # just above $NmeReplayMarker's near the top of this function) rather than a replay - its
-            # Completed status is reported for a run that deliberately exited early, before the
-            # connectivity gate, with no lockdown applied. Replaying it would report that same
-            # "nothing done yet" state as a success and would never let the deployment proceed into
-            # the gate and make-private regions, permanently stranding it. Checked in the same pass
-            # over $JobOutput as $IsReplayJob, rather than as a second loop.
+            # Skip a candidate that is itself a replay, and keep looking for the run that actually did
+            # the work. A replay job's own output is just the previous run's output re-emitted with
+            # $NmeReplayMarker in front of every line, so any marked record identifies one - this
+            # script never emits that prefix anywhere else. Without this guard, a replay could match a
+            # later candidate scan and get replayed itself, doubling the output prefix and anchoring
+            # $WaitMinutes and the $MinutesAgo cooldown on the replay's EndTime instead of the real
+            # run's, letting the cooldown ratchet forward indefinitely across generations. Anchoring on
+            # the original instead means that once the real run ages out of the window and only a
+            # replay is left, this finds nothing and lets the run proceed - correct, since the work
+            # finished more than $MinutesAgo ago.
+            # Also skip a candidate that is a deferred job rather than a replay - its Completed status
+            # is reported for a run that deliberately exited early, before the connectivity gate, with
+            # no lockdown applied. Replaying it would report that "nothing done yet" state as a success
+            # and would never let the deployment proceed into the gate and make-private regions,
+            # permanently stranding it. Checked in the same pass over $JobOutput as $IsReplayJob,
+            # rather than as a second loop.
             $IsReplayJob = $false
             $IsDeferredJob = $false
             foreach ($record in $JobOutput) {
@@ -936,22 +849,17 @@ Function Check-LastRunResults {
                 continue
             }
             if ($IsDeferredJob) {
-                # Unlike $IsReplayJob above, this candidate's content must not be discarded - it is phase 1's
-                # REAL work (endpoints, DNS zones and VNet integration genuinely created), not an echo of
-                # something else. NME's own job-status/output surfacing for one submission only ever reflects
-                # the LAST Azure Automation job in a resubmission chain (confirmed live 2026-10-02 on the
-                # Disable script - polling the original submission's job id surfaced only the first of two
-                # concurrent jobs, missing the one that did the real work). Without echoing phase 1 here, a
-                # customer who only looks at "the result of my one Run click" would see phase 2's fast
-                # "Found ..." pass and nothing about what phase 1 actually did or warned about to produce that
-                # state - exactly backwards, since phase 1 is where the slow, warning-prone work happens.
-                # Echo it, by record type, then RETURN into this job's own real work - do not Exit (there is
-                # more to do) and do not continue searching $jobs (there should be at most one deferred
-                # candidate: the NME web app's VNet-integration write, the only thing that defers, happens at
-                # most once). return exits only Check-LastRunResults, letting the script fall through normally
-                # into everything that follows the call below (the VNet-integration check, the gate,
-                # make-private) - continue would needlessly keep searching, and Exit would wrongly terminate
-                # the whole script when this job still has real work left to do.
+                # Unlike $IsReplayJob above, this candidate's content must not be discarded - it is phase
+                # 1's real work (endpoints, DNS zones and VNet integration genuinely created), not an echo
+                # of something else. NME's own job-status/output surfacing for one submission only ever
+                # reflects the LAST Azure Automation job in a resubmission chain, so without echoing phase
+                # 1 here, a customer would see only phase 2's fast "Found ..." pass and nothing about what
+                # phase 1 actually did or warned about - exactly backwards, since phase 1 is where the slow,
+                # warning-prone work happens. Echo it, by record type, then RETURN into this job's own real
+                # work: do not Exit (there is more to do) and do not continue searching $jobs (at most one
+                # deferred candidate can exist, since the VNet-integration write happens at most once).
+                # return exits only Check-LastRunResults, letting the script fall through into what follows
+                # (the VNet-integration check, the gate, make-private).
                 Write-Output "Output of the earlier phase of this run, which deferred here and completed:"
                 Write-NmeJobOutputReplay -JobOutput $JobOutput -Prefix $NmePhaseEchoMarker
                 Write-Output "Continuing this run now that the app service has had time to settle into the VNet."
@@ -963,8 +871,8 @@ Function Check-LastRunResults {
 
             Write-Output "No work was done by this run - the output above is from the previous run."
             # How much of the cooldown window is left, based on the matched previous job's own EndTime -
-            # not the web app's LastModifiedTimeUtc (see the note above this function: that stops being a
-            # reliable signal once a run stops needing to change anything).
+            # not the web app's LastModifiedTimeUtc, which stops being a reliable signal once a run no
+            # longer needs to change anything.
             $WaitMinutes = [math]::Ceiling($MinutesAgo - ((Get-Date).ToUniversalTime() - $details.EndTime.UtcDateTime).TotalMinutes)
             if ($WaitMinutes -gt 0) {
                 Write-Output "If you need to re-run the script, please wait $WaitMinutes minutes and try again."
@@ -973,7 +881,7 @@ Function Check-LastRunResults {
         }
     }
 }
-    
+
 Check-LastRunResults
 
 # Check if nme app service is already vnet integrated
@@ -992,9 +900,9 @@ if ($NmeWebApp.virtualNetworkSubnetId){
     }
     if (($IntegratedSubnetName -ne $AppServiceSubnetName) -or ($IntegratedVnetName -ne $PrivateLinkVnetName)) {
         Write-output "NME App service is already VNet integrated, but the subnet does not match the specified PrivateLinkVnetName or AppServiceSubnetName parameters provided."
-        write-error "NME App service is already VNet integrated, but the subnet does not match the specified PrivateLinkVnetName or AppServiceSubnetName parameters provided." 
+        write-error "NME App service is already VNet integrated, but the subnet does not match the specified PrivateLinkVnetName or AppServiceSubnetName parameters provided."
         throw "NME App service is already VNet integrated, but the subnet does not match the specified PrivateLinkVnetName or AppServiceSubnetName parameters provided."
-    } 
+    }
 }
 
 
@@ -1057,19 +965,15 @@ else {
 }
 
 #### helper functions ####
-# GA api-version for Microsoft.Sql/servers that carries the publicNetworkAccess and
-# minimalTlsVersion properties used by the ARM-PATCH fallbacks below. This used to be hardcoded as
-# 2023-08-01-preview at the one call site that needed it; a preview api-version is a poor choice
-# for a last-resort recovery path - preview versions are not guaranteed to be present in sovereign
-# clouds such as US Gov and are retired on their own schedule, independent of GA versions. One
-# constant shared by both PATCH call sites so they cannot drift apart from each other.
+# GA api-version for Microsoft.Sql/servers, carrying the publicNetworkAccess and minimalTlsVersion
+# properties the ARM-PATCH fallbacks below need. Not a preview version: those are not guaranteed to be
+# present in sovereign clouds such as US Gov and are retired independently of GA versions. One constant
+# shared by both PATCH call sites so they cannot drift apart from each other.
 $NmeSqlApiVersion = '2021-11-01'
 function Disable-NmeSqlPublicAccess {
     # All three NME SQL servers (primary, Real Time Insights, Intune Insights) get the same
-    # treatment. The primary server used to call Set-AzSqlServer bare: with
-    # $ErrorActionPreference = 'Stop' that aborted the whole script if it hit the Entra-admin
-    # condition the other two already handled - and it runs after the key vault has been locked
-    # down, which is the worst point to abort.
+    # treatment: a bare Set-AzSqlServer call must not throw past this function, since it runs after the
+    # key vault has already been locked down - the worst point for the whole script to abort.
     param(
         [Parameter(Mandatory=$true)][string]$ServerName,
         [Parameter(Mandatory=$true)][string]$ResourceGroupName,
@@ -1087,62 +991,46 @@ function Disable-NmeSqlPublicAccess {
     # half-applied (a VNet rule with public access still enabled, or vice versa), which the closing
     # message should reflect.
     $script:NmeMakePrivateWroteSomething = $true
-    # Check for an existing rule BY NAME, not just by subnet id. New-AzSqlServerVirtualNetworkRule
-    # throws "Virtual Network Rule with name '...' already exists" if a rule with this literal name
-    # is already present on the server, regardless of which subnet it points at - unlike the Key
-    # Vault path just above this function's call sites (Add-AzKeyVaultNetworkRule), which is safe to
-    # call repeatedly. The old `-notcontains $PrivateEndpointSubnetId` check only asked "is our subnet
-    # already covered by some rule", so a stale same-named rule left pointing at a *different* subnet
-    # (e.g. a fixture VNet's private endpoint subnet from an earlier run against this same SQL server)
-    # would pass that check as "not covered" and then collide on the name when this tried to create a
-    # second rule. Found live (P1-18) on the first real second-run-against-a-different-VNet scenario.
+    # Check for an existing rule BY NAME, not just by subnet id: New-AzSqlServerVirtualNetworkRule
+    # throws "Virtual Network Rule with name '...' already exists" if a rule with this literal name is
+    # already present, regardless of which subnet it points at - unlike the Key Vault path just above
+    # (Add-AzKeyVaultNetworkRule), which is safe to call repeatedly. Checking only "is our subnet
+    # already covered by some rule" lets a stale same-named rule pointing at a different subnet pass as
+    # "not covered" and then collide on the name when creating a second rule.
     $ServerRules = Get-AzSqlServerVirtualNetworkRule -ServerName $ServerName -ResourceGroupName $ResourceGroupName
     $ExistingRule = $ServerRules | Where-Object { $_.VirtualNetworkRuleName -eq 'Allow private endpoint subnet' } | Select-Object -First 1
     if (-not $ExistingRule) {
         New-AzSqlServerVirtualNetworkRule -VirtualNetworkRuleName 'Allow private endpoint subnet' -VirtualNetworkSubnetId $PrivateEndpointSubnetId -ServerName $ServerName -ResourceGroupName $ResourceGroupName | Out-Null
     }
     elseif ($ExistingRule.VirtualNetworkSubnetId -ne $PrivateEndpointSubnetId) {
-        # Found → skip, same idiom as the rest of this script (P0-1): report the drift rather than
-        # silently leaving it, but do not delete/recreate a customer's existing rule automatically.
+        # Found but pointing elsewhere: report the drift rather than silently leaving it, but do not
+        # delete/recreate a customer's existing rule automatically.
         Write-Warning "$DisplayName already has a VNet rule named 'Allow private endpoint subnet' pointing at a different subnet ($($ExistingRule.VirtualNetworkSubnetId)) than this run's private endpoint subnet ($PrivateEndpointSubnetId). Not creating a duplicate - Azure rejects a second rule with the same name. This is harmless once public access is disabled (VNet rules are not evaluated for traffic arriving over a private endpoint), but if you need public access to remain enabled and reachable from the current private endpoint subnet, remove or rename the stale rule in the Azure Portal and re-run."
     }
-    # An equivalent 'Allow app service subnet' rule was commented out at all three original call
-    # sites; left out here deliberately. Traffic arriving over a private endpoint is not evaluated
-    # against VNet rules at all, and once PublicNetworkAccess is Disabled these rules are inert.
-    # There used to be a second gate here returning early unless $SqlServer.PublicNetworkAccess was
-    # exactly 'Enabled'. The 'Disabled' case already returned at the top of this function, so that
-    # gate could only ever fire on a null/empty/unexpected value - and in that case it printed
-    # "Disabling $DisplayName public access", added the VNet rule above, and then returned WITHOUT
-    # disabling anything, reporting success for a silent no-op. Falling through to the
-    # Set-AzSqlServer attempt below (which has a full ARM-PATCH fallback and a warning path) is
-    # correct for every value that is not already 'Disabled'.
+    # An 'Allow app service subnet' rule is deliberately not added: traffic arriving over a private
+    # endpoint is not evaluated against VNet rules at all, and once PublicNetworkAccess is Disabled
+    # these rules are inert. Do not gate the Set-AzSqlServer call below on PublicNetworkAccess being
+    # exactly 'Enabled' - the 'Disabled' case already returned above, so a null/empty/unexpected value
+    # would otherwise report success while silently not disabling anything. Falling through to
+    # Set-AzSqlServer for every value that is not already 'Disabled' is correct.
     try {
         Set-AzSqlServer -ServerName $ServerName -ResourceGroupName $ResourceGroupName -PublicNetworkAccess Disabled | Out-Null
     }
     catch {
         # Set-AzSqlServer resubmits the server's whole model on every call, including the
-        # Administrators block, and its SDK does its own client-side check of the AAD admin before
+        # Administrators block, and its SDK does a client-side check of the AAD admin before
         # submitting: it treats Administrators.Login (a bare GUID for an application/service
         # principal admin - exactly NME's own Intune Insights and RTI SQL servers) as if it were a
-        # display name and looks up a service principal by that string, then throws
-        # System.ArgumentException ("...does not match with any service principal display name
-        # '<real display name>'...") when it doesn't match - confirmed live (2026-09-10) against
-        # both servers in the lab. This is a client-side check only: a raw ARM PATCH of just
-        # publicNetworkAccess against these same servers, admin config untouched, succeeds every
-        # time, so nothing about the admin being an application blocks this change at the API.
-        # The previous recovery here (renaming the AAD admin's display name via Microsoft Graph so
-        # it reads as a named principal, then retrying Set-AzSqlServer) was the right idea but
-        # unworkable in practice: it installed Microsoft.Graph.Applications into the same runbook
-        # process that already has Az.Accounts/Az.Sql loaded, and Connect-MgGraph's certificate-auth
-        # path then failed with "The type initializer for 'Azure.Core.Pipeline.RequestActivityPolicy'
-        # threw an exception" - an Azure.Core assembly-version conflict between the Az and
-        # Microsoft.Graph SDKs sharing one PowerShell runspace, also confirmed live against the RTI
-        # SQL server in the lab. Workaround: patch only publicNetworkAccess via a raw ARM REST call
-        # (Invoke-AzRestMethod, part of Az.Accounts - already a required module here), which
-        # bypasses Set-AzSqlServer's client-side admin check entirely and needs no Microsoft Graph
-        # module or permissions at all. -Path (not -ResourceId, which belongs to a different,
-        # -ApiVersion-incompatible parameter set) takes the resource ID with the api-version as a
-        # query string.
+        # display name, looks up a service principal by that string, and throws
+        # System.ArgumentException when it doesn't match. This is a client-side check only - a raw ARM
+        # PATCH of just publicNetworkAccess succeeds against the same servers, admin config untouched -
+        # so the fix is to bypass Set-AzSqlServer via Invoke-AzRestMethod (part of Az.Accounts, already
+        # a required module here) instead of trying to rename the AAD admin's display name via
+        # Microsoft Graph: that approach installs Microsoft.Graph.Applications into the same runspace
+        # as Az.Accounts/Az.Sql, and Connect-MgGraph's certificate-auth path then fails on an Azure.Core
+        # assembly-version conflict between the two SDKs. -Path (not -ResourceId, a different,
+        # -ApiVersion-incompatible parameter set) takes the resource ID with the api-version as a query
+        # string.
         Write-Verbose "Set-AzSqlServer failed disabling public network access for $DisplayName ($($_.Exception.Message)); retrying via a direct ARM PATCH."
         try {
             $PatchBody = @{ properties = @{ publicNetworkAccess = 'Disabled' } } | ConvertTo-Json -Compress
@@ -1212,14 +1100,12 @@ function Set-NmeSqlBaseline {
     )
     try {
         $SqlServer = Get-AzSqlServer -ResourceGroupName $ResourceGroupName -ServerName $ServerName -ErrorAction Stop
-        # MinimalTlsVersion is a string like '1.2', and 'None' is a legal ARM value meaning no
-        # minimum is enforced - precisely the value that most needs raising to 1.2. [double]'None'
-        # throws, which used to send that exact case into the outer catch below and report "Unable
-        # to set the minimum TLS version" - inverting the check so the one server that needs the fix
-        # is the one that silently doesn't get it. Compare by ordinal position instead, same idiom
-        # as the sibling Set-NmeStorageBaseline above: IndexOf returns -1 for an unrecognized value,
-        # and -1 -ge 3 is false, so an unknown value falls through to setting TLS 1.2 (fail-safe).
-        # This also avoids [double]'s culture-sensitivity (a decimal comma locale would misparse '1.2').
+        # MinimalTlsVersion is a string like '1.2', and 'None' is a legal ARM value meaning no minimum
+        # is enforced - precisely the value that most needs raising to 1.2. Compare by ordinal position
+        # in this list rather than casting to [double]: [double]'None' throws, and [double] is also
+        # culture-sensitive (a decimal-comma locale would misparse '1.2'). IndexOf returns -1 for an
+        # unrecognized value, and -1 -ge 3 is false, so an unknown value falls through to setting TLS
+        # 1.2 (fail-safe).
         $TlsOrder = @('None', '1.0', '1.1', '1.2', '1.3')
         $CurrentTls = [string]$SqlServer.MinimalTlsVersion
         if (-not [string]::IsNullOrWhiteSpace($CurrentTls) -and ($TlsOrder.IndexOf($CurrentTls) -ge $TlsOrder.IndexOf('1.2'))) {
@@ -1234,13 +1120,11 @@ function Set-NmeSqlBaseline {
             Set-AzSqlServer -ResourceGroupName $ResourceGroupName -ServerName $ServerName -MinimalTlsVersion '1.2' | Out-Null
         }
         catch {
-            # Same failure mode documented in full in Disable-NmeSqlPublicAccess's catch block:
-            # Set-AzSqlServer resubmits the whole server model including the Administrators block
-            # and does a client-side lookup of the AAD admin, throwing System.ArgumentException when
-            # that admin is an application/service principal - exactly what the RTI and Intune
-            # Insights SQL servers have. Without this fallback, TLS 1.2 was silently never applied to
-            # those two servers and a misleading warning fired on every run. Do not "simplify" this
-            # back to a bare Set-AzSqlServer call.
+            # Same failure mode as Disable-NmeSqlPublicAccess's catch block: Set-AzSqlServer does a
+            # client-side lookup of the AAD admin and throws when that admin is an application/service
+            # principal - exactly what the RTI and Intune Insights SQL servers have. Do not "simplify"
+            # this back to a bare Set-AzSqlServer call; without this fallback, TLS 1.2 is silently never
+            # applied to those two servers while a misleading warning fires on every run.
             Write-Verbose "Set-AzSqlServer failed setting minimum TLS version for $DisplayName ($($_.Exception.Message)); retrying via a direct ARM PATCH."
             try {
                 $PatchBody = @{ properties = @{ minimalTlsVersion = '1.2' } } | ConvertTo-Json -Compress
@@ -1318,9 +1202,7 @@ function Set-NmeAppServiceExplicitPublicAccess {
     }
 }
 
-# E-5 Phase B concurrency helpers (SPEC-E5-Parallelize.md, B1/B2). Their behavior against the real
-# Automation sandbox - what an -AsJob failure actually looks like there - is recorded in TEST-PLAN.md
-# section 24.3; read that before changing the error classification below.
+# Helpers for classifying and retrying errors from the concurrent -AsJob operations below.
 
 function Test-NmeRetryableError {
     # Classifies whether an error is worth retrying. Kept separate from Invoke-NmeWithRetry (rather
@@ -1399,13 +1281,12 @@ function Test-NmeRetryableError {
         $StatusText = [string]$Exception.Response.StatusCode
         # An empty or whitespace StatusCode means this exception declares the property but carries no
         # status, so there is nothing authoritative here and the message-text branch below must still
-        # get its turn. Measured in the real sandbox (TEST-PLAN.md section 24.3, Az.Network 7.3.0):
-        # the NetworkCloudException an -AsJob failure surfaces does exactly that, putting the real
-        # "StatusCode: 404 / ErrorCode: ResourceNotFound" only in the message text. Note the emptiness
-        # check cannot be done on the [int] cast - PowerShell converts an empty string to 0 without
-        # throwing, so a "resolved" 0 would look like a real status and suppress the fallback for
-        # every -AsJob failure in this environment, including a genuine AnotherOperationInProgress,
-        # which is the one error this whole function exists to catch.
+        # get its turn - an -AsJob failure's NetworkCloudException does exactly that, putting the real
+        # "StatusCode: 404 / ErrorCode: ResourceNotFound" only in the message text. The emptiness check
+        # cannot be done on the [int] cast: PowerShell converts an empty string to 0 without throwing,
+        # so a "resolved" 0 would look like a real status and suppress the fallback for every -AsJob
+        # failure, including a genuine AnotherOperationInProgress - the one error this function exists
+        # to catch.
         if (-not [string]::IsNullOrWhiteSpace($StatusText)) {
             # StatusCode is an HttpStatusCode enum on some Az/HttpClient versions and a plain int on
             # others; [int] on either succeeds, and on an already-stringified enum name
@@ -1458,10 +1339,10 @@ function Test-NmeRetryableError {
 function Invoke-NmeWithRetry {
     # Runs $ScriptBlock, retrying on a retryable error (Test-NmeRetryableError above) with exponential
     # backoff, and returns whatever $ScriptBlock produced. Exists because concurrent -AsJob operations
-    # all write into the same subnet, and ARM serializes writes on the parent VNet
-    # (SPEC-E5-Parallelize.md Phase B2) - at a concurrency cap of 4, "AnotherOperationInProgress" /
-    # Conflict / 429 responses are the expected cost of that parallelism, not a sign anything is
-    # actually broken, and must be absorbed here rather than surfaced to the customer.
+    # all write into the same subnet and ARM serializes writes on the parent VNet - at a concurrency cap
+    # of 4, "AnotherOperationInProgress" / Conflict / 429 responses are the expected cost of that
+    # parallelism, not a sign anything is actually broken, and must be absorbed here rather than
+    # surfaced to the customer.
     param(
         [Parameter(Mandatory=$true)][scriptblock]$ScriptBlock,
         [Parameter(Mandatory=$true)][string]$DisplayName,
@@ -1476,23 +1357,20 @@ function Invoke-NmeWithRetry {
         }
         catch {
             if (-not (Test-NmeRetryableError -ErrorObject $_)) {
-                # Non-retryable (permissions, validation, anything unrecognized): surface immediately.
-                # Spending MaxAttempts retries on an error no amount of waiting will fix only delays
-                # the customer finding out what is actually wrong. Bare 'throw' re-raises the current
-                # ErrorRecord as-is, preserving the original Azure error text and stack.
+                # Non-retryable (permissions, validation, anything unrecognized): surface immediately -
+                # retries would only delay the customer finding out what's wrong. Bare 'throw' re-raises
+                # the current ErrorRecord as-is, preserving the original Azure error text and stack.
                 throw
             }
             if ($Attempt -ge $MaxAttempts) {
-                # Retryable, but we are out of attempts: this is a genuine failure (ARM never released
-                # the lock, or throttling never cleared), not a transient blip - rethrow the last error
-                # rather than synthesizing a generic one, so the customer's log still shows the real
-                # Azure error text that caused it.
+                # Retryable, but out of attempts: a genuine failure (ARM never released the lock, or
+                # throttling never cleared), not a transient blip - rethrow the last error rather than
+                # synthesizing a generic one, so the customer's log still shows the real Azure error text.
                 throw
             }
             # Exponential backoff (2s, 4s, 8s, 16s at the production base delay) plus a small random
-            # jitter. The jitter exists so that when several concurrent -AsJob operations collide on
-            # the same ARM conflict at roughly the same moment, they do not all wake up and retry on
-            # the exact same tick and collide again.
+            # jitter, so several concurrent -AsJob operations that collide on the same ARM conflict do
+            # not all wake up and retry on the same tick and collide again.
             $BackoffMs = $script:NmeRetryBaseDelayMs * [math]::Pow(2, $Attempt - 1)
             $JitterMs = Get-Random -Minimum 0 -Maximum 1000
             $DelayMs = $BackoffMs + $JitterMs
@@ -1508,12 +1386,12 @@ function Invoke-NmeWithRetry {
 function Invoke-NmeJobBatch {
     # Waits on a batch of background jobs (Az -AsJob results in production; plain Start-Job in tests)
     # and collects one result per job, in the caller's input order, regardless of completion order -
-    # SPEC-E5-Parallelize.md B3 requires component messages emitted in table order, not job-finish
-    # order, so the caller needs results indexable by the same position it submitted them in.
+    # component messages must be emitted in table order, not job-finish order, so the caller needs
+    # results indexable by the same position it submitted them in.
     #
     # Does not itself retry anything and writes no customer-visible output - the caller (which knows
     # which stage this is and owns the component table) decides what to do with a failed or timed-out
-    # result, including re-driving it through Invoke-NmeWithRetry synchronously per B2.
+    # result, including re-driving it through Invoke-NmeWithRetry synchronously.
     param(
         [Parameter(Mandatory=$true)][AllowEmptyCollection()][array]$Jobs,
         [Parameter(Mandatory=$true)][AllowEmptyCollection()][array]$DisplayNames,
@@ -1526,9 +1404,9 @@ function Invoke-NmeJobBatch {
 
     if ($Jobs.Count -eq 0) {
         # A stage with nothing to submit - e.g. every component in this run already had a private
-        # endpoint, the common case on a re-run - is not an edge case, it is the steady state once a
-        # deployment is idempotent. Wait-Job also throws on an empty -Job array, so this must be
-        # short-circuited rather than handled by the loop below.
+        # endpoint - is not an edge case, it is the steady state once a deployment is idempotent.
+        # Wait-Job also throws on an empty -Job array, so this must be short-circuited rather than
+        # handled by the loop below.
         #
         # The leading comma is not decoration: PowerShell unrolls an array written to the output
         # stream, so a bare `return @()` reaches `$x = Invoke-NmeJobBatch ...` as $null, not an empty
@@ -1565,8 +1443,7 @@ function Invoke-NmeJobBatch {
             if ($TimedOut) {
                 # Still running (or blocked/disconnected) after Wait-Job's own timeout: stop it so it
                 # cannot keep running unattended past this stage, then synthesize an error naming which
-                # component hung and how long we waited - a job in this state carries no useful message
-                # of its own to surface instead.
+                # component hung, since a job in this state carries no useful message of its own.
                 Stop-Job -Job $Job -ErrorAction SilentlyContinue
                 $ErrorText = "Timed out waiting for '$Name' after $TimeoutSeconds seconds; the job was stopped."
             }
@@ -1606,18 +1483,15 @@ function Invoke-NmeJobBatch {
         }
     }
     finally {
-        # Every job is removed here - success, failure, or timed-out, and whether or not the loop above
-        # ran to completion - so nothing from this stage leaks into the next stage's Get-Job view or
-        # into Automation's job history. Results already collected are still returned; only the jobs
-        # themselves are cleaned up here.
+        # Every job is removed here regardless of outcome, so nothing from this stage leaks into the
+        # next stage's Get-Job view or into Automation's job history. Results already collected are
+        # still returned; only the jobs themselves are cleaned up here.
         Remove-Job -Job $Jobs -Force -ErrorAction SilentlyContinue
     }
 
-    # Leading comma again, same reason as the empty-batch early return above: with exactly one result,
-    # `return $Results.ToArray()` would unroll to that single pscustomobject rather than a one-element
-    # array, so `$x = Invoke-NmeJobBatch ...` would silently stop being indexable/Count-able the one
-    # time a stage happens to submit exactly one job. The comma keeps the return type an array no
-    # matter how many results it holds - 0, 1, or many.
+    # Leading comma again, same reason as the empty-batch return above: with exactly one result,
+    # `return $Results.ToArray()` would unroll to that single pscustomobject instead of a one-element
+    # array. The comma keeps the return type an array no matter how many results it holds.
     return ,$Results.ToArray()
 }
 
@@ -1625,19 +1499,16 @@ function New-NmeStoragePrivateEndpoint {
     # This function depends on script scope: it reads $NmeRg, $SkipDNS, $StorageSubresourceDnsZoneNames
     # and $StorageSubresourceDnsZones, all of which must be set before this function is called.
     #
-    # Since E-5 Phase B this ENQUEUES one component descriptor and does no Azure work of its own; the
-    # creation, the existence checks and every message below are performed by
-    # Invoke-NmeEndpointComponentQueue, which drains the queue in two batched stages at the end of the
-    # "create private endpoints" region. Call sites are unchanged, and so are the message strings -
-    # every one of them is composed here, at enqueue time, exactly as it used to be composed at
-    # execution time, so that the wording cannot drift just because the execution moved.
+    # This only ENQUEUES one component descriptor and does no Azure work of its own; the creation, the
+    # existence checks and every message below are performed by Invoke-NmeEndpointComponentQueue, which
+    # drains the queue in two batched stages at the end of the "create private endpoints" region. Call
+    # sites are unchanged, and so are the message strings - every one of them is composed here, at
+    # enqueue time, so that the wording cannot drift from execution time.
     #
     # Still deliberately returns nothing (bare `return`, never `return $Endpoint`): every call site
     # invokes this as a bare statement with no assignment. `$x = New-NmeStoragePrivateEndpoint ...` or
-    # `... | Out-Null` would capture the ENTIRE success stream of the call, which before Phase B
-    # silenced every progress message in this function. Found live 2026-08-13 (R1 of TEST-PLAN.md
-    # §11). The hazard is smaller now that the output happens in the coordinator, but the rule stands -
-    # do not add a return value back without also changing every call site.
+    # `... | Out-Null` would capture the ENTIRE success stream of the call, silencing every progress
+    # message in this function. Do not add a return value back without also changing every call site.
     param(
         [Parameter(Mandatory=$true)]$StorageAccount,          # the object from Get-AzStorageAccount
         [Parameter(Mandatory=$true)][string]$Subresource,     # 'blob' or 'table'
@@ -1671,10 +1542,10 @@ function New-NmeStoragePrivateEndpoint {
         CreatedDnsZoneGroupMessage     = "Created $DisplayName storage DNS zone group '$DnsZoneGroupName'"
         SkipDnsZoneGroupMessage        = "Skipping $DisplayName storage DNS zone group configuration (SkipDNS enabled)"
         DnsFailureMessage              = "Could not create the DNS zone group for $DisplayName $Subresource storage: {0} The private endpoint itself was created, but $DisplayName will not resolve to it until this is fixed. The remaining components will still be attempted, and this run will stop before making anything private."
-        # Storage only. Earlier versions of this script linked some zone groups to the wrong zone for
-        # the account's sub-resource, so a zone group that already exists is checked for that drift.
-        # The warning text needs the FOUND zone group's own name, which is not known until the
-        # coordinator reads it, so the template carries a {0} placeholder like the failure messages.
+        # Storage only: an existing zone group is checked for drift, since it may be linked to the
+        # wrong zone for this sub-resource. The warning text needs the FOUND zone group's own name,
+        # which is not known until the coordinator reads it, hence the {0} placeholder like the
+        # failure messages.
         DriftZoneResourceId            = $Zone.ResourceId
         DriftWarningMessage            = "The existing $DisplayName storage DNS zone group '{0}' is not linked to the '$ZoneName' private DNS zone, so $DisplayName $Subresource storage will not resolve to the private endpoint. Delete the private endpoint '{1}' in the Azure Portal and re-run this script to have the endpoint and its DNS zone group recreated correctly."
         Endpoint                       = $null
@@ -1684,23 +1555,21 @@ function New-NmeStoragePrivateEndpoint {
 
 function New-NmeComponentPrivateEndpoint {
     # Generalizes the resolve -> Find-NmeExistingPrivateEndpoint -> create-if-absent -> DNS-zone-group
-    # pattern that New-NmeStoragePrivateEndpoint above proves for the four storage accounts, to the other
-    # 13 non-storage components (key vaults, sql servers, automation accounts, app services) in the "create
-    # private endpoints" region. Those 13 hand-maintained copies are exactly where P1-2, P1-22 and P1-23
-    # lived - collapsing them here removes the copy-paste substrate that produced all three, rather than
-    # just patching them again.
+    # pattern that New-NmeStoragePrivateEndpoint above uses for the four storage accounts, to the other
+    # non-storage components (key vaults, sql servers, automation accounts, app services) in the "create
+    # private endpoints" region, removing the copy-paste duplication across those blocks.
     #
-    # Since E-5 Phase B this ENQUEUES one component descriptor and does no Azure work of its own - see
+    # This only ENQUEUES one component descriptor and does no Azure work of its own - see
     # New-NmeStoragePrivateEndpoint above for the full note, including why it still returns nothing.
     #
-    # Every Write-Output/Write-Warning string is supplied by the caller rather than derived from a single
-    # display-name parameter, because the 13 blocks this replaces were never worded consistently - for
-    # example "Found RTI App Service private endpoint" vs "Found RTI SQL private endpoint", or "Configuring
-    # RTI Key Vault service connection and private endpoint" vs "Configuring keyvault service connection and
-    # private endpoint" (different capitalization and phrasing per component, not a typo to fix). Deriving
-    # these from one parameter would change text a customer's job log already shows. Future editors: if a
-    # message genuinely needs to change, do that as its own reviewed change - not as a side effect of adding
-    # a new caller here.
+    # Every Write-Output/Write-Warning string is supplied by the caller rather than derived from a
+    # single display-name parameter, because the blocks this replaces were never worded consistently -
+    # for example "Found RTI App Service private endpoint" vs "Found RTI SQL private endpoint", or
+    # "Configuring RTI Key Vault service connection and private endpoint" vs "Configuring keyvault
+    # service connection and private endpoint" (different capitalization and phrasing per component,
+    # not a typo to fix). Deriving these from one parameter would change text a customer's job log
+    # already shows. Future editors: if a message genuinely needs to change, do that as its own
+    # reviewed change - not as a side effect of adding a new caller here.
     param(
         [Parameter(Mandatory=$true)][string]$TargetResourceId,
         [Parameter(Mandatory=$true)][string]$GroupId,
@@ -1744,24 +1613,22 @@ function New-NmeComponentPrivateEndpoint {
 
 function Invoke-NmeEndpointComponentQueue {
     # Drains $script:NmePendingEndpointComponents, which the two New-Nme*PrivateEndpoint helpers above
-    # fill as the "create private endpoints" region runs. E-5 Phase B, SPEC-E5-Parallelize.md B1:
-    # -AsJob covers one cmdlet call, not a whole unit, and a component's DNS zone group cannot be
-    # created until its endpoint exists - so the region is two fan-out stages over the queue rather
-    # than N independent per-component pipelines.
+    # fill as the "create private endpoints" region runs. -AsJob covers one cmdlet call, not a whole
+    # unit, and a component's DNS zone group cannot be created until its endpoint exists - so the
+    # region is two fan-out stages over the queue rather than N independent per-component pipelines.
     #
     # The existence checks (Find-NmeExistingPrivateEndpoint, Get-AzPrivateDnsZoneGroup) stay
     # sequential: they are reads, they are cheap, and keeping them in table order is what lets every
     # customer-visible message be emitted in table order no matter which job finishes first.
     #
-    # This function depends on script scope: $ExistingPrivateEndpoints (fetched once, subscription
-    # wide, P2-7), $PrivateEndpointSubnet, $NmeRg, $VnetLocation, $SkipDNS,
-    # $script:NmePrivateEndpointConcurrency and $script:NmeSupportsAsJob.
+    # This function depends on script scope: $ExistingPrivateEndpoints (fetched once, subscription-wide),
+    # $PrivateEndpointSubnet, $NmeRg, $VnetLocation, $SkipDNS, $script:NmePrivateEndpointConcurrency and
+    # $script:NmeSupportsAsJob.
     #
-    # Error model, and it is deliberately different from the rest of this file (SPEC B4): a batch in
-    # flight cannot fail fast, so a failed component records itself in
-    # $script:NmeFailedEndpointComponents and the stage carries on. The single Throw lives at the end
-    # of the region, upstream of the connectivity gate and every lockdown, so no partial-lockdown
-    # state is reachable from here.
+    # Error model is deliberately different from the rest of this file: a batch in flight cannot fail
+    # fast, so a failed component records itself in $script:NmeFailedEndpointComponents and the stage
+    # carries on. The single Throw lives at the end of the region, upstream of the connectivity gate
+    # and every lockdown, so no partial-lockdown state is reachable from here.
     $Components = @($script:NmePendingEndpointComponents)
     if (-not $Components.Count) { return }
 
@@ -1775,11 +1642,10 @@ function Invoke-NmeEndpointComponentQueue {
             Write-Output $Component.FoundMessage
         }
         else {
-            # The per-component "Configuring ..." line moves to the verbose stream under Phase B. On
-            # the output stream it is replaced by one "Submitting N ..." line below, because with
-            # several creations in flight a sequential "Configuring X" / "Created X" pair no longer
-            # describes what is happening (D4, TEST-PLAN.md §23.5). The string itself is unchanged, so
-            # a -Verbose run still shows exactly what earlier builds showed.
+            # The per-component "Configuring ..." line moves to the verbose stream; on the output
+            # stream it is replaced by one "Submitting N ..." line below, since with several creations
+            # in flight a sequential "Configuring X" / "Created X" pair no longer describes what is
+            # happening. The string itself is unchanged, so a -Verbose run still shows it.
             Write-Verbose $Component.ConfiguringMessage
             $ToCreate.Add($Component) | Out-Null
         }
@@ -1797,11 +1663,11 @@ function Invoke-NmeEndpointComponentQueue {
             $Submitted = New-Object System.Collections.Generic.List[object]
 
             foreach ($Component in $Batch) {
-                # Everything in this try is a precondition that must still run one component at a
-                # time: Assert-NmePrivateEndpointNameAvailable is a local check, and
-                # Set-NmeAppServiceExplicitPublicAccess is an ARM PATCH against the app itself, which
-                # has nothing to do with the subnet and must not be fanned out.
-                # New-AzPrivateLinkServiceConnection only builds a local object.
+                # Everything in this try is a precondition that must still run one component at a time:
+                # Assert-NmePrivateEndpointNameAvailable is a local check, and
+                # Set-NmeAppServiceExplicitPublicAccess is an ARM PATCH against the app itself, unrelated
+                # to the subnet, so it must not be fanned out. New-AzPrivateLinkServiceConnection only
+                # builds a local object.
                 try {
                     Assert-NmePrivateEndpointNameAvailable -Name $Component.PrivateEndpointName
                     if ($Component.GroupId -eq 'sites') {
@@ -1857,26 +1723,24 @@ function Invoke-NmeEndpointComponentQueue {
                     $Component = $Submitted[$Index]
                     $Result = $Results[$Index]
                     if ($Result.Error) {
-                        # SPEC B2: a failed job is re-driven SYNCHRONOUSLY, one at a time, after the
-                        # batch. You cannot retry inside a job that has already failed, and a serial
-                        # retry cannot itself create new conflicts.
+                        # A failed job is re-driven SYNCHRONOUSLY, one at a time, after the batch: you
+                        # cannot retry inside a job that has already failed, and a serial retry cannot
+                        # itself create new conflicts.
                         try {
                             $Component.Endpoint = Invoke-NmeWithRetry -DisplayName $Component.FindDisplayName -ScriptBlock {
-                                # Check ARM first. A job can report an error for an operation that
-                                # nevertheless landed - a receive-side timeout is the obvious case -
-                                # and blindly re-PUTting an endpoint that already exists is how this
-                                # lab ended up with two permanently wedged endpoints in the first
-                                # place (TEST-PLAN.md §15.3a).
+                                # Check ARM first: a job can report an error for an operation that
+                                # nevertheless landed (a receive-side timeout is the obvious case), and
+                                # blindly re-PUTting an endpoint that already exists risks leaving a
+                                # permanently wedged duplicate.
                                 $Already = Get-AzPrivateEndpoint -ResourceGroupName $NmeRg -Name $Component.PrivateEndpointName -ErrorAction SilentlyContinue
                                 if ($Already -and $Already.ProvisioningState -eq 'Succeeded') {
                                     Write-Verbose "$($Component.FindDisplayName): the background job reported an error but the private endpoint exists and is Succeeded; using it."
                                     return $Already
                                 }
                                 # Rebuilt from $Component rather than reusing the $ServiceConnection
-                                # variable from the submit loop above: that loop has finished by the
-                                # time this runs, so the variable holds the LAST component's
-                                # connection, not this one's - which would point this endpoint at the
-                                # wrong target resource entirely.
+                                # variable from the submit loop above: that loop has finished by the time
+                                # this runs, so the variable holds the LAST component's connection, not
+                                # this one's - which would point this endpoint at the wrong target.
                                 $RetryServiceConnection = New-AzPrivateLinkServiceConnection -Name $Component.ServiceConnectionName `
                                     -PrivateLinkServiceId $Component.TargetResourceId -GroupId $Component.GroupId -ErrorAction Stop
                                 New-AzPrivateEndpoint -Name $Component.PrivateEndpointName -ResourceGroupName $NmeRg `
@@ -1915,14 +1779,13 @@ function Invoke-NmeEndpointComponentQueue {
     $ZoneGroupsToCreate = New-Object System.Collections.Generic.List[object]
     foreach ($Component in $Components) {
         if (-not $Component.Endpoint) { continue }
-        # -ResourceGroupName is the ENDPOINT's own resource group (P1-23) and -PrivateEndpointName its
-        # own .Name (P1-2), for both the Get here and the New below - never $NmeRg and never a
-        # name-convention variable. A pre-existing endpoint found by PrivateLinkServiceId is not
-        # necessarily in $NmeRg or named per this script's convention (that is the whole point of
-        # supporting one under a different name in another resource group), so a zone-group call
-        # scoped to the wrong resource group or name fails with a plain "resource not found" that
-        # gives no hint the endpoint was simply looked for in the wrong place. Do not swap either of
-        # these back - that is exactly how P1-2/P1-23 happened the first time. Found live 2026-08-12.
+        # -ResourceGroupName is the ENDPOINT's OWN resource group and -PrivateEndpointName its OWN
+        # .Name, for both the Get here and the New below - never $NmeRg and never a name-convention
+        # variable. A pre-existing endpoint found by PrivateLinkServiceId is not necessarily in $NmeRg
+        # or named per this script's convention (that is the whole point of supporting one under a
+        # different name in another resource group); scoping the zone-group call to the wrong resource
+        # group or name fails with a plain "resource not found" that gives no hint the endpoint was
+        # simply looked for in the wrong place. Do not swap either of these back.
         $DnsZoneGroup = Get-AzPrivateDnsZoneGroup -ResourceGroupName $Component.Endpoint.ResourceGroupName `
             -PrivateEndpointName $Component.Endpoint.Name -ErrorAction SilentlyContinue
         if ($DnsZoneGroup) {
@@ -2031,10 +1894,10 @@ function Invoke-NmeEndpointComponentQueue {
 function Assert-NmeNoLeakedJobs {
     # Invoke-NmeJobBatch removes every job it waited on in a finally block, so this should never find
     # anything. It exists because a leaked background job in an Azure Automation sandbox is invisible
-    # until it starts competing with the runbook for the same 3-hour fair-share budget, and the
-    # spike (TEST-PLAN.md section 24.3) established that Get-Job is empty in this sandbox at the start
-    # of a run - so anything here is ours and is a bug. Verbose, not a warning: it is a developer
-    # signal, and cleaning up is the right customer-visible behavior either way.
+    # until it starts competing with the runbook for the same 3-hour fair-share budget; Get-Job is
+    # empty in this sandbox at the start of a run, so anything found here is ours and is a bug.
+    # Verbose, not a warning: it's a developer signal, and cleaning up is the right customer-visible
+    # behavior either way.
     $LeakedJobs = @(Get-Job)
     if ($LeakedJobs.Count) {
         Write-Verbose "Invoke-NmeEndpointComponentQueue left $($LeakedJobs.Count) background job(s) behind; removing them. This is a bug in the batch helpers - jobs should be removed by Invoke-NmeJobBatch."
@@ -2049,11 +1912,11 @@ function Test-NmePrivateDnsResolution {
     # blocks its own SCM/Kudu endpoint. This function does not prove Nerdio Manager can actually reach
     # or resolve anything: it only proves the Azure private DNS zone contains an A record for the
     # resource. It says nothing about whether that zone is linked to the right VNet, whether DNS is
-    # actually being consulted by the worker, or about routing and NSGs - and it is useless entirely
-    # when SkipDNS is true, since a customer running their own DNS may have no Azure private DNS zone
-    # to check. Diagnostic only - never blocks. Runs before the make-private region so a missing
-    # private DNS record is reported *before* public access is disabled, which is the point at which
-    # it stops being recoverable from inside Nerdio Manager.
+    # actually consulted by the worker, or about routing and NSGs - and it is useless when SkipDNS is
+    # true, since a customer running their own DNS may have no Azure private DNS zone to check.
+    # Diagnostic only - never blocks. Runs before the make-private region so a missing private DNS
+    # record is reported *before* public access is disabled, the point at which it stops being
+    # recoverable from inside Nerdio Manager.
     #
     # Deliberately does NOT use Resolve-DnsName. This script executes in the Azure Automation
     # sandbox, which sits outside the VNet and therefore does not use the private DNS zones linked
@@ -2114,18 +1977,17 @@ function Invoke-NmeKuduCommand {
     # routing) and ARM has no visibility into that disagreement.
     #
     # The command-too-long Throw below leads with $script:NmeKuduCommandTooLongMarker (defined near
-    # $NmeReplayMarker/$NmeDeferralMarker above) so Get-NmeKuduFailureBucket (TEST-PLAN.md §22) can
-    # tell that specific, deterministic cause apart from every other way this function can fail, by
-    # matching the marker rather than parsing free text.
+    # $NmeReplayMarker/$NmeDeferralMarker above) so callers can tell that specific, deterministic cause
+    # apart from every other way this function can fail, by matching the marker rather than parsing
+    # free text.
     param(
         [Parameter(Mandatory=$true)][string]$ScmHost,
         [Parameter(Mandatory=$true)][string]$ScriptText
     )
 
-    # Newer Az.Accounts returns .Token as a SecureString rather than a plain string. This dual
-    # handling is deliberate: this script has to run against whatever Az.Accounts version happens to
-    # be installed in the customer's Automation account, and there is no way to know which shape it
-    # will return ahead of time.
+    # Newer Az.Accounts returns .Token as a SecureString rather than a plain string. This dual handling
+    # is deliberate: this script must run against whatever Az.Accounts version is installed in the
+    # customer's Automation account, and there is no way to know which shape it will return.
     $RawToken = (Get-AzAccessToken -ResourceUrl (Get-AzContext).Environment.ResourceManagerUrl -ErrorAction Stop).Token
     $KuduToken = if ($RawToken -is [System.Security.SecureString]) {
         [System.Net.NetworkCredential]::new("", $RawToken).Password
@@ -2145,23 +2007,17 @@ function Invoke-NmeKuduCommand {
     # command-line length (CreateProcess's own limit is much higher; this is cmd.exe's own, lower one).
     # Exceeding it is NOT reported as a clear error from Kudu: it returns HTTP 200 with ExitCode 1 and
     # Error "The command line is too long.", which - unless the caller inspects those fields - looks
-    # identical to "the remote script ran and every target failed" (every result field blank). That is
-    # exactly what happened here: T01's connectivity gate failed on its first three live runs with a
-    # blank result for every target, and two earlier guesses (DNS/VNet-integration warm-up timing, then
-    # an unrelated Content-Type-header change) were tried and failed before Write-Verbose logging of
-    # the raw Response.Error surfaced this message. The immediate fix was trimming
-    # $RemoteScriptTemplate's payload size (see Test-NmeAppServiceConnectivity), but a real
-    # NME deployment can have longer FQDNs than this lab's, so fail clearly here too rather than risk
-    # the same silent-looking failure recurring for a customer with long resource names.
+    # identical to "the remote script ran and every target failed" (every result field blank).
+    # Test-NmeAppServiceConnectivity keeps $RemoteScriptTemplate's payload small for this reason, but a
+    # real NME deployment can have longer FQDNs than this lab's, so fail clearly here too rather than
+    # risk the same silent-looking failure recurring for a customer with long resource names.
     if ($RemoteCommand.Length -gt 8000) {
         Throw "$($script:NmeKuduCommandTooLongMarker) $($RemoteCommand.Length) characters, over the safe threshold for cmd.exe's command-line length limit (Kudu's /api/command runs commands through cmd.exe, which caps total command-line length at roughly 8191 characters). Sending it anyway would likely fail with Kudu returning ExitCode 1 and Error 'The command line is too long.', which the caller cannot distinguish from a real probe failure. This is almost always caused by long resource FQDNs multiplying across several targets; if this is the connectivity probe, consider it a sign this deployment's resource names are unusually long and would need protocol changes (e.g. writing the remote script to a temp file via Kudu's VFS API instead of -EncodedCommand) to support reliably."
     }
 
     $Body = @{ command = $RemoteCommand; dir = 'site\wwwroot' } | ConvertTo-Json
     # Content-Type goes through -ContentType rather than $Headers - the idiomatic way to set it on
-    # Invoke-RestMethod. (This was tried as a fix for the failure described above before the real cause
-    # - command-line length - was found; keeping it since it is still correct practice, not because it
-    # was the fix.)
+    # Invoke-RestMethod.
     $Headers = @{ Authorization = "Bearer $KuduToken" }
 
     # Exceptions propagate to the caller - it decides what a failed Kudu call means (see the
@@ -2171,9 +2027,7 @@ function Invoke-NmeKuduCommand {
     # Kudu's /api/command returns HTTP 200 even when the remote command itself failed (non-zero exit,
     # or a cmd.exe-level rejection like the command-line-length case above) - ExitCode/Error are the
     # only signal, and Invoke-RestMethod's -ErrorAction Stop above does not see either as an HTTP-level
-    # failure. Surface a non-zero exit as a real error rather than silently returning empty Output,
-    # which is what let the command-line-length bug look like "the probe ran and found nothing" for
-    # three live runs before Write-Verbose logging of these exact fields caught it.
+    # failure. Surface a non-zero exit as a real error rather than silently returning empty Output.
     if ($Response.ExitCode -ne 0) {
         Throw "Invoke-NmeKuduCommand: the remote command on the app service worker exited with code $($Response.ExitCode): $($Response.Error)"
     }
@@ -2185,10 +2039,9 @@ function Test-NmeAppServiceConnectivity {
     # Runs a real connectivity probe from inside the VNet-integrated app service worker: for each
     # target, resolve its FQDN against a specific VNet DNS server and TCP-connect to whatever comes
     # back. This is a probe, not a DNS flush - it proves the DNS server is reachable through VNet
-    # integration and holds the expected record, but it does not change what the app worker process
-    # itself is currently resolving against (that would require restarting the app, which this script
-    # deliberately avoids - explicit DNS-server targeting is what makes a restart or retry loop
-    # unnecessary here).
+    # integration and holds the expected record, but does not change what the app worker process is
+    # currently resolving against (that would require restarting the app, which this script
+    # deliberately avoids; explicit DNS-server targeting is what makes a restart or retry unnecessary).
     param(
         [Parameter(Mandatory=$true)][string]$ScmHost,
         [Parameter(Mandatory=$true)][string[]]$DnsServer,
@@ -2196,8 +2049,8 @@ function Test-NmeAppServiceConnectivity {
     )
 
     # Build the three interpolated lists once, locally, then splice them into a single-quoted (fully
-    # literal) remote script template. Keeping the template single-quoted avoids having to escape `$`
-    # and backtick characters that are meant to be evaluated on the REMOTE side rather than here.
+    # literal) remote script template - single-quoted avoids escaping `$` and backtick characters that
+    # are meant to be evaluated on the REMOTE side rather than here.
     $FqdnList = ($Target | ForEach-Object { "'$($_.Fqdn -replace "'", "''")'" }) -join ','
     $PortMap = ($Target | ForEach-Object { "'$($_.Fqdn -replace "'", "''")'='$($_.Port)'" }) -join ';'
     $DnsServerList = ($DnsServer | ForEach-Object { "'$($_ -replace "'", "''")'" }) -join ','
@@ -2227,11 +2080,9 @@ function Test-NmeAppServiceConnectivity {
     # an over-length command line is NOT an error it surfaces clearly - it returns HTTP 200 with
     # ExitCode 1 and Error "The command line is too long.", which looks from the caller's side exactly
     # like "the probe ran and found nothing reachable" (every result field blank) rather than "the
-    # request itself couldn't run". This bit T01 for real: two earlier (wrong) diagnoses - DNS/VNet
-    # warm-up timing, then an unrelated Content-Type header change - were tried and failed before the
-    # real cause was found via the diagnostic Write-Verbose calls in Invoke-NmeKuduCommand, which log
-    # the raw Response.Error. Keep this template comment-free and as short as correctness allows; do
-    # not "restore readability" by adding comments back inside the @' '@ block below. The commentary
+    # request itself couldn't run" (diagnosable via Invoke-NmeKuduCommand's Write-Verbose output, which
+    # logs the raw Response.Error). Keep this template comment-free and as short as correctness allows;
+    # do not "restore readability" by adding comments back inside the @' '@ block below. The commentary
     # above (outside the string) is the right place for that.
     $RemoteScriptTemplate = @'
 $ErrorActionPreference = 'SilentlyContinue'
@@ -2294,9 +2145,9 @@ foreach ($fqdn in $fqdns) {
 '@
     $RemoteScript = $RemoteScriptTemplate.Replace('__FQDNS__', $FqdnList).Replace('__PORTS__', $PortMap).Replace('__DNSSERVERS__', $DnsServerList)
 
-    # Exceptions from Invoke-NmeKuduCommand propagate to the caller - that is what lets the caller
-    # tell "the probe ran and found a problem" (returned results, some failing) apart from "the probe
-    # could not run at all" (an exception here), which are handled very differently by the gate below.
+    # Exceptions from Invoke-NmeKuduCommand must propagate: the gate below treats "the probe ran and
+    # found a problem" (returned results, some failing) very differently from "the probe could not run
+    # at all" (an exception here).
     $Output = Invoke-NmeKuduCommand -ScmHost $ScmHost -ScriptText $RemoteScript
     $Lines = @()
     if ($Output) {
@@ -2314,19 +2165,18 @@ foreach ($fqdn in $fqdns) {
             $TcpMethod = $Parts[4]
         }
         else {
-            # No line came back for this target at all (e.g. the remote script errored before it got
-            # to this target). Treat exactly like an empty resolution - it fails Pass below.
+            # No line came back for this target (e.g. the remote script errored before reaching it).
+            # Treat exactly like an empty resolution - it fails Pass below.
             $ResolvedIp = ''
             $TcpOk = $false
             $DnsMethod = ''
             $TcpMethod = ''
         }
         # Pass requires BOTH: the resolved IP is non-empty and is one of the private endpoint's
-        # private IPs, AND the TCP connect succeeded. The IP check is not optional and must not be
-        # dropped: at the point this probe runs, public network access has not yet been disabled, so a
-        # target whose DNS still returns its PUBLIC IP would happily pass a TCP-443 connect today,
-        # while being exactly the misconfiguration that causes the outage a minute from now, once
-        # public access actually is disabled and DNS still points at the public endpoint.
+        # private IPs, AND the TCP connect succeeded. The IP check must not be dropped: at the point
+        # this probe runs, public network access has not yet been disabled, so a target whose DNS still
+        # returns its PUBLIC IP would pass a TCP-443 connect today while being exactly the
+        # misconfiguration that causes an outage once public access is actually disabled.
         $Pass = [bool]($ResolvedIp -and (@($t.ExpectedIp) -contains $ResolvedIp) -and $TcpOk)
         $Results += [pscustomobject]@{
             Name       = $t.Name
@@ -2344,24 +2194,23 @@ foreach ($fqdn in $fqdns) {
 }
 
 function Get-NmeKuduFailureBucket {
-    # TEST-PLAN.md §22.3/§22.4: classifies an exception caught around Test-NmeAppServiceConnectivity
-    # (in practice, from Invoke-NmeKuduCommand inside it) into one of three buckets, so the gate below
-    # can treat "the Automation sandbox could not even reach Kudu" as something other than one
-    # undifferentiated soft-fail:
+    # Classifies an exception caught around Test-NmeAppServiceConnectivity (in practice, from
+    # Invoke-NmeKuduCommand inside it) into one of three buckets, so the gate below can treat "could
+    # not even reach Kudu" as something other than one undifferentiated soft-fail:
     #   Bucket 1 - benign: this app's public network access (and therefore its own SCM endpoint) was
     #              already disabled by an earlier run of this script. DNS was already proven by the run
     #              that did that locking down - nothing to verify here.
     #   Bucket 2 - deterministic: will fail on every run against this deployment, not just this one
     #              (the command-too-long guard, or customer-configured SCM access restrictions this
     #              script does not and will not touch). Soft-fails so the script does not become
-    #              permanently un-runnable for a customer in this state. (TEST-PLAN.md §22.3 also
-    #              lists an App Service Environment and a Linux app service as Bucket 2 causes - not
-    #              checked for here, because NME cannot be deployed to either, confirmed 2026-10-06.)
+    #              permanently un-runnable for a customer in this state. (An App Service Environment or
+    #              a Linux app service would also be Bucket 2 causes, but are not checked for here
+    #              because NME cannot be deployed to either.)
     #   Bucket 3 - transient or unclassified: a blip (token failure, SCM still warming up, a 503, a
-    #              timeout, an unexpected status) that a retry is expected to clear. Per §22.4 decision
-    #              4, an unclassified failure is deliberately bucketed here too rather than assumed
-    #              benign - a Throw is one click (Restart Job) away from recovery, where silently
-    #              proceeding on unverified DNS is not.
+    #              timeout, an unexpected status) that a retry is expected to clear. An unclassified
+    #              failure is deliberately bucketed here too rather than assumed benign - a Throw is one
+    #              click (Restart Job) away from recovery, where silently proceeding on unverified DNS
+    #              is not.
     # Classification is deliberately independent of $SkipDNS - whether the probe could reach Kudu has
     # nothing to do with who manages DNS; $SkipDNS only changes how the resulting warning is worded
     # (see Write-NmeConnectivityUnverifiedWarning).
@@ -2380,8 +2229,8 @@ function Get-NmeKuduFailureBucket {
     try { $StatusCode = [int]$Exception.Response.StatusCode } catch {}
 
     if ($StatusCode -in 401, 403) {
-        # Re-check live rather than trust $NmeWebApp, which may be stale relative to this run (and
-        # which an earlier run, not this one, would have been the one to disable public access on).
+        # Re-check live rather than trust $NmeWebApp, which may be stale relative to this run: an
+        # earlier run, not this one, would have been the one to disable public access.
         $PublicNetworkAccessDisabled = $false
         try {
             $PublicNetworkAccessDisabled = (Get-AzResource -ResourceId $WebAppResourceId -ApiVersion '2023-01-01' -ErrorAction Stop).Properties.publicNetworkAccess -eq 'Disabled'
@@ -2409,8 +2258,7 @@ function Get-NmeKuduFailureBucket {
 
 function Write-NmeConnectivityUnverifiedWarning {
     # Shared wording for every "the real connectivity probe could not run, so DNS/reachability is
-    # unverified for this run" case - called from the Bucket 1/2 catch (Get-NmeKuduFailureBucket)
-    # below. TEST-PLAN.md §22.5 bullets 2 and 5.
+    # unverified for this run" case - called from the Bucket 1/2 catch (Get-NmeKuduFailureBucket) below.
     param(
         [Parameter(Mandatory=$true)][string]$Reason,
         [Parameter(Mandatory=$true)][string[]]$DnsServers,
@@ -2427,31 +2275,29 @@ function Write-NmeConnectivityUnverifiedWarning {
 
 function Get-NmeConnectivityExpectedIps {
     # CustomDnsConfigs is NOT a reliable source for a private endpoint's actual private IP - live
-    # testing (T01, P1-16) found it persistently empty (not just briefly, immediately after creation:
-    # still empty when re-checked several minutes later, well past any DNS-propagation window) on
-    # every endpoint in this deployment, key vault and sql alike, despite each having a fully correct
-    # private-dns-zone-group and a real A record already resolving to the right address. Azure does
-    # not populate this field for every private endpoint/resource-type combination - it is informational
-    # metadata about the DNS integration Azure itself set up, not a guaranteed property of the endpoint.
-    # The one value that is always present and authoritative once the endpoint exists is the private IP
-    # on its own network interface's IP configuration - fetched here as the fallback, and used first if
-    # CustomDnsConfigs is empty, since empty turned out to be the common case rather than the exception.
+    # testing found it persistently empty (still empty when re-checked minutes later, well past any
+    # DNS-propagation window) on every endpoint in this deployment, key vault and sql alike, despite
+    # each having a fully correct private-dns-zone-group and a real A record already resolving
+    # correctly. Azure does not populate this field for every private endpoint/resource-type
+    # combination - it is informational metadata about the DNS integration Azure itself set up, not a
+    # guaranteed property of the endpoint. The one value that is always present and authoritative once
+    # the endpoint exists is the private IP on its own network interface's IP configuration - fetched
+    # here as the fallback, and used first if CustomDnsConfigs is empty, since empty turned out to be
+    # the common case rather than the exception.
     #
-    # TEST-PLAN.md §22.5a: matches on PrivateLinkServiceId + GroupId only - deliberately NOT scoped to
-    # a subnet, unlike every other caller of Find-NmeExistingPrivateEndpoint (which is why this
-    # function does its own inline filtering below instead of calling that shared function). In a
-    # hub-and-spoke deployment with customer-managed DNS (the SkipDNS=true case), the customer's own
-    # private endpoint for an NME resource can legitimately live in a different VNet/subnet than the
-    # one this script manages, and the customer's DNS correctly resolves to it. Scoping the expected-IP
-    # list to this script's own subnet - correct for Find-NmeExistingPrivateEndpoint's create/
-    # idempotency callers, where a same-name endpoint in another subnet really is a different resource
-    # - would make the connectivity probe see a resolved IP that is not on its "expected" list for a
-    # perfectly healthy deployment, and the gate would Throw on a correctly configured customer, not a
-    # broken one. The TCP-connect check in Test-NmeAppServiceConnectivity still has to succeed against
-    # whatever IP was resolved, so an endpoint that resolves but is genuinely unreachable (wrong VNet,
-    # no peering/routing) still fails the probe correctly - widening what counts as "expected" here
-    # does not weaken that check. Not reproduced live as of 2026-10-05: this lab has no hub-and-spoke
-    # fixture and no second private endpoint for any NME resource (see TEST-PLAN.md §22.5a).
+    # Matches on PrivateLinkServiceId + GroupId only - deliberately NOT scoped to a subnet, unlike every
+    # other caller of Find-NmeExistingPrivateEndpoint (which is why this function does its own inline
+    # filtering below instead of calling that shared function). In a hub-and-spoke deployment with
+    # customer-managed DNS (the SkipDNS=true case), the customer's own private endpoint for an NME
+    # resource can legitimately live in a different VNet/subnet than the one this script manages, and
+    # the customer's DNS correctly resolves to it. Scoping the expected-IP list to this script's own
+    # subnet - correct for Find-NmeExistingPrivateEndpoint's create/idempotency callers, where a
+    # same-name endpoint in another subnet really is a different resource - would make the connectivity
+    # probe see a resolved IP that is not on its "expected" list for a perfectly healthy deployment, and
+    # the gate would Throw on a correctly configured customer, not a broken one. The TCP-connect check
+    # in Test-NmeAppServiceConnectivity still has to succeed against whatever IP was resolved, so an
+    # endpoint that resolves but is genuinely unreachable (wrong VNet, no peering/routing) still fails
+    # the probe correctly - widening what counts as "expected" here does not weaken that check.
     param(
         [Parameter(Mandatory=$true)][AllowNull()][AllowEmptyCollection()]$PrivateEndpoints,
         [Parameter(Mandatory=$true)][string]$PrivateLinkServiceId,
@@ -2462,7 +2308,6 @@ function Get-NmeConnectivityExpectedIps {
         @($Connections | Where-Object { $_.PrivateLinkServiceId -eq $PrivateLinkServiceId -and $_.GroupIds -contains $GroupId }).Count -gt 0
     } | Sort-Object Id)
     $Ips = @()
-    # DNS may return any matching PE when more than one serves this resource.
     foreach ($MatchedEndpoint in $MatchedEndpoints) {
         $DnsIps = @($MatchedEndpoint.CustomDnsConfigs.IpAddresses | Where-Object { $_ })
         if ($DnsIps.Count -gt 0) {
@@ -2499,14 +2344,10 @@ catch {
 
 # Check if vnet created. Nerdio Manager's own resource group is searched first, deliberately: a
 # subscription-wide lookup by name alone will happily bind an unrelated VNet that merely shares the
-# name, in a resource group belonging to a different deployment or a different team. That is not
-# hypothetical - it was found live on a shared test subscription, where an unrelated
-# 'nmw-private-vnet' in another resource group (created by someone else running this same script with
-# its default parameters, so it even had the same address range) was picked up by a greenfield run.
-# Only the region check below stopped it; had that VNet been in NME's region, this script would have
-# created every private endpoint, linked every DNS zone, and VNet-integrated Nerdio Manager into a
-# stranger's network. The >1-match Throw is no protection against it, because a single match in the
-# wrong resource group looks unambiguous.
+# name, in a resource group belonging to a different deployment or team - and the region check below
+# is the only thing that would catch it, since a single match in the wrong resource group looks
+# unambiguous to the >1-match Throw. A false match here would create every private endpoint, link
+# every DNS zone, and VNet-integrate Nerdio Manager into a network this deployment does not own.
 $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $NmeRg -ErrorAction SilentlyContinue
 if (-not $VNet) {
     # Not in NME's resource group. An existing VNet elsewhere is explicitly supported (see the
@@ -2527,10 +2368,10 @@ if ($VNet) {
     # Region check runs here, before any subnet is added below, so a wrong-region VNet is rejected
     # without this script having modified the customer's existing VNet at all. App Service regional
     # VNet integration requires the VNet to be in the same region as the app service plan, so a
-    # mismatch can never succeed - confirmed live (T09), where the pre-fix behavior warned and
-    # carried on to create 16 private endpoints and 6 DNS zones before ARM rejected the integration
-    # with "Location <x> of virtual network <y> does not match requested location <z>". The
-    # VNet-creation branch below needs no equivalent check: it creates the VNet in $NmeRegion.
+    # mismatch can never succeed; checking late instead would mean 16 private endpoints and 6 DNS zones
+    # already created before ARM rejects the integration with "Location <x> of virtual network <y>
+    # does not match requested location <z>". The VNet-creation branch below needs no equivalent check:
+    # it creates the VNet in $NmeRegion.
     if ($VNet.Location -ne $NmeRegion) {
         throw "The VNet '$PrivateLinkVnetName' is in region '$($VNet.Location)' but Nerdio Manager is deployed in '$NmeRegion'. App Service regional VNet integration requires the VNet to be in the same region as the app service plan, so this run cannot succeed. Use a VNet in the '$NmeRegion' region."
     }
@@ -2615,10 +2456,10 @@ $VnetLocation = $VNet.Location
 # a different resource group than NME, and fetching by name alone can match VNets in other groups.
 $VnetRg = $VNet.ResourceGroupName
 
-# Resolved once here, after $VNet exists: the "exclude the private endpoint VNet itself" filter
-# below needs $VNet.id, and this used to run before $VNet was assigned, so the filter silently
-# excluded nothing. If this VNet is also linked in NME it would then land in the peer list and
-# the DNS zone link loops would try to link it to a zone it was already linked to.
+# Resolved here, after $VNet exists: the "exclude the private endpoint VNet itself" filter below
+# needs $VNet.Id. Resolving before $VNet is assigned silently excludes nothing, so this VNet (if also
+# linked in NME) lands in the peer list and the DNS zone link loops try to link it to a zone it is
+# already linked to.
 if ($PeerVnetIds -eq 'All') {
     $VnetIds = Get-AzVirtualNetwork |
         Where-Object { $null -ne $_.Tag } |
@@ -2664,9 +2505,9 @@ if ($CssaStorageAccount -ne 'Public' -and -not $NmeScriptedActionsStorageAccount
 }
 
 function Get-NmePeerVnetLinkName {
-    # Private DNS zone link names must be stable across runs: naming them by an index that restarts
-    # at 0 each run meant a peer VNet added later reused an existing name that pointed at a different
-    # VNet, and Azure rejected it. Deriving the name from the peer VNet makes it idempotent.
+    # Private DNS zone link names must be derived from the peer VNet, not a per-run index: an index
+    # that restarts at 0 each run can reuse a name that already points at a different VNet, and Azure
+    # rejects it. Deriving the name from the peer VNet keeps it stable and idempotent across runs.
     param(
         [Parameter(Mandatory=$true)][string]$BaseName,
         [Parameter(Mandatory=$true)][string]$VnetResourceId
@@ -2722,8 +2563,8 @@ function Get-NmeLinkedNetworkSubnetIds {
     # service principal can read - not just the one NME runs in. The firewall rule types this feeds
     # (storage VirtualNetworkRule, App Service access-restriction rule) are both scoped to a specific
     # subnet and only take effect if that subnet has the caller's required service endpoint enabled;
-    # this function does not enable it on subnets it doesn't own (see the P2-10 precedent for why),
-    # it only reports and skips subnets that lack it.
+    # this function does not enable it on subnets it doesn't own, it only reports and skips subnets
+    # that lack it.
     #
     # Returns a single [PSCustomObject] (see the return statement below), not a bare array - callers
     # need the counts to report coverage gaps, not just the surviving subnet ids. Emits nothing to
@@ -2759,17 +2600,16 @@ function Get-NmeLinkedNetworkSubnetIds {
         }
         catch {
             # The per-subscription try/catch blocks below already contain a throttling or RBAC
-            # failure on one subscription's Set-AzContext or Get-AzVirtualNetwork call - but
-            # Get-AzSubscription itself runs once, before the loop even starts, so its failure has no
-            # per-subscription catch to land in. Left unguarded, this is the exact same failure class
-            # that the Add-AzStorageAccountNetworkRule loop (CssaStorageAccount=Restricted) and the
-            # Add-AzWebAppAccessRestrictionRule loop (RtiAppService=Restricted) were fixed to contain -
-            # and this function is called from inside the make-private region, after the primary key
-            # vault and SQL server are already locked down, so an unhandled failure here would abort
-            # the run mid-region and leave the deployment half-configured, exactly what those two loops
-            # exist to prevent. Setting $Subscriptions to an empty array rather than rethrowing lets
-            # the foreach below simply not run, so this function still returns its normal result object
-            # (LinkedVnetCount = 0) instead of propagating.
+            # failure on one subscription's Set-AzContext or Get-AzVirtualNetwork call, but
+            # Get-AzSubscription itself runs once, before the loop starts, so its failure has no
+            # per-subscription catch to land in. Left unguarded, this is the same failure class the
+            # Add-AzStorageAccountNetworkRule loop (CssaStorageAccount=Restricted) and the
+            # Add-AzWebAppAccessRestrictionRule loop (RtiAppService=Restricted) are built to contain -
+            # and this function runs after the primary key vault and SQL server are already locked
+            # down, so an unhandled failure here would abort the run mid-region and leave the
+            # deployment half-configured. Setting $Subscriptions to an empty array rather than
+            # rethrowing lets the foreach below simply not run, so this function still returns its
+            # normal result object (LinkedVnetCount = 0) instead of propagating.
             Write-Warning "Could not enumerate the subscriptions this service principal can read, so no LINKED_NETWORK VNet could be looked for in any subscription: $($_.Exception.Message) The caller will apply no firewall changes as a result."
             $UnreadableSubscriptions += 'all subscriptions (the subscription list itself could not be read)'
             $Subscriptions = @()
@@ -2782,14 +2622,12 @@ function Get-NmeLinkedNetworkSubnetIds {
                 Write-Warning "Skipping subscription '$($Subscription.Name)' ($($Subscription.Id)) while looking for LINKED_NETWORK VNets: could not set context. $($_.Exception.Message)"
                 continue
             }
-            # -ErrorAction Stop (rather than the SilentlyContinue this used to carry) is required for
-            # the catch below to fire - $ErrorActionPreference = 'Stop' does not apply to a cmdlet
-            # call that already has its own explicit -ErrorAction. SilentlyContinue made an
-            # authorization or throttling failure here indistinguishable from "this subscription
-            # simply has no linked VNets", so a subscription the service principal cannot enumerate
-            # contributed nothing and said nothing. One subscription's failure must not abort
-            # discovery in every other subscription, so it is recorded and the loop continues rather
-            # than propagating.
+            # -ErrorAction Stop is required for the catch below to fire: $ErrorActionPreference =
+            # 'Stop' does not apply to a cmdlet call that already has its own explicit -ErrorAction, so
+            # SilentlyContinue here would make an authorization or throttling failure indistinguishable
+            # from "this subscription simply has no linked VNets". One subscription's failure must not
+            # abort discovery in every other subscription, so it is recorded and the loop continues
+            # rather than propagating.
             try {
                 $LinkedVnets = Get-AzVirtualNetwork -ErrorAction Stop |
                     Where-Object { $null -ne $_.Tag } |
@@ -2820,12 +2658,11 @@ function Get-NmeLinkedNetworkSubnetIds {
                     Write-Warning "LINKED_NETWORK VNet '$($LinkedVnet.Name)' (subscription $($Subscription.Id)) has no subnet with the $($ServiceEndpointNames -join ' or ') service endpoint enabled, so $PurposeDescription cannot allow any of it through. Subnet(s) checked: $CheckedSubnetNames. Every host on this VNet will lose access over the public endpoint. $RemedyHint"
                 }
                 elseif ($MissingSubnets.Count) {
-                    # (b) Partially covered - the gap this spec closes. Without this warning, the
-                    # subnets in $MissingSubnets are dropped from the allow-list below with nothing
-                    # in the job log to say so. This is the most likely real-world shape (an admin
-                    # enabled the endpoint on the one subnet they were thinking about) and the most
-                    # damaging: it looks identical to full coverage until a session host on the
-                    # denied subnet fails.
+                    # (b) Partially covered. Without this warning, the subnets in $MissingSubnets are
+                    # dropped from the allow-list below with nothing in the job log to say so. This is
+                    # the most likely real-world shape (an admin enabled the endpoint on the one subnet
+                    # they were thinking about) and the most damaging: it looks identical to full
+                    # coverage until a session host on the denied subnet fails.
                     Write-Warning "LINKED_NETWORK VNet '$($LinkedVnet.Name)' (subscription $($Subscription.Id)) is only partially covered by $($PurposeDescription): $($EnabledSubnets.Count) subnet(s) have the $($ServiceEndpointNames -join ' or ') service endpoint enabled and will be allowed through ($(Get-NmeCappedNameList -Names $EnabledSubnets.Name)), but $($MissingSubnets.Count) do not and will be denied ($(Get-NmeCappedNameList -Names $MissingSubnets.Name)). Hosts on the denied subnet(s) will lose access over the public endpoint. $RemedyHint"
                 }
                 # (c) Everything eligible: emit nothing here. The caller reports the totals from the
@@ -2841,7 +2678,7 @@ function Get-NmeLinkedNetworkSubnetIds {
         Set-AzContext -Context $OriginalContext | Out-Null
     }
     return [PSCustomObject]@{
-        # Unchanged from today's return value: the eligible subnet ids, de-duplicated.
+        # The eligible subnet ids, de-duplicated.
         AllowedSubnetIds         = @($SubnetIds | Select-Object -Unique)
         # Non-reserved subnets on linked VNets that lack the service endpoint - i.e. exactly the
         # subnets that were warned about above, and exactly the ones that lose access under default-deny.
@@ -2860,17 +2697,14 @@ function Get-NmeLinkedNetworkSubnetIds {
 function Get-NmeAccessRestrictionRuleName {
     # Stable, derived from the subnet's resource id so the same subnet always maps to the same rule
     # name across runs - an index-based name collides the moment the set of linked subnets changes
-    # between runs (see P1-6 for the same bug in DNS zone link names). Length-capped for the App
-    # Service rule-name limit; the hash suffix keeps same-prefix names distinct.
+    # between runs (the same trap as the DNS zone link names above). Length-capped for the App Service
+    # rule-name limit; the hash suffix keeps same-prefix names distinct.
     #
-    # The authoritative Azure limit for an access-restriction rule name could not be confirmed against
-    # documentation or the Az module (Add-AzWebAppAccessRestrictionRule's -Name parameter carries no
-    # length or character-set validation). 32 characters is used here as a conservative cap - well
-    # under every candidate figure seen for App Service name-like fields - rather than risk a run-time
-    # rejection from a limit that turns out to be lower than assumed. If Azure accepts longer names in
-    # practice, this only means the readable prefix is shorter than it could be; it does not affect
-    # correctness, since the hash suffix guarantees uniqueness regardless of where the truncation cut
-    # falls.
+    # The Az module places no length or character-set validation on Add-AzWebAppAccessRestrictionRule's
+    # -Name parameter, and the authoritative Azure limit is not documented. 32 characters is used here
+    # as a conservative cap, well under every candidate figure seen for App Service name-like fields;
+    # the hash suffix guarantees uniqueness regardless of where the truncation cut falls, so a higher
+    # real limit would only mean the readable prefix is shorter than it could be.
     param(
         [Parameter(Mandatory=$true)][string]$SubnetId
     )
@@ -2904,7 +2738,6 @@ if (-not $SkipDNS) {
     }
     if ($KeyVaultDnsZone) { 
         Write-Output "Found Private DNS Zone for Key Vault"
-        #check for linked zone
         $KeyVaultZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $KeyVaultDnsZoneName -ErrorAction SilentlyContinue
         if ($KeyVaultZoneLink.VirtualNetworkId -contains $VNet.id) {
             Write-Output "Private DNS Zone for Key Vault already linked to vnet"
@@ -2923,7 +2756,6 @@ if (-not $SkipDNS) {
     # Create and link private dns zone for sql 
     if ($SqlDnsZone) {
         Write-Output "Found Private DNS Zone for SQL"
-        # check for linked zone
         $SqlZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $SqlDnsZoneName -ErrorAction SilentlyContinue
         if ($SqlZoneLink.VirtualNetworkId -contains $VNet.id) {
             Write-Output "Private DNS Zone for SQL already linked to vnet"
@@ -2941,7 +2773,6 @@ if (-not $SkipDNS) {
 
     if ($StorageDnsZone) {
         Write-Output "Found Private DNS Zone for Storage"
-        # check for linked zone
         $StorageZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $StorageDnsZoneName -ErrorAction SilentlyContinue
         if ($StorageZoneLink.VirtualNetworkId -contains $VNet.id) {
             Write-Output "Private DNS Zone for Storage already linked to vnet"
@@ -2961,7 +2792,6 @@ if (-not $SkipDNS) {
     if ($NmeRtiStorageAccountName) {
         if ($TableDnsZone) {
             Write-Output "Found Private DNS Zone for Table Storage"
-            # check for linked zone
             $TableZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $TableDnsZoneName -ErrorAction SilentlyContinue
             if ($TableZoneLink.VirtualNetworkId -contains $VNet.id) {
                 Write-Output "Private DNS Zone for Table Storage already linked to vnet"
@@ -2978,10 +2808,8 @@ if (-not $SkipDNS) {
         }
     }
 
-    # Create and link private dns zone for automation account
     if ($AutomationDnsZone) {
         Write-Output "Found Private DNS Zone for Automation"
-        # check for linked zone
         $AutomationZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $AutomationDnsZoneName -ErrorAction SilentlyContinue
         if ($AutomationZoneLink.VirtualNetworkId -contains $VNet.id) {
             Write-Output "Private DNS Zone for Automation already linked to vnet"
@@ -2997,10 +2825,8 @@ if (-not $SkipDNS) {
         $AutomationZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $NmeRg -ZoneName $AutomationDnsZoneName -Name $AutomationZoneLinkName -VirtualNetworkId $VNet.Id
     }
 
-    # Create and link private dns zone for app service
     if ($AppServiceDnsZone) {
         Write-Output "Found Private DNS Zone for App Service"
-        # check for linked zone
         $AppServiceZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $AppServiceDnsZoneName -ErrorAction SilentlyContinue
         if ($AppServiceZoneLink.VirtualNetworkId -contains $VNet.id) {
             Write-Output "Private DNS Zone for App Service already linked to vnet"
@@ -3025,17 +2851,11 @@ if (-not $SkipDNS) {
                 $BlobStoragePrivateDnsZoneLink = New-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $StorageDnsZoneName -Name (Get-NmePeerVnetLinkName -BaseName $BlobStoragePrivateDnsZoneLinkName -VnetResourceId $vnetId) -VirtualNetworkId $vnetId
             }
         }
-        # The app service private DNS zone is shared by all four web apps (NME, CCL, Intune Insights and RTI) -
-        # they all resolve the same *.azurewebsites.net/.us hostname pattern through this one zone. So a peer
-        # VNet needs this link whenever ANY of those app services is made private, not only the primary one -
-        # and RtiAppService=Restricted needs it too, not just Private: a peered VNet that resolves RTI's FQDN
-        # to the private endpoint reaches it over the private path (bypassing the firewall entirely), while a
-        # non-peered VNet instead needs the Restricted firewall rule from the switch below. Both paths are
-        # intended and this link is cheap to create, so it is added whenever RtiAppService is not Public.
-        # Without this, RtiAppService=Restricted or Private with MakeAppServicePrivate=false would leave RTI
-        # firewalled or private while peered VNets (e.g. an AVD VNet) remain unable to resolve its FQDN - the
-        # exact silent-failure scenario the RtiAppService parameter description warns about, for the one
-        # population that was supposed to be recoverable by peering.
+        # The app service private DNS zone is shared by all four web apps (NME, CCL, Intune Insights,
+        # RTI), so a peer VNet needs this link whenever ANY of them is made private or restricted, not
+        # only the primary one. RtiAppService=Restricted needs it too: a peered VNet that resolves RTI's
+        # FQDN to the private endpoint reaches it over the private path, bypassing the firewall rule
+        # entirely - without this link that VNet could not resolve RTI's FQDN at all.
         if ($MakeAppServicePrivate -or ($RtiAppService -ne 'Public')){
             $AppServicePrviateDnsZoneLink = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $DnsRg -ZoneName $AppServiceDnsZoneName -ErrorAction SilentlyContinue
             $AppServiceMissingLinks = $VnetIds | Where-Object { $AppServicePrviateDnsZoneLink.VirtualNetworkId -notcontains $_ }
@@ -3056,16 +2876,12 @@ if (-not $SkipDNS) {
 Write-Output "DNS zones and links region completed in $([math]::Round(((Get-Date) - $RegionStart).TotalSeconds, 1)) seconds"
 #endregion
 
-# Storage sub-resource -> resolved private DNS zone object, built here rather than immediately after
-# the zone objects are first resolved: on a greenfield run $StorageDnsZone/$TableDnsZone are $null at
-# that point and only get assigned real zone objects inside the "create DNS zones and links" region
-# above (New-AzPrivateDnsZone). A hashtable literal copies the variable's value at construction time,
-# not a live reference to the variable, so building this map before that region ran was capturing the
-# pre-creation $null and handing New-NmeStoragePrivateEndpoint a zone with no ResourceId - which is
-# exactly the "Cannot validate argument on parameter 'PrivateDnsZoneId'" failure this caused on a
-# real greenfield run. Must stay after the DNS zone creation region. $TableDnsZone is only resolved/
-# created when $NmeRtiStorageAccountName is set, so it may still be $null here - that matches today's
-# behavior, since nothing but the RTI account uses the table zone.
+# Storage sub-resource -> resolved private DNS zone object. Must be built after the DNS zone creation
+# region above, not immediately after $StorageDnsZone/$TableDnsZone are first resolved: a hashtable
+# literal copies each variable's value at construction time, not a live reference, so building this map
+# earlier captures the pre-creation $null and hands New-NmeStoragePrivateEndpoint a zone with no
+# ResourceId (fails with "Cannot validate argument on parameter 'PrivateDnsZoneId'"). $TableDnsZone
+# stays $null here unless $NmeRtiStorageAccountName is set - nothing else uses the table zone.
 $StorageSubresourceDnsZones = @{
     blob  = $StorageDnsZone
     table = $TableDnsZone
@@ -3078,24 +2894,21 @@ $StorageSubresourceDnsZones = @{
 # continue to the make-private region with an incomplete endpoint set.
 $script:NmeFailedEndpointComponents = @()
 
-# E-5 Phase B. The component descriptors New-NmeComponentPrivateEndpoint and
-# New-NmeStoragePrivateEndpoint enqueue instead of acting on directly, drained by
-# Invoke-NmeEndpointComponentQueue at the end of the region below. The call sites keep their original
-# shape and their original message strings; what changed is that the work is now done in two batched
-# stages (endpoints, then DNS zone groups) rather than one component at a time. Table order is the
-# order the call sites run in, and every customer-visible message is still emitted in that order
-# regardless of which job finishes first.
+# Component descriptors that New-NmeComponentPrivateEndpoint and New-NmeStoragePrivateEndpoint enqueue
+# instead of acting on directly; drained by Invoke-NmeEndpointComponentQueue at the end of the region
+# below, which creates endpoints and DNS zone groups as two batched stages rather than one component at
+# a time. Table order is call-site order, so every customer-visible message is still emitted in that
+# order regardless of which job finishes first.
 $script:NmePendingEndpointComponents = @()
 
 #region create private endpoints
 $RegionStart = Get-Date
 # Whether this Automation account's Az.Network is new enough to create endpoints concurrently.
 # Measured at runtime rather than assumed: the sandbox's module version is whatever the customer's
-# automation account happens to have, and it is older than a current workstation's (7.3.0 against
-# 7.26.0 when this was written). Resolved here rather than at the top of the file because
-# Get-Command would force an Az.Network auto-load before the module preflight above has had its say.
-# When false, every create below runs one at a time, exactly as it did before E-5 Phase B, and one
-# line in the log says why.
+# automation account happens to have, and can lag a current workstation's (seen as low as 7.3.0 against
+# 7.26.0). Resolved here rather than at the top of the file because Get-Command would force an
+# Az.Network auto-load before the module preflight above has had its say. When false, every create
+# below runs one at a time, and one line in the log says why.
 $script:NmeSupportsAsJob = (Get-Command New-AzPrivateEndpoint).Parameters.ContainsKey('AsJob') -and
                            (Get-Command New-AzPrivateDnsZoneGroup).Parameters.ContainsKey('AsJob')
 if (-not $script:NmeSupportsAsJob) {
@@ -3107,7 +2920,6 @@ if (-not $script:NmeSupportsAsJob) {
 $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
 $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet
  
-# check if keyvault private endpoint created
 $KeyVault = Get-AzKeyVault -VaultName $KeyVaultName -ErrorAction SilentlyContinue
 New-NmeComponentPrivateEndpoint -TargetResourceId $KeyVault.ResourceId -GroupId vault `
     -FindDisplayName "the Nerdio Manager key vault" `
@@ -3117,9 +2929,7 @@ New-NmeComponentPrivateEndpoint -TargetResourceId $KeyVault.ResourceId -GroupId 
     -FoundDnsZoneGroupMessage "Found Key Vault DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring keyvault DNS zone group" `
     -SkipDnsZoneGroupMessage "Skipping Key Vault DNS zone group configuration (SkipDNS enabled)"
 
-# check if ccl key vault exists
 if ($NmeCclKeyVaultName) {
-    # get ccl key vault
     $NmeCclKeyVault = Get-AzKeyVault -VaultName $NmeCclKeyVaultName
     New-NmeComponentPrivateEndpoint -TargetResourceId $NmeCclKeyVault.ResourceId -GroupId vault `
         -FindDisplayName "the CCL key vault" `
@@ -3130,9 +2940,7 @@ if ($NmeCclKeyVaultName) {
         -SkipDnsZoneGroupMessage "Skipping CCL Key Vault DNS zone group configuration (SkipDNS enabled)"
 }
 
-# check if intune insights key vault exists
 if ($NmeIiKeyVaultName) {
-    # get intune insights key vault
     $NmeIiKeyVault = Get-AzKeyVault -VaultName $NmeIiKeyVaultName
     New-NmeComponentPrivateEndpoint -TargetResourceId $NmeIiKeyVault.ResourceId -GroupId vault `
         -FindDisplayName "the Intune Insights key vault" `
@@ -3145,7 +2953,6 @@ if ($NmeIiKeyVaultName) {
 
 $SqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeSqlServerName
 
-#check if sql private endpoint created
 New-NmeComponentPrivateEndpoint -TargetResourceId $SqlServer.ResourceId -GroupId sqlserver `
     -FindDisplayName "the Nerdio Manager sql server" `
     -FoundMessage "Found SQL private endpoint" -ConfiguringMessage "Configuring sql service connection and private endpoint" `
@@ -3154,7 +2961,6 @@ New-NmeComponentPrivateEndpoint -TargetResourceId $SqlServer.ResourceId -GroupId
     -FoundDnsZoneGroupMessage "Found SQL DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring sql DNS zone group" `
     -SkipDnsZoneGroupMessage "Skipping SQL DNS zone group configuration (SkipDNS enabled)"
 
-# if $nmeIisqlServerName is set, create private endpoint for intune insights sql server
 if ($NmeIiSqlServerName) {
     $IiSqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeIiSqlServerName
     New-NmeComponentPrivateEndpoint -TargetResourceId $IiSqlServer.ResourceId -GroupId sqlserver `
@@ -3167,7 +2973,6 @@ if ($NmeIiSqlServerName) {
 }
 
 
-# check if automation account private endpoint is created
 $NmeAutomationAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Automation/automationAccounts/$NmeAutomationAccountName"
 New-NmeComponentPrivateEndpoint -TargetResourceId $NmeAutomationAccountResourceId -GroupId DSCAndHybridWorker `
     -FindDisplayName "the Nerdio Manager automation account" `
@@ -3178,7 +2983,6 @@ New-NmeComponentPrivateEndpoint -TargetResourceId $NmeAutomationAccountResourceI
     -SkipDnsZoneGroupMessage "Skipping Automation DNS zone group configuration (SkipDNS enabled)"
 
 
-# Get scripted action automation account
        
 if ($NmeScriptedActionsAccountName) {
     $ScriptedActionsAccountResourceId = "/subscriptions/$NmeSubscriptionId/resourceGroups/$NmeRg/providers/Microsoft.Automation/automationAccounts/$NmeScriptedActionsAccountName"
@@ -3192,12 +2996,11 @@ if ($NmeScriptedActionsAccountName) {
 
     if ($CssaStorageAccount -ne 'Public') {
         # Both Private and Restricted need the private endpoint - only Public skips it.
-        # Get scripted actions storage account (resolved in Set-NmeVars via tag, then name pattern, then the NMW_RESOURCE fallback tag)
-        # The $null case is already handled by the CssaStorageAccount -ne 'Public' check near the
-        # PeerVnetIds validation above, which covers this site and the two make-private branches
-        # together; it used to be guarded here, which left those two uncovered.
+        # Resolved in Set-NmeVars via tag, then name pattern, then the NMW_RESOURCE fallback tag.
+        # The $null case is handled by the CssaStorageAccount -ne 'Public' check near the PeerVnetIds
+        # validation above, which covers this site and the two make-private branches together - do not
+        # add a narrower guard here, it would leave those two branches uncovered.
         $ScriptedActionsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeScriptedActionsStorageAccountName -ErrorAction SilentlyContinue
-        # throw error if no scripted actions storage account found
         if (-not $ScriptedActionsStorageAccount) {
             throw "No scripted actions storage account found in resource group $NmeRg. Please add the tag '$NmeResourceTagName' with value 'CUSTOM_SCRIPTS_STORAGE_ACCOUNT' to the scripted actions storage account used by Nerdio Manager and rerun this script."
         }
@@ -3208,7 +3011,6 @@ if ($NmeScriptedActionsAccountName) {
 }
 
 if ($NmeCclStorageAccountName) {
-    # Get ccl storage account
     $NmeCclStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeCclStorageAccountName
     New-NmeStoragePrivateEndpoint -StorageAccount $NmeCclStorageAccount -Subresource blob `
         -PrivateEndpointName $CclStoragePrivateEndpointName -ServiceConnectionName $CclStorageServiceConnectionName `
@@ -3216,7 +3018,6 @@ if ($NmeCclStorageAccountName) {
 }
 
 if ($NmeDpsStorageAccountName) {
-    # Get dps storage account
     $NmeDpsStorageAccount = Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $NmeDpsStorageAccountName
     New-NmeStoragePrivateEndpoint -StorageAccount $NmeDpsStorageAccount -Subresource blob `
         -PrivateEndpointName $DpsStoragePrivateEndpointName -ServiceConnectionName $DpsStorageServiceConnectionName `
@@ -3228,7 +3029,6 @@ else {
 
 
 $AppService = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeWebApp.Name
-# check if app service private endpoint is created
 New-NmeComponentPrivateEndpoint -TargetResourceId $AppService.id -GroupId sites `
     -FindDisplayName "the Nerdio Manager app service" `
     -FoundMessage "Found App Service private endpoint" -ConfiguringMessage "Configuring app service service connection and private endpoint" `
@@ -3248,7 +3048,6 @@ if ($NmeCclWebAppName) {
         -FoundDnsZoneGroupMessage "Found CCL App Service DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring CCL app service DNS zone group" `
         -SkipDnsZoneGroupMessage "Skipping CCL App Service DNS zone group configuration (SkipDNS enabled)"
 }
-# add section for NmeiiWebApp
 if ($NmeIiWebAppName) {
     $IiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeIiWebAppName
     New-NmeComponentPrivateEndpoint -TargetResourceId $IiWebApp.id -GroupId sites `
@@ -3261,7 +3060,6 @@ if ($NmeIiWebAppName) {
 
 }
 
-# add private endpoints for real time insights app service
 if ($NmeRtiWebAppName) {
     $RtiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeRtiWebAppName
     New-NmeComponentPrivateEndpoint -TargetResourceId $RtiWebApp.id -GroupId sites `
@@ -3272,7 +3070,6 @@ if ($NmeRtiWebAppName) {
         -FoundDnsZoneGroupMessage "Found RTI App Service DNS zone group" -ConfiguringDnsZoneGroupMessage "Configuring RTI app service DNS zone group" `
         -SkipDnsZoneGroupMessage "Skipping RTI App Service DNS zone group configuration (SkipDNS enabled)"
 }
-# add private endpoints for real time insights sql server
 if ($NmeRtiSqlServerName) {
     $RtiSqlServer = Get-AzSqlServer -ResourceGroupName $NmeRg -ServerName $NmeRtiSqlServerName
     New-NmeComponentPrivateEndpoint -TargetResourceId $RtiSqlServer.ResourceId -GroupId sqlserver `
@@ -3294,9 +3091,7 @@ if ($NmeRtiStorageAccountName) {
         -PrivateEndpointName $RtiTableStoragePrivateEndpointName -ServiceConnectionName $RtiTableStorageServiceConnectionName `
         -DnsZoneGroupName $RtiTableStorageDnsZoneGroupName -DisplayName 'RTI'
 }
-# add private endpoint for real time insights key vault
 if ($NmeRtiKeyVaultName) {
-    # Get rti key vault
     $NmeRtiKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -VaultName $NmeRtiKeyVaultName
     New-NmeComponentPrivateEndpoint -TargetResourceId $NmeRtiKeyVault.ResourceId -GroupId vault `
         -FindDisplayName "the RTI key vault" `
@@ -3307,8 +3102,8 @@ if ($NmeRtiKeyVaultName) {
         -SkipDnsZoneGroupMessage "Skipping RTI Key Vault DNS zone group configuration (SkipDNS enabled)"
 }
 
-# Everything above only ENQUEUED work (E-5 Phase B). This is where it actually happens, in two
-# batched stages over the queue in table order.
+# Everything above only ENQUEUED work. This is where it actually happens, in two batched stages over
+# the queue in table order.
 Invoke-NmeEndpointComponentQueue
 
 Write-Output "Private endpoints region completed in $([math]::Round(((Get-Date) - $RegionStart).TotalSeconds, 1)) seconds"
@@ -3318,15 +3113,14 @@ if ($script:NmeFailedEndpointComponents.Count) {
     foreach ($f in $script:NmeFailedEndpointComponents) {
         Write-Output "  FAILED: $($f.Component) - $($f.Reason)"
     }
-    # Deliberately fatal, and deliberately fatal HERE. Every component was attempted first, so one run
-    # now reports every problem instead of surfacing them one per run (T01 in the first test pass took
-    # seven attempts for exactly this reason). But the run must still stop before the make-private
-    # region: disabling public network access on a resource whose private endpoint does not exist
-    # strands Nerdio Manager from its own key vault/sql/storage with no in-product recovery. The P2-1
-    # connectivity gate is not sufficient cover - it probes only the key vault, primary sql server and
-    # DPS storage account, so a failed CCL / Intune Insights / RTI endpoint would pass the gate and
-    # then be locked down. Stopping here also avoids the VNet-integration write that would trigger an
-    # NME resubmission of a run already known to be incomplete (P1-24).
+    # Deliberately fatal, and deliberately fatal HERE: every component is attempted first, so one run
+    # reports every problem at once rather than one per run. The run must still stop before the
+    # make-private region - disabling public access on a resource with no private endpoint strands
+    # Nerdio Manager from its own key vault/sql/storage with no in-product recovery. The connectivity
+    # gate below is not sufficient cover: it probes only the key vault, primary sql server and DPS
+    # storage account, so a failed CCL / Intune Insights / RTI endpoint would pass it and then be locked
+    # down. Stopping here also avoids the VNet-integration write, which would trigger an NME resubmission
+    # of a run already known to be incomplete.
     Throw "$($script:NmeFailedEndpointComponents.Count) of the private endpoints or DNS zone groups could not be created (listed above). Nothing has been made private by this run. Resolve the errors above and re-run - components that already succeeded will be found and skipped."
 }
 #endregion
@@ -3342,7 +3136,6 @@ if ($PeerVnetIds) {
         $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $VnetRg -ErrorAction SilentlyContinue
         $Resource = Get-AzResource -ResourceId $id
         $PeerVnet = Get-AzVirtualNetwork -Name $Resource.Name -ResourceGroupName $Resource.ResourceGroupName
-        # check if inbound peering exists
         $InboundPeering = Get-AzVirtualNetworkPeering -Name "$($PeerVnet.name)-$PrivateLinkVnetName" -VirtualNetworkName $PeerVnet.Name -ResourceGroupName $Resource.ResourceGroupName -ErrorAction SilentlyContinue
         if ($InboundPeering) {
             Write-Output "Inbound peering exists"
@@ -3351,7 +3144,6 @@ if ($PeerVnetIds) {
             Write-Output "Creating inbound peering"
             $InboundPeering = Add-AzVirtualNetworkPeering -Name "$($PeerVnet.name)-$PrivateLinkVnetName" -VirtualNetwork $PeerVnet -RemoteVirtualNetworkId $VNet.id 
         }
-        # check if outbound peering exists
         $OutboundPeering = Get-AzVirtualNetworkPeering -Name "$PrivateLinkVnetName-$($PeerVnet.name)" -VirtualNetworkName $VNet.Name -ResourceGroupName $VNet.ResourceGroupName -ErrorAction SilentlyContinue
         if ($OutboundPeering) {
             Write-Output "Outbound peering exists"
@@ -3375,14 +3167,11 @@ $VNet = Get-AzVirtualNetwork -Name $PrivateLinkVnetName -ResourceGroupName $Vnet
 $PrivateEndpointSubnet = Get-AzVirtualNetworkSubnetConfig -Name $PrivateEndpointSubnetName -VirtualNetwork $VNet
 $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet 
 
-# Why service endpoints exist here at all, alongside private endpoints. Traffic that arrives over a
-# private endpoint is not evaluated against VNet or service-endpoint rules, and once
-# PublicNetworkAccess is Disabled those rules are inert regardless - so in the steady state this is
-# redundant with the private-endpoint model. They are kept deliberately, as a documented fallback for
-# the window before the make-private region runs (and for a deployment that stops short of it, for
-# example one that leaves CssaStorageAccount at Public), during which the app service can still reach
-# key vault, sql and storage over the service endpoint. Mixing the two models is what makes this region
-# hard to read; this comment is the record of that being a decision rather than an oversight.
+# Service endpoints are redundant with private endpoints once PublicNetworkAccess is Disabled - traffic
+# over a private endpoint ignores VNet/service-endpoint rules, and those rules are inert anyway at that
+# point. They stay as a deliberate fallback for the window before the make-private region runs (and for
+# a deployment that stops short of it, e.g. CssaStorageAccount left at Public), so the app service can
+# still reach key vault, sql and storage over the service endpoint in the meantime.
 $ServiceEndpoints = @('Microsoft.KeyVault', 'Microsoft.Sql', 'Microsoft.Web')
 if ($CssaStorageAccount -ne 'Public') {
     # Both Private and Restricted need this - only Public skips it.
@@ -3411,7 +3200,6 @@ Write-Output "Keeping private endpoint network policies unchanged: $($PrivateEnd
 # Set-NmeSubnetConfig returns the updated VNet, so $VNet is current here without a re-fetch.
 $AppServiceSubnet = Get-AzVirtualNetworkSubnetConfig -Name $AppServiceSubnetName -VirtualNetwork $VNet
 
-# Check if subnet delegation created
 $AppSubnetDelegation = Get-AzDelegation -Subnet $AppServiceSubnet -ErrorAction SilentlyContinue
 if ($AppSubnetDelegation.ServiceName -eq 'Microsoft.Web/serverFarms') {
     Write-Output "App service subnet delegation already created"
@@ -3423,7 +3211,6 @@ else {
 }
 
 $webApp = Get-AzResource -Id $NmeWebApp.id 
-# check if vnet integration enabled
 if ($webApp.Properties.virtualNetworkSubnetId -eq $AppServiceSubnet.id) {
     Write-Output "App service VNet integration already enabled"
 } 
@@ -3431,10 +3218,10 @@ else {
     Write-Output "Enabling app service VNet integration"
     $webApp.Properties.virtualNetworkSubnetId = $AppServiceSubnet.id
     $webApp.Properties.vnetRouteAllEnabled = 'false'
-    # publicNetworkAccess is deliberately not written here. VNet integration is an outbound
-    # concern and says nothing about whether the app service should be reachable from the
-    # internet; setting it to "Enabled" silently re-exposed an app service the customer had
-    # locked down, either manually or on a previous run with MakeAppServicePrivate = true.
+    # publicNetworkAccess is deliberately not written here: VNet integration is an outbound concern and
+    # says nothing about whether the app service should be reachable from the internet. Setting it to
+    # "Enabled" would silently re-expose an app service the customer had locked down, either manually or
+    # on a previous run with MakeAppServicePrivate = true.
     $WebApp = $webApp | Set-AzResource -Force
     # Set only after the write above succeeds (Set-AzResource throws under
     # $ErrorActionPreference = 'Stop' on failure, so this line is unreached if it fails). Read by the
@@ -3447,7 +3234,6 @@ else {
 if ($NmeCclWebAppName) {
     $NmeCclWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeCclWebAppName
     $CclWebApp = Get-AzResource -Id $NmeCclWebApp.id 
-    # check if endpoint integration enabled
     if ($CclWebApp.Properties.virtualNetworkSubnetId -eq $AppServiceSubnet.id) {
         Write-Output "CCL App service VNet integration already enabled"
     } 
@@ -3459,11 +3245,9 @@ if ($NmeCclWebAppName) {
     }
 }
 
-# check if $NmeIiWebAppName exists
 if ($NmeIiWebAppName) {
     $NmeIiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeIiWebAppName
     $IiwWebApp = Get-AzResource -Id $NmeIiWebApp.id 
-    # check if endpoint integration enabled
     if ($IiwWebApp.Properties.virtualNetworkSubnetId -eq $AppServiceSubnet.id) {
         Write-Output "Intune Insights App service VNet integration already enabled"
     } 
@@ -3474,11 +3258,9 @@ if ($NmeIiWebAppName) {
         $IiwWebApp = $IiwWebApp | Set-AzResource -Force
     }
 }
-# check if real time insights web app exists
 if ($NmeRtiWebAppName) {
     $NmeRtiWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeRtiWebAppName
     $RtiWebApp = Get-AzResource -Id $NmeRtiWebApp.id 
-    # check if endpoint integration enabled
     if ($RtiWebApp.Properties.virtualNetworkSubnetId -eq $AppServiceSubnet.id) {
         Write-Output "RTI App service VNet integration already enabled"
     } 
@@ -3489,51 +3271,43 @@ if ($NmeRtiWebAppName) {
         $RtiWebApp = $RtiWebApp | Set-AzResource -Force
     }
 }
-# privateEndpointNetworkPolicies is deliberately NOT set on the app service subnet. That flag only
-# governs whether NSGs and route tables are applied to *private endpoints* in a subnet, and this
-# subnet is delegated to Microsoft.Web/serverFarms and holds no private endpoints - so the flag has
-# no effect here. NSG and UDR support on a VNet integration subnet does not depend on it. This
-# previously printed "Enabling network policies" and then did nothing, because the only statement in
-# the branch was commented out.
+# privateEndpointNetworkPolicies is deliberately NOT set on the app service subnet: that flag only
+# governs whether NSGs and route tables apply to *private endpoints* in a subnet, and this subnet is
+# delegated to Microsoft.Web/serverFarms and holds none - NSG and UDR support on a VNet integration
+# subnet does not depend on it.
 Write-Output "App service VNet integration region completed in $([math]::Round(((Get-Date) - $RegionStart).TotalSeconds, 1)) seconds"
 #endregion
 
 # --- Defer the connectivity gate when VNet integration was just enabled on the NME app service -----
-# Enabling VNet integration (the write just above, in the NME web app branch) does not take effect in
-# the app service worker instantly - Azure has to reroute the worker into the VNet. The connectivity
-# gate immediately below runs ~18-45 seconds later, before that has happened, so the worker's DNS
-# query is answered from outside the VNet and returns PUBLIC IPs. The gate reads that as a genuine
-# resolution failure and Throws, aborting a run that has otherwise done nothing wrong. Reproduced live
-# three times (2026-08-08, 2026-10-01, 2026-10-02), on two different builds, always under this exact
-# precondition: the same execution newly enabled VNet integration moments earlier. DNS was verified
-# correct by direct inspection at failure time in each case, and a re-run minutes later passes with
-# zero code changes - so this is a timing problem, not a DNS problem.
+# Enabling VNet integration (the write just above) does not take effect in the app service worker
+# instantly - Azure has to reroute the worker into the VNet. The connectivity gate immediately below
+# runs ~18-45 seconds later, before that has happened, so the worker's DNS query is answered from
+# outside the VNet and returns PUBLIC IPs. The gate reads that as a genuine resolution failure and
+# Throws, aborting a run that has otherwise done nothing wrong. This is a timing problem, not a DNS
+# problem: DNS was verified correct by direct inspection at failure time, and a re-run minutes later
+# passes with zero code changes.
 #
-# Fix is to defer, not to sleep or to weaken the gate. A flat Start-Sleep here would penalize every
+# Fix is to defer, not to sleep or to weaken the gate. A flat Start-Sleep would penalize every
 # already-integrated re-run (the overwhelming majority of executions) to cover a one-time cold-start
 # case. Falling back to Test-NmePrivateDnsResolution and proceeding into make-private anyway would only
 # prove a DNS zone has an A record - it proves nothing about what the worker itself resolves or can
-# reach (see the gate's own comment block just below), and making resources private on that basis, on
-# the one run where the worker's routing state is known to be unsettled, risks a guaranteed outage
-# (NME fails to load, 500.30).
+# reach (see the gate's own comment block below), and disabling public access on that basis, while the
+# worker's routing state is known to be unsettled, risks a guaranteed outage (NME fails to load, 500.30).
 #
 # Instead: stop cleanly here, before the gate runs, and let it run on the next invocation instead.
-# Writing virtualNetworkSubnetId (above) restarts the NME app service, and NME automatically resubmits
-# a running scripted action after its own app service restarts - so this deferral costs nothing in
-# wall-clock terms that was not already being spent; that resubmission already happens today, it was
-# just previously wasted (or worse, consumed by the Check-LastRunResults bug fixed alongside this one -
-# see $NmeDeferralMarker's declaration). By the time the resubmission runs, several minutes have
-# passed, the worker has settled into the VNet, and the gate passes on its own - no retry loop, no
-# sleep, no new timer. On that next invocation VNet integration is already enabled (so this block does
-# not fire again), every endpoint/zone/zone-group already exists (the existing "Found ..." idempotent
-# paths), and the script proceeds straight through the gate and make-private as normal. The phase is
-# therefore implicit in Azure resource state - do not introduce a state file, a tag, an app setting, or
-# any other persisted phase marker to track it instead.
+# Writing virtualNetworkSubnetId (above) restarts the NME app service, and NME automatically resubmits a
+# running scripted action after its own app service restarts - so this deferral costs nothing in
+# wall-clock terms beyond what the restart already spends. By the time the resubmission runs, the
+# worker has settled into the VNet and the gate passes on its own - no retry loop, no sleep, no new
+# timer. On that next invocation VNet integration is already enabled (so this block does not fire
+# again) and every endpoint/zone/zone-group already exists (the existing "Found ..." idempotent paths),
+# so the script proceeds straight through the gate and make-private as normal. The phase is therefore
+# implicit in Azure resource state - do not introduce a state file, a tag, an app setting, or any other
+# persisted phase marker to track it instead.
 #
-# Exit (not Throw, no exit code) is deliberate: Check-LastRunResults above already ends with a bare
-# Exit and produces Azure Automation job status Completed - confirmed live in this exact environment.
-# Nothing has failed here, and a Failed status would both alarm the customer and (now that a failed run
-# is never replayed - see the candidate filter in Check-LastRunResults) trigger a full retry instead of
+# Exit (not Throw, no exit code) is deliberate: Check-LastRunResults above already ends with a bare Exit
+# and produces Azure Automation job status Completed. Nothing has failed here, and a Failed status would
+# both alarm the customer and, since a failed run is never replayed, trigger a full retry instead of
 # this orderly continuation.
 if ($script:NmeVnetIntegrationJustEnabled) {
     # $NmeDeferralMarker must lead this line, and only this line needs it: Write-Output, not
@@ -3602,12 +3376,11 @@ if ($NmeDpsStorageAccountName) {
     }
 }
 
-# Re-fetch private endpoints subscription-wide, with the same fallback-to-$NmeRg pattern used for
-# $ExistingPrivateEndpoints earlier in this script, rather than reusing the object New-AzPrivateEndpoint
-# returned when the endpoint was created above (neither New-NmeComponentPrivateEndpoint nor
-# New-NmeStoragePrivateEndpoint return it to their callers at all - see their own comments). A freshly
-# created endpoint may not have CustomDnsConfigs populated yet on that object, so only a fresh Get can
-# be trusted for the private IPs here regardless.
+# Re-fetch private endpoints subscription-wide (same fallback-to-$NmeRg pattern as
+# $ExistingPrivateEndpoints earlier in this script) rather than reusing the object New-AzPrivateEndpoint
+# returned when the endpoint was created above - neither New-NmeComponentPrivateEndpoint nor
+# New-NmeStoragePrivateEndpoint return that object to their callers. A freshly created endpoint may not
+# have CustomDnsConfigs populated yet, so only a fresh Get can be trusted for the private IPs here.
 try {
     $ConnectivityPrivateEndpoints = Get-AzPrivateEndpoint -ErrorAction Stop
 }
@@ -3643,17 +3416,16 @@ if ($ConnectivityDnsServers.Count -eq 0) {
 }
 Write-Output "Connectivity probe will query DNS server(s): $($ConnectivityDnsServers -join ', ')"
 
-# TEST-PLAN.md §22: "could not run the probe at all" is not automatically treated as benign anymore.
-# Bucket 1 (this app's public access was already disabled by an earlier run - DNS was already proven
-# by the run that did that) and Bucket 2 (a deterministic, every-run cause: SCM access restrictions,
-# or the command-too-long guard) still warn and proceed with reachability unverified, exactly as
-# before, because treating either as a hard failure would make the script permanently un-re-runnable
-# for a customer in that state. Bucket 3 (transient or unclassified) now Throws instead of silently
-# proceeding on unverified DNS - a transient Kudu failure is fixed by one click of Restart Job, which
-# is the whole point of making this terminal rather than soft. See Get-NmeKuduFailureBucket, above,
-# for exactly what falls in each bucket. (No pre-flight check here for an App Service Environment or a
-# Linux app service, both Bucket 2 causes per TEST-PLAN.md §22.3 - NME cannot be deployed to either,
-# confirmed 2026-10-06, so there is nothing to pre-flight.)
+# "Could not run the probe at all" is not treated as automatically benign. Bucket 1 (this app's public
+# access was already disabled by an earlier run - DNS was already proven then) and Bucket 2 (a
+# deterministic, every-run cause: SCM access restrictions, or the command-too-long guard) still warn
+# and proceed with reachability unverified, because treating either as a hard failure would make the
+# script permanently un-re-runnable for a customer in that state. Bucket 3 (transient or unclassified)
+# Throws instead of silently proceeding on unverified DNS - a transient Kudu failure is fixed by one
+# click of Restart Job, which is the point of making this terminal rather than soft. See
+# Get-NmeKuduFailureBucket, above, for what falls in each bucket. (No pre-flight check here for an App
+# Service Environment or a Linux app service, both Bucket 2 causes - NME cannot be deployed to either,
+# so there is nothing to pre-flight.)
 try {
     $ConnectivityResults = Test-NmeAppServiceConnectivity -ScmHost $ScmHost -DnsServer $ConnectivityDnsServers -Target $ConnectivityTargets
 }
@@ -3760,24 +3532,19 @@ $RegionStart = Get-Date
 
 Write-Output "Check network deny rules for key vault and sql"
 $NmeKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -VaultName $KeyVaultName
-# check if deny rule for key vault exists
 if (($NmeKeyVault.NetworkAcls.DefaultAction -eq 'Deny') -and ($NmeKeyVault.PublicNetworkAccess -eq 'Disabled')) {
     Write-Output "Key vault public access already disabled"
 }
 else {
     Write-Output "Disabling key vault public access"
-    # Set before the writes below, not after - see $script:NmeMakePrivateWroteSomething's
-    # declaration near the top of the file for why a half-applied write is still recorded.
+    # Set before the write, not after, so a half-applied write still counts toward the closing message below.
     $script:NmeMakePrivateWroteSomething = $true
-    # The same lockdown is applied to all four vaults (NME, CCL, Intune Insights, RTI). Two notes that
-    # apply to every copy of it:
-    #  - The VNet rule is the service-endpoint fallback described in the app service VNet integration
-    #    region above; it has no effect on traffic arriving over the private endpoint.
-    #  - -Bypass None is redundant once PublicNetworkAccess is Disabled, since that blocks the
-    #    trusted-services path too. It is set for clarity, not effect. What does matter is that
-    #    disabling public network access breaks trusted-service scenarios some customers rely on -
-    #    App Service certificate binding from Key Vault, ARM template reference() to a secret, Azure
-    #    Backup. That consequence is documented in the notes block rather than worked around here.
+    # Applied identically to all four vaults (NME, CCL, Intune Insights, RTI). The VNet rule is the
+    # service-endpoint fallback from the app service VNet integration region above; it has no effect on
+    # traffic arriving over the private endpoint. -Bypass None is redundant once PublicNetworkAccess is
+    # Disabled (that already blocks trusted services) and is set only for clarity - disabling public
+    # network access breaks trusted-service scenarios some customers rely on (Key Vault cert binding,
+    # ARM template reference(), Azure Backup), documented in the notes block rather than worked around here.
     Add-AzKeyVaultNetworkRule -VaultName $NmeKeyVault.VaultName -VirtualNetworkResourceId $PrivateEndpointSubnet.id -ResourceGroupName $NmeRg
     Update-AzKeyVaultNetworkRuleSet -VaultName $NmeKeyVault.VaultName -Bypass None -ResourceGroupName $NmeRg
     update-AzKeyVaultNetworkRuleSet -VaultName $NmeKeyVault.VaultName -DefaultAction Deny -ResourceGroupName $NmeRg
@@ -3785,14 +3552,11 @@ else {
 }
 if ($NmeCclKeyVaultName) {
     $NmeCclKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -VaultName $NmeCclKeyVaultName
-    # check if deny rule for key vault exists
     if (($NmeCclKeyVault.NetworkAcls.DefaultAction -eq 'Deny') -and ($NmeCclKeyVault.PublicNetworkAccess -eq 'Disabled')) {
         Write-Output "CCL Key vault public access already disabled"
     }
     else {
         Write-Output "Disabling CCL key vault public access"
-        # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-        # before the write, not after, so a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         Add-AzKeyVaultNetworkRule -VaultName $NmeCclKeyVault.VaultName -VirtualNetworkResourceId $PrivateEndpointSubnet.id -ResourceGroupName $NmeRg 
         Update-AzKeyVaultNetworkRuleSet -VaultName $NmeCclKeyVault.VaultName -Bypass None -ResourceGroupName $NmeRg
@@ -3801,7 +3565,6 @@ if ($NmeCclKeyVaultName) {
     }
 }
 
-# check if deny rule for sql exists
 Disable-NmeSqlPublicAccess -ServerName $NmeSqlServerName -ResourceGroupName $NmeRg -PrivateEndpointSubnetId $PrivateEndpointSubnet.id -DisplayName 'SQL'
 Set-NmeSqlBaseline -ResourceGroupName $NmeRg -ServerName $NmeSqlServerName -DisplayName 'SQL'
 
@@ -3811,11 +3574,10 @@ switch ($CssaStorageAccount) {
         Write-Output "Scripted actions storage account left public (CssaStorageAccount=Public)"
     }
     'Private' {
-        # Emitted on every Private run, not just the one that flips the property: the consequence is a
-        # standing state, and a re-run is when an admin is most likely to be looking for why session
-        # hosts lost access. Placed before the Get-AzStorageAccount call so it still fires if
-        # $StorageAccount resolves to $null. Dual-streamed for the same reason as $CssaInlineModeWarning
-        # below - NME surfaces Write-Warning and Write-Output differently.
+        # Emitted on every Private run, not just the one that disables access: the consequence is a standing
+        # state, and a re-run is when an admin is most likely to be looking for why session hosts lost access.
+        # Placed before Get-AzStorageAccount so it still fires if $StorageAccount resolves to $null, and
+        # dual-streamed (Write-Warning and Write-Output) because NME surfaces them differently.
         $CssaPrivateModeWarning = "CssaStorageAccount=Private fully disables public network access on the scripted actions storage account - there is no firewall allow-list, unlike Restricted. Any client without network line-of-sight to the private endpoint, including AVD session hosts, will lose access to it, and scripted actions that need this storage account will fail on those hosts. Peer the session hosts' VNet to the private endpoint VNet (see PeerVnetIds) and ensure DNS resolves the storage account's FQDN to the private endpoint, or create a private endpoint in their own VNet, or use CssaStorageAccount=Restricted instead to keep the public endpoint reachable from linked networks. This script never re-enables public network access once disabled; reversing it is a manual Azure Portal action."
         Write-Warning $CssaPrivateModeWarning
         Write-Output  $CssaPrivateModeWarning
@@ -3826,8 +3588,6 @@ switch ($CssaStorageAccount) {
         }
         else {
             Write-Output "Disabling storage public access"
-            # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-            # before the write, not after, so a half-applied write is still recorded.
             $script:NmeMakePrivateWroteSomething = $true
             Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $StorageAccount.StorageAccountName | Out-Null
         }
@@ -3842,13 +3602,10 @@ switch ($CssaStorageAccount) {
             Write-Warning "The scripted actions storage account's public network access is Disabled, most likely from an earlier run with CssaStorageAccount=Private. This script will not re-enable it automatically. Re-enable public network access on the storage account in the Azure Portal, then re-run with CssaStorageAccount=Restricted to apply the firewall-restricted configuration."
         }
         else {
-            # Both service endpoint values are accepted for a storage VirtualNetworkRule:
-            # 'Microsoft.Storage' is the regional endpoint, 'Microsoft.Storage.Global' the
-            # cross-region one (strictly broader - it reaches storage accounts in any region, which
-            # is exactly the case a linked AVD VNet in another region needs). Matching only the
-            # regional value would skip a subnet that is in fact correctly configured, warn that it
-            # cannot be allowed through the firewall, and then cut off its access when default-deny
-            # is applied. Seen live on this lab's own shared VNet.
+            # Both service endpoints are valid on a storage VirtualNetworkRule: 'Microsoft.Storage' is regional,
+            # 'Microsoft.Storage.Global' is cross-region (broader - it also reaches storage accounts in other
+            # regions, which a linked AVD VNet elsewhere needs). Matching only the regional value would wrongly
+            # flag a correctly configured subnet as unsupported and then cut off its access under default-deny.
             $LinkedNetworkCoverage = Get-NmeLinkedNetworkSubnetIds -Prefix $Prefix -ServiceEndpointNames 'Microsoft.Storage','Microsoft.Storage.Global' -PurposeDescription 'CssaStorageAccount=Restricted' -RemedyHint 'Enable the Microsoft.Storage service endpoint on the subnet(s) whose session hosts need this storage account and re-run - or Microsoft.Storage.Global instead if the subnet is in a different region than the storage account, since the regional endpoint can only be allowed through a storage firewall in its own region or that region''s pair.'
             # @() is defensive, not decorative: everything below relies on .Count and on foreach
             # over this variable, and both silently misbehave on a bare string - .Count on a
@@ -3856,17 +3613,15 @@ switch ($CssaStorageAccount) {
             # would pass the emptiness guard below and then be iterated as a single value.
             $AllowedSubnetIds = @($LinkedNetworkCoverage.AllowedSubnetIds)
             if (-not $AllowedSubnetIds.Count) {
-                # Mirrors the RTI Restricted branch's empty-allow-list safeguard above (RtiAppService=Restricted).
-                # The mechanism differs - there, adding the first Allow rule is what removes App Service's
-                # implicit "Allow all"; here, it's the explicit -DefaultAction Deny below - but the outcome of
-                # skipping this guard is identical: a firewall with nothing on the allow-list denies everything,
-                # which is exactly CssaStorageAccount=Private, while the admin believes they chose a middle
-                # ground. So an empty list here means apply nothing at all rather than an all-denying rule set.
+                # Mirrors the RtiAppService=Restricted branch's empty-allow-list safeguard below. The mechanism
+                # differs - there, adding the first Allow rule is what removes App Service's implicit "Allow
+                # all"; here it's the explicit -DefaultAction Deny below - but an empty allow-list would
+                # otherwise default-deny everything, which is exactly CssaStorageAccount=Private while the admin
+                # believes they chose a middle ground. So an empty list here means apply nothing at all.
                 if ($LinkedNetworkCoverage.LinkedVnetCount -eq 0) {
-                    # No LINKED_NETWORK VNet was found in any readable subscription at all - the fix is
-                    # in Nerdio Manager, not on a subnet. Mention any unreadable subscriptions, since a
-                    # linked VNet may exist and simply be invisible to this service principal rather than
-                    # not exist.
+                    # No LINKED_NETWORK VNet exists in any readable subscription - the fix is in Nerdio Manager,
+                    # not on a subnet. Mention unreadable subscriptions since a linked VNet may exist there,
+                    # invisible to this service principal.
                     $UnreadableNote = if ($LinkedNetworkCoverage.UnreadableSubscriptions.Count) {
                         " $($LinkedNetworkCoverage.UnreadableSubscriptions.Count) subscription(s) could not be read while looking (see the warnings above): $($LinkedNetworkCoverage.UnreadableSubscriptions -join ', '). A linked VNet may exist there and simply be invisible to this service principal."
                     } else {
@@ -3879,50 +3634,39 @@ switch ($CssaStorageAccount) {
                 }
             }
             else {
-                # Each rule is added independently and its failure is contained. Azure rejects a storage
-                # VNet rule when the subnet uses the *regional* Microsoft.Storage service endpoint and
-                # sits in a region other than the storage account's (or its paired region):
-                # "ResourceBeingAcledHasWrongLocation: Microsoft.Storage resources in <region> cannot be
-                # ACL-ed to virtual network <id> in <other region>". A multi-region AVD deployment - a
-                # linked VNet in a different region than Nerdio Manager - hits this on the *default*
-                # parameter value, and with $ErrorActionPreference = 'Stop' an unhandled failure here
-                # aborted the run in the middle of the make-private region, after the key vault and sql
-                # server had already been locked down but before the storage baseline and the remaining
-                # components were done. Found live (2026-08-12) against a real northcentralus linked VNet
-                # while Nerdio Manager was in eastus2. Being unable to allow one AVD VNet through a
-                # firewall must never leave the deployment half-configured, so each failure is reported
-                # and the run continues.
+                # Each rule is added independently and its failure is contained: Azure rejects a storage VNet
+                # rule when the subnet uses the *regional* Microsoft.Storage service endpoint from a different
+                # region than the storage account (or its paired region) - "ResourceBeingAcledHasWrongLocation:
+                # Microsoft.Storage resources in <region> cannot be ACL-ed to virtual network <id> in <other
+                # region>". An unhandled failure here, under $ErrorActionPreference = 'Stop', would abort the
+                # run mid-region after the key vault and SQL server are already locked down, so each failure is
+                # reported and the run continues.
                 $AllowedSubnetCount = 0
                 $SkippedSubnetIds = @()
-                # Read the account's current network rule set once, up front, rather than per
-                # subnet inside the loop below - a per-iteration read would not see rules this same
-                # loop just added (each Get-AzStorageAccount call is a point-in-time snapshot, not a
-                # live view of this run's own writes) and would not save any calls anyway, since
-                # every subnet still has to be checked against it regardless. Mirrors the
-                # RtiAppService=Restricted branch's own up-front Get-AzWebAppAccessRestrictionConfig
-                # read further down this region (see its comment there for the same reasoning in
-                # that branch's terms). Compared below via the default, case-insensitive behavior of
-                # -contains rather than -ccontains: ARM returns resource ids with inconsistent
-                # casing on the resourceGroups/providers segments between calls, and a case-sensitive
-                # compare would treat an already-allowed subnet as new whenever that casing differed.
+                # Read the account's current network rule set once, up front, rather than per subnet in the
+                # loop below: a per-iteration read would not see rules this same loop just added, and would
+                # not save any calls anyway since every subnet still has to be checked against it regardless.
+                # Mirrors the RtiAppService=Restricted branch's own up-front
+                # Get-AzWebAppAccessRestrictionConfig read further down. Compared via -contains, not
+                # -ccontains: ARM returns resource ids with inconsistent casing on the resourceGroups/providers
+                # segments between calls, and a case-sensitive compare would treat an already-allowed subnet
+                # as new whenever that casing differed.
                 $ExistingNetworkRuleSet = (Get-AzStorageAccount -ResourceGroupName $NmeRg -Name $StorageAccount.StorageAccountName).NetworkRuleSet
                 $ExistingSubnetIds = @($ExistingNetworkRuleSet.VirtualNetworkRules | Where-Object { $_.VirtualNetworkResourceId } | Select-Object -ExpandProperty VirtualNetworkResourceId)
                 foreach ($SubnetId in $AllowedSubnetIds) {
                     if ($ExistingSubnetIds -contains $SubnetId) {
-                        # Already allowed through the firewall by an earlier run, or by the customer
-                        # directly. Still counts toward $AllowedSubnetCount - that number means
-                        # "subnets now allowed through the firewall", which includes subnets that
-                        # were already there - but there is nothing to write for a subnet that
-                        # already has a rule, so this iteration sets no flag and makes no call.
+                        # Already allowed by an earlier run or the customer directly. Still counts toward
+                        # $AllowedSubnetCount - that number means subnets now allowed through the firewall,
+                        # including ones already there - but nothing is written for a subnet that already has
+                        # a rule, so this iteration sets no flag.
                         $AllowedSubnetCount++
                         continue
                     }
-                    # Set only on a confirmed write, NOT before the call as most sites in this file
-                    # do. A subnet that fails here fails for a structural reason - wrong region
-                    # relative to the storage account, or the regional vs. global Microsoft.Storage
-                    # service endpoint mismatch explained in the warning below - that reproduces on
-                    # every future run, so counting it as a write would report "something changed"
-                    # forever in that configuration.
+                    # Set only on a confirmed write, not before the call like most sites in this file: a
+                    # subnet that fails here fails for a structural reason (wrong region relative to the
+                    # storage account, or the regional vs. global Microsoft.Storage service endpoint mismatch
+                    # explained below) that reproduces on every future run, so counting it as a write would
+                    # report "something changed" forever.
                     try {
                         Add-AzStorageAccountNetworkRule -ResourceGroupName $NmeRg -Name $StorageAccount.StorageAccountName -VirtualNetworkResourceId $SubnetId -ErrorAction Stop | Out-Null
                         $script:NmeMakePrivateWroteSomething = $true
@@ -3933,24 +3677,17 @@ switch ($CssaStorageAccount) {
                         Write-Warning "Could not allow subnet '$SubnetId' through the scripted actions storage account's firewall: $($_.Exception.Message) A storage account can only be ACL-ed to a subnet in its own region (or that region's pair) when the subnet uses the regional Microsoft.Storage service endpoint. To allow a subnet in a different region, enable the cross-region Microsoft.Storage.Global service endpoint on it instead, then re-run. This subnet will lose access to the storage account over the public endpoint until then."
                     }
                 }
-                # Same contained-failure reasoning as the Add-AzStorageAccountNetworkRule loop just
-                # above (found live 2026-08-12) and the Add-AzWebAppAccessRestrictionRule loop in the
-                # RtiAppService=Restricted branch: with $ErrorActionPreference = 'Stop', an unhandled
-                # failure on this call would abort the run in the middle of the make-private region,
-                # after the primary key vault and SQL server are already locked down. Piped to Out-Null
-                # like every other state-changing call in this region - unpiped,
-                # Update-AzStorageAccountNetworkRuleSet's return value would otherwise dump the whole
-                # rule-set object into the customer's job log. $DefaultDenyApplied gates the three
-                # messages below: each of them asserts the firewall is now default-deny, which would be
-                # a false statement in the job log if this call failed, so they must only fire once it
-                # has actually succeeded.
+                # Same contained-failure reasoning as the Add-AzStorageAccountNetworkRule loop above: with
+                # $ErrorActionPreference = 'Stop', an unhandled failure on this call would abort the run
+                # mid-region, after the key vault and SQL server are already locked down. Piped to Out-Null
+                # like every other state-changing call in this region, since the unpiped return value would
+                # dump the whole rule-set object into the customer's job log.
                 #
-                # This call, like the loop above, used to run unconditionally on every run with no
-                # existence check - the same default-value problem applies here too, so it gets the
-                # same fix: read $ExistingNetworkRuleSet.DefaultAction (captured once, above) instead
-                # of writing blindly. When it is already Deny, nothing is written and
-                # $DefaultDenyApplied is set directly - the three messages below assert the firewall
-                # IS default-deny, which remains a true statement even though this run changed nothing.
+                # $DefaultDenyApplied gates the three messages below, each of which asserts the firewall is
+                # now default-deny - a false statement if this call failed, so they fire only once it has
+                # actually succeeded. When $ExistingNetworkRuleSet.DefaultAction is already Deny, nothing is
+                # written and $DefaultDenyApplied is set directly; the messages remain true even though this
+                # run changed nothing.
                 $DefaultDenyApplied = $false
                 if ($ExistingNetworkRuleSet.DefaultAction -eq 'Deny') {
                     $DefaultDenyApplied = $true
@@ -4009,8 +3746,6 @@ if ($NmeCclStorageAccountName) {
     }
     else {
         Write-Output "Disabling CCL storage public access"
-        # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-        # before the write, not after, so a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $NmeCclStorageAccount.StorageAccountName | Out-Null
     }
@@ -4026,8 +3761,6 @@ if ($NmeDpsStorageAccountName) {
     }
     else {
         Write-Output "Disabling DPS storage public access"
-        # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-        # before the write, not after, so a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         Set-AzStorageAccount -PublicNetworkAccess Disabled -ResourceGroupName $NmeRg -Name $NmeDpsStorageAccount.StorageAccountName | Out-Null
     }
@@ -4054,14 +3787,11 @@ if ($NmeRtiSqlServerName) {
 }
 if ($NmeRtiKeyVaultName) {
     $RtiKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -VaultName $NmeRtiKeyVaultName
-    # check if deny rule for key vault exists
     if (($RtiKeyVault.NetworkAcls.DefaultAction -eq 'Deny') -and ($RtiKeyVault.PublicNetworkAccess -eq 'Disabled')) {
         Write-Output "RTI Key vault public access already disabled"
     }
     else {
         Write-Output "Disabling RTI key vault public access"
-        # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-        # before the write, not after, so a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         Add-AzKeyVaultNetworkRule -VaultName $RtiKeyVault.VaultName -VirtualNetworkResourceId $PrivateEndpointSubnet.id -ResourceGroupName $NmeRg 
         Update-AzKeyVaultNetworkRuleSet -VaultName $RtiKeyVault.VaultName -Bypass None -ResourceGroupName $NmeRg
@@ -4070,14 +3800,12 @@ if ($NmeRtiKeyVaultName) {
     }
 }
 
-# Control network access to the real time insights app service. Gated on its own RtiAppService parameter, not
-# MakeAppServicePrivate: unlike Intune Insights, nothing requires RTI to be reachable by the same clients as the
-# primary app service, and locking it down silently cuts off any reporting endpoint (AVD session hosts, Windows
-# 365 Cloud PCs, Intune-managed devices) without VNet line-of-sight - see the parameter description. Restricted
-# and Private only ever tighten access, never loosen it, for the same reason as the NME app service block at the
-# end of this script: setting the parameter back to a less restrictive value must not re-expose an app the
-# customer locked down. Runs after RTI VNet integration (in the #region app service vnet integration block
-# above), per the lesson from the CCL web app, and after the P2-1 connectivity gate.
+# Gated on its own RtiAppService parameter, not MakeAppServicePrivate: unlike Intune Insights, nothing
+# requires RTI to be reachable by the same clients as the primary app service, and locking it down
+# silently cuts off any reporting endpoint (AVD session hosts, Windows 365 Cloud PCs, Intune-managed
+# devices) without VNet line-of-sight. Restricted and Private only ever tighten access, never loosen it,
+# for the same reason as the NME app service block at the end of this script. Runs after RTI VNet
+# integration above, per the ordering lesson from the CCL web app, and after the connectivity gate above.
 if ($NmeRtiWebAppName) {
     switch ($RtiAppService) {
         'Public' {
@@ -4086,11 +3814,10 @@ if ($NmeRtiWebAppName) {
             Write-Output "RTI app service left public (RtiAppService=Public)"
         }
         'Private' {
-            # Emitted on every Private run, not just the one that flips the property: the consequence is a
-            # standing state, and a re-run is when an admin is most likely to be looking for why session hosts
-            # lost access. Placed before the Get-AzWebApp call so it still fires if that resolves oddly.
-            # Dual-streamed for the same reason as $CssaPrivateModeWarning above - NME surfaces Write-Warning
-            # and Write-Output differently.
+            # Emitted on every Private run, not just the one that disables access: the consequence is a
+            # standing state, and a re-run is when an admin is most likely to be looking for why session
+            # hosts lost access. Placed before Get-AzWebApp so it still fires if that resolves oddly, and
+            # dual-streamed (Write-Warning and Write-Output) for the same reason as $CssaPrivateModeWarning above.
             $RtiPrivateModeWarning = "RtiAppService=Private fully disables public network access on the Real Time Insights app service - only clients with network line-of-sight to the private VNet or a peered VNet can reach it. Every endpoint that reports to Real Time Insights - AVD session hosts, Windows 365 Cloud PCs and Intune-managed devices - must be able to reach it to post metrics, and any that cannot will simply stop reporting with no error surfaced in Nerdio Manager; the symptom is missing history noticed weeks later. Windows 365 Cloud PCs and roaming Intune-managed devices are not recoverable by peering or by a firewall rule under either Restricted or Private. This script never re-enables public network access once disabled; reversing it is a manual Azure Portal action."
             Write-Warning $RtiPrivateModeWarning
             Write-Output  $RtiPrivateModeWarning
@@ -4102,8 +3829,6 @@ if ($NmeRtiWebAppName) {
             }
             else {
                 Write-Output "Disabling RTI app service public access"
-                # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file -
-                # set before the write, not after, so a half-applied write is still recorded.
                 $script:NmeMakePrivateWroteSomething = $true
                 $RtiWebAppResource.Properties.publicNetworkAccess = "Disabled"
                 $RtiWebAppResource | Set-AzResource -Force | Out-Null
@@ -4137,10 +3862,9 @@ if ($NmeRtiWebAppName) {
                     # middle ground, so an empty list here means apply nothing at all rather than an
                     # all-denying rule set.
                     if ($LinkedNetworkCoverage.LinkedVnetCount -eq 0) {
-                        # No LINKED_NETWORK VNet was found in any readable subscription at all - the fix
-                        # is in Nerdio Manager, not on a subnet. Mention any unreadable subscriptions,
-                        # since a linked VNet may exist and simply be invisible to this service principal
-                        # rather than not exist.
+                        # No LINKED_NETWORK VNet exists in any readable subscription - the fix is in Nerdio
+                        # Manager, not on a subnet. Mention unreadable subscriptions since a linked VNet may
+                        # exist there, invisible to this service principal.
                         $UnreadableNote = if ($LinkedNetworkCoverage.UnreadableSubscriptions.Count) {
                             " $($LinkedNetworkCoverage.UnreadableSubscriptions.Count) subscription(s) could not be read while looking (see the warnings above): $($LinkedNetworkCoverage.UnreadableSubscriptions -join ', '). A linked VNet may exist there and simply be invisible to this service principal."
                         } else {
@@ -4157,11 +3881,11 @@ if ($NmeRtiWebAppName) {
                     Write-Warning $RtiAccessWarning
                     Write-Output  $RtiAccessWarning
 
-                    # Read the current config once, up front, rather than per subnet in the loop below - a
-                    # per-iteration read would not see rules this same loop just added and would not save
-                    # any calls anyway. Match an allowed subnet against an existing rule by SubnetId, not by
-                    # name - the P1-18 lesson in reverse: match on what the rule *does*, not what it's called
-                    # - and separately guard against the derived name colliding with an unrelated rule.
+                    # Read the current config once, up front, rather than per subnet in the loop below: a
+                    # per-iteration read would not see rules this same loop just added, and would not save any
+                    # calls anyway. Match an allowed subnet against an existing rule by SubnetId, not by name -
+                    # match on what the rule *does*, not what it's called - and separately guard against the
+                    # derived name colliding with an unrelated rule.
                     $ExistingConfig = Get-AzWebAppAccessRestrictionConfig -ResourceGroupName $NmeRg -Name $NmeRtiWebAppName
                     $ExistingRules = @($ExistingConfig.MainSiteAccessRestrictions)
                     $ExistingSubnetIds = @($ExistingRules | Where-Object { $_.SubnetId } | Select-Object -ExpandProperty SubnetId)
@@ -4169,16 +3893,14 @@ if ($NmeRtiWebAppName) {
                     $UsedPriorities = @($ExistingRules | Select-Object -ExpandProperty Priority)
                     $NextPriority = 300
 
-                    # Each rule is added independently and its failure is contained - the exact pattern and
-                    # reasoning of the storage Add-AzStorageAccountNetworkRule loop above: with
-                    # $ErrorActionPreference = 'Stop', one un-allowable subnet must never abort the run in
-                    # the middle of the make-private region. Expect a cross-region or ARM-validation failure
-                    # class here analogous to storage's ResourceBeingAcledHasWrongLocation; the message is
-                    # reported verbatim rather than guessed at in advance. -IgnoreMissingServiceEndpoint is
-                    # never passed: its existence on this cmdlet is exactly the evidence that a
-                    # service-endpoint access-restriction rule silently does nothing without Microsoft.Web
-                    # already enabled on the source subnet, which is the failure class this file keeps
-                    # getting bitten by.
+                    # Each rule is added independently and its failure is contained, mirroring the storage
+                    # Add-AzStorageAccountNetworkRule loop above: with $ErrorActionPreference = 'Stop', one
+                    # un-allowable subnet must never abort the run mid-region. Expect a cross-region or
+                    # ARM-validation failure class here, analogous to storage's
+                    # ResourceBeingAcledHasWrongLocation; the message is reported verbatim.
+                    # -IgnoreMissingServiceEndpoint is never passed: its existence on this cmdlet is itself
+                    # the evidence that a service-endpoint access-restriction rule silently does nothing
+                    # without Microsoft.Web enabled on the source subnet.
                     $AllowedSubnetCount = 0
                     $FailedSubnetIds = @()
                     foreach ($SubnetId in $AllowedSubnetIds) {
@@ -4193,12 +3915,10 @@ if ($NmeRtiWebAppName) {
                             continue
                         }
                         while ($UsedPriorities -contains $NextPriority) { $NextPriority += 10 }
-                        # Set only on a confirmed write, NOT before the call as most sites in this
-                        # file do. A subnet that fails here fails for a structural reason - a derived
-                        # rule-name collision (handled by the `continue` above) or a missing service
-                        # endpoint on the source subnet - that reproduces on every future run, so
-                        # counting it as a write would report "something changed" forever. Not set on
-                        # either `continue` path above: neither writes anything.
+                        # Set only on a confirmed write, not before the call like most sites in this file: a
+                        # subnet that fails here fails for a structural reason (a derived rule-name collision,
+                        # handled by the `continue` above, or a missing service endpoint) that reproduces on
+                        # every future run, so counting it as a write would report "something changed" forever.
                         try {
                             Add-AzWebAppAccessRestrictionRule -ResourceGroupName $NmeRg -WebAppName $NmeRtiWebAppName -Name $RuleName -Action Allow -SubnetId $SubnetId -Priority $NextPriority -ErrorAction Stop | Out-Null
                             $script:NmeMakePrivateWroteSomething = $true
@@ -4229,13 +3949,13 @@ if ($NmeRtiWebAppName) {
                 }
             }
             # Deliberately not touched, in either sub-branch above: ScmSiteUseMainSiteRestrictionConfig. The
-            # SCM/Kudu site keeps its own (unrestricted) config, consistent with the rest of this script,
-            # which never restricts an SCM endpoint - restricting it would also break the P2-1-style Kudu
-            # probe pattern used earlier in this script, if that pattern is ever extended to RTI. Also
-            # deliberately not done: removing a pre-existing rule this script did not create, or adding an
-            # explicit Deny-all rule. App Service already denies everything once any Allow rule exists - that
-            # implicit deny is the reason there is no -DefaultAction equivalent here, unlike the storage
-            # account's Update-AzStorageAccountNetworkRuleSet -DefaultAction Deny call above.
+            # SCM/Kudu site keeps its own unrestricted config, consistent with the rest of this script, which
+            # never restricts an SCM endpoint - restricting it would also break the Kudu connectivity probe
+            # used earlier in this script, if that pattern is ever extended to RTI. Also deliberately not
+            # done: removing a pre-existing rule this script did not create, or adding an explicit Deny-all
+            # rule - App Service already denies everything once any Allow rule exists, which is why there is
+            # no -DefaultAction equivalent here, unlike storage's Update-AzStorageAccountNetworkRuleSet call
+            # above.
         }
     }
 }
@@ -4243,14 +3963,11 @@ if ($NmeRtiWebAppName) {
 # make intune insights key vault private
 if ($NmeIiKeyVaultName) {
     $IiKeyVault = Get-AzKeyVault -ResourceGroupName $NmeRg -VaultName $NmeIiKeyVaultName
-    # check if deny rule for key vault exists
     if (($IiKeyVault.NetworkAcls.DefaultAction -eq 'Deny') -and ($IiKeyVault.PublicNetworkAccess -eq 'Disabled')) {
         Write-Output "Intune Insights Key vault public access already disabled"
     }
     else {
         Write-Output "Disabling Intune Insights key vault public access"
-        # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-        # before the write, not after, so a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         Add-AzKeyVaultNetworkRule -VaultName $IiKeyVault.VaultName -VirtualNetworkResourceId $PrivateEndpointSubnet.id -ResourceGroupName $NmeRg 
         Update-AzKeyVaultNetworkRuleSet -VaultName $IiKeyVault.VaultName -Bypass None -ResourceGroupName $NmeRg
@@ -4264,15 +3981,13 @@ if ($NmeIiSqlServerName) {
     Set-NmeSqlBaseline -ResourceGroupName $NmeRg -ServerName $NmeIiSqlServerName -DisplayName 'Intune Insights SQL'
 }
 
-# The Cost Calculator web app is always made private, regardless of MakeAppServicePrivate. Nothing
-# but the primary Nerdio Manager web app talks to it, and that traffic goes over the private
-# network once the private endpoint and VNet integration are in place - so there is no scenario in
-# which it needs to be reachable from the internet. This runs here, in the make-private region,
-# which is both after CCL VNet integration (in the #region app service vnet integration block
-# above) and after the connectivity gate above: locking it down before VNet integration would have
-# cut off public access while the private path was still being built, and locking it down before
-# the gate would mean a run that aborts there had already disabled CCL's public access - leaving
-# this here means an aborted run leaves CCL untouched.
+# The Cost Calculator web app is always made private, regardless of MakeAppServicePrivate: nothing but
+# the primary Nerdio Manager web app talks to it, and that traffic goes over the private network once
+# the private endpoint and VNet integration are in place, so it never needs to be reachable from the
+# internet. Runs here - after CCL VNet integration above and after the connectivity gate above - because
+# locking it down earlier would either cut off public access before the private path was built, or mean
+# an aborted run at the gate had already disabled CCL's public access; placed here, an aborted run leaves
+# CCL untouched.
 if ($NmeCclWebAppName) {
     $NmeCclWebApp = Get-AzWebApp -ResourceGroupName $NmeRg -Name $NmeCclWebAppName
     $CclWebApp = Get-AzResource -Id $NmeCclWebApp.id
@@ -4281,8 +3996,6 @@ if ($NmeCclWebAppName) {
     }
     else {
         Write-Output "Disabling CCL app service public access"
-        # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-        # before the write, not after, so a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         $CclWebApp.Properties.publicNetworkAccess = "Disabled"
         $CclWebApp | Set-AzResource -Force | Out-Null
@@ -4303,8 +4016,6 @@ if ($NmeIiWebAppName -and $MakeAppServicePrivate) {
     }
     else {
         Write-Output "Disabling Intune Insights app service public access"
-        # See $script:NmeMakePrivateWroteSomething's declaration near the top of the file - set
-        # before the write, not after, so a half-applied write is still recorded.
         $script:NmeMakePrivateWroteSomething = $true
         $IiWebAppResource.Properties.publicNetworkAccess = "Disabled"
         $IiWebAppResource | Set-AzResource -Force | Out-Null
@@ -4314,12 +4025,10 @@ if ($NmeIiWebAppName -and $MakeAppServicePrivate) {
 Write-Output "Make resources private region completed in $([math]::Round(((Get-Date) - $RegionStart).TotalSeconds, 1)) seconds"
 #endregion
 
-# Public network access is only ever written when MakeAppServicePrivate explicitly asks for it.
-# The previous else branch wrote "Enabled" whenever the parameter was anything other than 'True',
-# which meant a customer who locked the app service down manually - or who ran this script once
-# with MakeAppServicePrivate = true and re-ran it later to add a component without re-supplying
-# the flag - had their app service quietly re-exposed to the internet. Re-enabling public access
-# is a deliberate act and is left to the Azure Portal.
+# Public network access is only ever written when MakeAppServicePrivate explicitly asks for it. Never add
+# an else branch that writes "Enabled" - MakeAppServicePrivate is a sticky setting, so a customer who
+# locked the app down manually, or a later run without the flag re-supplied, would have it quietly
+# re-exposed. Re-enabling public access is a deliberate act, left to the Azure Portal.
 if ($MakeAppServicePrivate) {
     $webApp = Get-AzResource -Id $NmeWebApp.id
     # Read before writing, like every other component in the make-private region. Without this,
@@ -4342,38 +4051,29 @@ else {
 # This script does not restart the NME app service, and must not start doing so again without new
 # evidence. It used to, unconditionally, at this point.
 #
-# A restart here would only be justified if the app had to re-establish outbound connections and
-# re-resolve DNS once its key vault, SQL servers, storage accounts and sibling app services stopped
-# answering publicly. Two instrumented runs measured exactly that, on a build identical to this one
-# except that it logged the restart instead of performing it, sampling the app continuously from the
-# moment the make-private region finished:
+# A restart would only help if the app had to re-establish outbound connections and re-resolve DNS
+# once its key vault, SQL servers, storage accounts and sibling app services stopped answering
+# publicly. Two instrumented runs measured that, on a build that logged the restart instead of
+# performing it: a 12-component lockdown of a settled deployment (132 front-door and 66 data-plane
+# samples over 68 minutes) and a greenfield build-out with the app rerouted into the VNet fifteen
+# minutes earlier (45 and 31 samples to T+60, 17 more to T+73). Zero failures in either, with a
+# single self-healing blip defined in advance as a failure. The data-plane sample is what carries
+# that result - it drives the worker through Entra, Key Vault and SQL, the very things those runs
+# had just made private.
 #
-#   - 12 components disabled on a settled deployment: 132 front-door and 66 data-plane samples over
-#     68 minutes, zero failures.
-#   - A greenfield build-out, the app rerouted into the VNet fifteen minutes earlier, 11 components
-#     disabled: 45 front-door and 31 data-plane samples to T+60, 17 more to T+73, zero failures.
+# The one case those runs never covered is the write below that changes the app's OWN
+# publicNetworkAccess. Measured separately on a scratch app service, since taking the real one
+# private removes the management path: that write, through the same Get-AzResource /
+# Set-AzResource -Force path, did NOT recycle the worker - identical process ids and start times
+# either side - while the site served 403. Restart-AzWebApp on the same app did change the ids, so
+# the measurement can detect a restart. The property is enforced at the front door.
 #
-# The data-plane sample is the one that carries the result: it drives the NME worker through Entra,
-# Key Vault and SQL, all of which those runs had just made private, so "the app answers on its front
-# end but can no longer reach its own back end" would have surfaced there while the front door stayed
-# green. A single self-healing blip was defined in advance as a failure. There were none.
-#
-# The remaining case was the one write that changes the NME app service's own configuration,
-# publicNetworkAccess, which those runs never performed. Measured separately against a scratch app
-# service, because taking the real one private removes the management path: writing
-# publicNetworkAccess from Enabled to Disabled through the same Get-AzResource / Set-AzResource -Force
-# path used above did NOT recycle the worker - same process ids and start times either side - while
-# the site returned 403 to public callers. An explicit Restart-AzWebApp on the same app, as a control,
-# did change both process ids. The property is enforced at the front door; the worker neither
-# restarts for it nor needs to.
-#
-# So no path through this script leaves the app needing a restart. That matters beyond the thirty
-# seconds a restart costs: Nerdio Manager resubmits a running scripted action whenever its own app
-# service restarts, so each restart cost a whole extra Azure Automation job, which then matched the
-# previous Completed job, replayed its output and exited - several minutes of runtime to do nothing.
+# Restarting is not merely wasteful here, it is expensive: Nerdio Manager resubmits a running
+# scripted action whenever its app service restarts, so each restart cost a whole extra Azure
+# Automation job that replayed the previous run's output and exited.
 #
 # The deferral between the "app service vnet integration" and "private DNS and network preflight
-# checks" regions above is unaffected: it rides on the implicit restart Azure performs when
+# checks" regions above is unaffected - it rides on the implicit restart Azure performs when
 # virtualNetworkSubnetId is written, not on any call here.
 if ($script:NmeMakePrivateWroteSomething) {
     Write-Output "Resources were made private in this run. The app service does not need to be restarted for that to take effect."
@@ -4382,7 +4082,7 @@ else {
     Write-Output "Nothing was changed in the make-private step, so the app service does not need to be restarted."
 }
 
-# A1 total, paired with $ScriptStart near the top of the file. Printed last so it captures everything,
-# including the public-access and restart steps above that run after the "make resources private"
-# region's own #endregion. This is the number to compare against a Phase B run once one exists.
+# Total execution time, paired with $ScriptStart near the top of the file. Printed last so it captures
+# everything, including the public-access and restart steps above that run after the make-private
+# region's own #endregion.
 Write-Output "Total script execution time: $([math]::Round(((Get-Date) - $ScriptStart).TotalSeconds, 1)) seconds"
