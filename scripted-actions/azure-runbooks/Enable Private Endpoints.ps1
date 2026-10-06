@@ -778,6 +778,44 @@ Function Check-LastRunResults {
         return
     }
 
+    # Before looking for a run that already FINISHED, look for one that is still going (To-Do H5).
+    # Everything below this block reasons about completed jobs only, so two copies of this script
+    # running at the same time were invisible to each other and raced: both would pass the same
+    # existence checks, then both would create the same subnet rules, endpoints and DNS zone groups.
+    # That is the exact shape of the ARM race that left two automation-account endpoints permanently
+    # wedged in provisioningState Failed on the lab, and concurrent endpoint creation makes it worse,
+    # because each sibling fans several writes at the same parent VNet.
+    #
+    # Concurrency is not hypothetical here: Nerdio Manager resubmits a scripted action it believes is
+    # still running whenever the app service restarts, and this script restarts it (implicitly on the
+    # VNet-integration write, explicitly at the end when make-private changed something). If a
+    # resubmission lands while the original job is still in the sandbox, this is what catches it.
+    #
+    # Exit, not Throw: the sibling is doing the work, so nothing has failed, and a Failed job here
+    # would be a false alarm in the customer's job history. Re-running later is safe and idempotent,
+    # which is what the message tells the admin to do.
+    #
+    # $AllJobs is listed once and used by both scans - Get-AzAutomationJob with no filter pages
+    # through every job in the account, which is the expensive part of this function.
+    $AllJobs = @(Get-AzAutomationJob -ResourceGroupName $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName)
+    $RunningStatuses = @('Running','Queued','Activating','New','Starting','Resuming')
+    $SiblingJobs = $AllJobs |
+        Where-Object { $RunningStatuses -contains $_.Status } |
+        Where-Object { $_.JobId -ne $ThisJob.JobId }
+    foreach ($SiblingJob in $SiblingJobs) {
+        $SiblingDetails = Get-AzAutomationJob -Id $SiblingJob.JobId -ResourceGroupName $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName
+        $SiblingHash = Get-NmeScriptHash -ScriptText (Get-NmeJobScriptText -JobParameters $SiblingDetails.JobParameters)
+        if (-not $SiblingHash) {
+            Write-Verbose "Skipping running job $($SiblingJob.JobId) because its script source could not be determined."
+            continue
+        }
+        if ($SiblingHash -eq $ThisScriptHash) {
+            $SiblingStart = if ($SiblingJob.StartTime) { $SiblingJob.StartTime.UtcDateTime.ToString('u') } else { $SiblingJob.CreationTime.UtcDateTime.ToString('u') }
+            Write-Output "Another run of this script is already in progress (job $($SiblingJob.JobId), status $($SiblingJob.Status), started $SiblingStart) - exiting so the two runs do not configure the same resources at the same time. Nothing was changed by this run. If that run does not finish the deployment, re-run this script once it has ended; it is safe to re-run and will pick up wherever the other run stopped."
+            Exit
+        }
+    }
+
     # EndTime is a DateTimeOffset; compare both sides in UTC explicitly rather than
     # relying on the sandbox's local timezone happening to be UTC.
     $JobCutoffUtc = (Get-Date).ToUniversalTime().AddMinutes(-$MinutesAgo)
@@ -809,7 +847,7 @@ Function Check-LastRunResults {
     # Exits). Phase 3 of a greenfield chain sees both phase 1 (deferred) and phase 2 (completed)
     # inside the window, so without an explicit sort which one it picks depends on
     # Get-AzAutomationJob's ordering - and $WaitMinutes below anchors on whichever was picked.
-    $jobs = Get-AzAutomationJob -ResourceGroupName $NmeRg -AutomationAccountName $NmeScriptedActionsAccountName |
+    $jobs = $AllJobs |
         Where-Object { $_.Status -eq 'Completed' } |
         Where-Object { $_.EndTime.UtcDateTime -gt $JobCutoffUtc } |
         Sort-Object { $_.EndTime.UtcDateTime } -Descending
