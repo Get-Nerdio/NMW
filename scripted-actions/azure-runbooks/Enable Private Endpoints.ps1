@@ -419,6 +419,23 @@ function Set-NmeVars {
         Write-Verbose "Found Real Time Insights storage account"
         $script:NmeRtiStorageAccountName = $RtiStorageAccount.StorageAccountName
     }
+    # Disabling and re-enabling RTI in Nerdio Manager leaves the old deployment's resources behind with
+    # identical tags, so each lookup above can return two. The names then become arrays and the run dies
+    # mid-way on Get-AzWebApp -Name's parameter binding. All four are checked before throwing so one run
+    # names everything to clean up.
+    $RtiDuplicates = @(
+        @{ Label = 'sql server';      Found = $RtiSqlServer;      Property = 'ServerName' }
+        @{ Label = 'web app';         Found = $RtiWebApp;         Property = 'Name' }
+        @{ Label = 'key vault';       Found = $RtiKeyVault;       Property = 'VaultName' }
+        @{ Label = 'storage account'; Found = $RtiStorageAccount; Property = 'StorageAccountName' }
+    ) | Where-Object { @($_.Found).Count -gt 1 }
+    if ($RtiDuplicates) {
+        $Clauses = foreach ($Duplicate in $RtiDuplicates) {
+            $Names = (@($Duplicate.Found) | ForEach-Object { "'$($_.($Duplicate.Property))'" }) -join ', '
+            "Found more than one Real Time Insights $($Duplicate.Label) ($Names)."
+        }
+        Throw "$($Clauses -join ' ') Please remove any Real Time Insights resources no longer in use, along with the private endpoints this script created for them, and rerun this script."
+    }
 }
 
 Set-NmeVars -keyvaultName $KeyVaultName
