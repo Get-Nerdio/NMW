@@ -22,7 +22,7 @@ recovery, and the app-service-private matrix - is available on our help site: ht
 <# Variables:
 {
   "PrivateLinkVnetName": {
-    "Description": "VNet for private endpoints. Created if it doesn't exist. An existing VNet (or its resource group) must be linked to Nerdio Manager in System > Settings > Azure. See the KB article for details.",
+    "Description": "VNet for private endpoints. Created if it doesn't exist. An existing VNet (or its resource group) must be linked to Nerdio Manager in System > Settings > Azure. For details, see the KB article: https://nmehelp.getnerdio.com/hc/en-us/articles/26124385359757-Scripted-Actions-Azure-Runbook-Enable-Private-Endpoints",
     "IsRequired": true,
     "DefaultValue": "nmw-private-vnet"
   },
@@ -62,7 +62,7 @@ recovery, and the app-service-private matrix - is available on our help site: ht
     "DefaultValue": ""
   },
   "CssaStorageAccount": {
-    "Description": "Network access for the scripted actions storage account: Public (default) = unchanged; Restricted = private endpoint plus public access firewalled to linked networks; Private = private endpoint and public access fully disabled. See the KB article for details - a more restrictive setting is never relaxed automatically on a later run.",
+    "Description": "Network access for the scripted actions storage account: Public (default) = unchanged; Restricted = private endpoint plus public access firewalled to linked networks (requires the Microsoft.Storage or Microsoft.Storage.Global service endpoint to already be enabled on the subnets to allow, before running this script); Private = private endpoint and public access fully disabled. See the KB article for details - a more restrictive setting is never relaxed automatically on a later run.",
     "IsRequired": false,
     "DefaultValue": "Public"
   },
@@ -77,7 +77,7 @@ recovery, and the app-service-private matrix - is available on our help site: ht
     "DefaultValue": "false"
   },
   "RtiAppService": {
-    "Description": "Network access for the Real Time Insights app service: Public (default) = unchanged; Restricted = public endpoint firewalled to linked networks; Private = public access fully disabled. WARNING: Restricted/Private can silently cut off devices (Intune, Cloud PCs) with no line-of-sight to the private VNet - see the KB article before choosing either.",
+    "Description": "Network access for the Real Time Insights app service: Public (default) = unchanged; Restricted = public endpoint firewalled to linked networks (requires the Microsoft.Web service endpoint to already be enabled on the subnets to allow, before running this script); Private = public access fully disabled. WARNING: Restricted/Private can silently cut off devices (Intune, Cloud PCs) with no line-of-sight to the private VNet - see the KB article before choosing either.",
     "IsRequired": false,
     "DefaultValue": "Public"
   },
