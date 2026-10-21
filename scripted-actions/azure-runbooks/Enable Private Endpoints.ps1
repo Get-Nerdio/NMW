@@ -77,7 +77,7 @@ recovery, and the app-service-private matrix - is available on our help site: ht
     "DefaultValue": "false"
   },
   "RtiAppService": {
-    "Description": "Network access for the Real Time Insights app service: Public (default) = unchanged; Restricted = public endpoint firewalled to linked networks (requires the Microsoft.Web service endpoint to already be enabled on the subnets to allow, before running this script); Private = public access fully disabled. WARNING: Restricted/Private can silently cut off devices (Intune, Cloud PCs) with no line-of-sight to the private VNet - see the KB article before choosing either.",
+    "Description": "Network access for the Real Time Insights app service: Public (default) = unchanged; Restricted = public endpoint firewalled to linked networks (requires the Microsoft.Web service endpoint to already be enabled on the subnets to allow, before running this script); Private = public access fully disabled. WARNING: Real Time Insights is iframed into the Nerdio Manager UI, so the browser of anyone viewing it there must be able to reach this app service too. Restricted/Private can also silently cut off devices (Intune, Cloud PCs) with no line-of-sight to the private VNet - see the KB article before choosing either.",
     "IsRequired": false,
     "DefaultValue": "Public"
   },
@@ -3868,12 +3868,14 @@ if ($NmeRtiKeyVaultName) {
     }
 }
 
-# Gated on its own RtiAppService parameter, not MakeAppServicePrivate: unlike Intune Insights, nothing
-# requires RTI to be reachable by the same clients as the primary app service, and locking it down
-# silently cuts off any reporting endpoint (AVD session hosts, Windows 365 Cloud PCs, Intune-managed
-# devices) without VNet line-of-sight. Restricted and Private only ever tighten access, never loosen it,
-# for the same reason as the NME app service block at the end of this script. Runs after RTI VNet
-# integration above, per the ordering lesson from the CCL web app, and after the connectivity gate above.
+# Gated on its own RtiAppService parameter, not MakeAppServicePrivate: RTI has a second audience beyond
+# the clients of the primary app service - every reporting endpoint (AVD session hosts, Windows 365
+# Cloud PCs, Intune-managed devices) - and locking it down silently cuts off any of those without VNet
+# line-of-sight. Like Intune Insights, RTI's content is also iframed into the Nerdio Manager UI, so the
+# browser of anyone viewing it there must be able to reach it too. Restricted and Private only ever
+# tighten access, never loosen it, for the same reason as the NME app service block at the end of this
+# script. Runs after RTI VNet integration above, per the ordering lesson from the CCL web app, and after
+# the connectivity gate above.
 if ($NmeRtiWebAppName) {
     switch ($RtiAppService) {
         'Public' {
