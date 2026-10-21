@@ -22,7 +22,7 @@ recovery, and the app-service-private matrix - is available on our help site: ht
 <# Variables:
 {
   "PrivateLinkVnetName": {
-    "Description": "VNet for private endpoints. Created if it doesn't exist. An existing VNet (or its resource group) must be linked to Nerdio Manager in Settings->Azure environment. See the KB article for details.",
+    "Description": "VNet for private endpoints. Created if it doesn't exist. An existing VNet (or its resource group) must be linked to Nerdio Manager in System > Settings > Azure. See the KB article for details.",
     "IsRequired": true,
     "DefaultValue": "nmw-private-vnet"
   },
@@ -52,7 +52,7 @@ recovery, and the app-service-private matrix - is available on our help site: ht
     "DefaultValue": "10.250.251.0/26"
   },
   "ExistingDNSZonesRG": {
-    "Description": "Resource group of pre-existing private DNS zones to link to the private network, if any. Nerdio Manager must be linked to this RG in Settings->Azure environment (or granted Private DNS Zone Contributor on the zones).",
+    "Description": "Resource group of pre-existing private DNS zones to link to the private network, if any. Nerdio Manager must be linked to this RG in System > Settings > Azure (or granted Private DNS Zone Contributor on the zones).",
     "IsRequired": false,
     "DefaultValue": ""
   },
@@ -62,9 +62,9 @@ recovery, and the app-service-private matrix - is available on our help site: ht
     "DefaultValue": ""
   },
   "CssaStorageAccount": {
-    "Description": "Network access for the scripted actions storage account: Private (default) = private endpoint and public access fully disabled; Restricted = private endpoint plus public access firewalled to linked networks; Public = unchanged. See the KB article for details - a more restrictive setting is never relaxed automatically on a later run.",
+    "Description": "Network access for the scripted actions storage account: Public (default) = unchanged; Restricted = private endpoint plus public access firewalled to linked networks; Private = private endpoint and public access fully disabled. See the KB article for details - a more restrictive setting is never relaxed automatically on a later run.",
     "IsRequired": false,
-    "DefaultValue": "Private"
+    "DefaultValue": "Public"
   },
   "PeerVnetIds": {
     "Description": "'All', or a comma-separated list of Azure resource IDs of VNets to peer to the private endpoint VNet. VNets (or their resource groups) must be linked to Nerdio Manager and in the same subscription. External VNets must be peered manually.",
@@ -117,6 +117,36 @@ if ($MissingModules.Count) {
     # during DNS-zone resolution - and in the $ExistingDNSZonesRG branch, as a message blaming the
     # customer's DNS zones instead of the real cause. This preflight turns that into an actionable error.
     Throw "This script requires the following PowerShell modules, which are not available in this Automation account: $($MissingModules -join ', '). Add them to the Nerdio Manager scripted actions automation account (Modules -> Browse gallery) and re-run this script."
+}
+
+# Capability preflight for the make-private region. The module check above only proves the modules are
+# present; the cmdlet parameters below exist only in newer Az module versions, and they are called
+# AFTER the key vault has been locked down. A missing parameter is a parameter-binding failure, which
+# -ErrorAction cannot suppress, so an old module would otherwise kill the run half-configured. Checked
+# here, before anything has been changed. Get-Command deliberately runs after the module-presence check
+# above: it auto-loads the module, which would mask a missing-module error with a less actionable one.
+# One Get-Command per cmdlet, not per parameter, to keep this cheap. $script:NmeSupportsAsJob further
+# down probes -AsJob at runtime for the same reason: Az module versions in the automation account lag.
+$RequiredCmdletParameters = @(
+    @{ Cmdlet = 'Set-AzStorageAccount'; Module = 'Az.Storage';   Parameters = @('PublicNetworkAccess', 'MinimumTlsVersion', 'AllowBlobPublicAccess') }
+    @{ Cmdlet = 'Update-AzKeyVault';    Module = 'Az.KeyVault';  Parameters = @('PublicNetworkAccess') }
+    @{ Cmdlet = 'Set-AzSqlServer';      Module = 'Az.Sql';       Parameters = @('PublicNetworkAccess', 'MinimalTlsVersion') }
+    @{ Cmdlet = 'Invoke-AzRestMethod';  Module = 'Az.Accounts';  Parameters = @('Path') }
+    @{ Cmdlet = 'Get-AzAccessToken';    Module = 'Az.Accounts';  Parameters = @('ResourceUrl') }
+)
+$MissingCmdletParameters = @()
+$OutdatedModules = @()
+foreach ($Requirement in $RequiredCmdletParameters) {
+    $CmdletParameters = (Get-Command $Requirement.Cmdlet -ErrorAction SilentlyContinue).Parameters
+    foreach ($ParameterName in $Requirement.Parameters) {
+        if (($null -eq $CmdletParameters) -or -not $CmdletParameters.ContainsKey($ParameterName)) {
+            $MissingCmdletParameters += "$($Requirement.Cmdlet) -$ParameterName (module $($Requirement.Module))"
+            $OutdatedModules += $Requirement.Module
+        }
+    }
+}
+if ($MissingCmdletParameters.Count) {
+    Throw "This Automation account's Az modules are too old for this script: $($MissingCmdletParameters -join '; '). These parameters are used to disable public network access and apply the TLS baseline after the key vault has been locked down, so running with an old module would strand the deployment half-configured. Update $(($OutdatedModules | Select-Object -Unique) -join ', ') in the Nerdio Manager scripted actions automation account (Modules -> Browse gallery / Update) and re-run this script. Nothing has been changed by this run."
 }
 
 # The Azure Automation sandbox runs PowerShell 5.1 by default, which rules out ForEach-Object
@@ -179,9 +209,9 @@ function ConvertTo-NmeBoolean {
 
 # Three-valued equivalent of ConvertTo-NmeBoolean above, for the Public/Restricted/Private access
 # parameters. The default is passed in rather than hardcoded because NME may pass an empty string
-# for a parameter left at its default rather than the literal default value, and the two parameters
-# that use this have different defaults: CssaStorageAccount defaults to Private,
-# RtiAppService to Public.
+# for a parameter left at its default rather than the literal default value. Both parameters that
+# use this default to Public; the default stays a parameter so that a future parameter with a
+# different default needs no new code.
 function ConvertTo-NmeAccessMode {
     param(
         [string]$Value,
@@ -197,7 +227,7 @@ function ConvertTo-NmeAccessMode {
     }
 }
 
-$CssaStorageAccount    = ConvertTo-NmeAccessMode -Value $CssaStorageAccount -Name 'CssaStorageAccount' -Default 'Private'
+$CssaStorageAccount    = ConvertTo-NmeAccessMode -Value $CssaStorageAccount -Name 'CssaStorageAccount' -Default 'Public'
 $RtiAppService         = ConvertTo-NmeAccessMode -Value $RtiAppService      -Name 'RtiAppService'      -Default 'Public'
 $MakeAppServicePrivate = ConvertTo-NmeBoolean    -Value $MakeAppServicePrivate -Name 'MakeAppServicePrivate'
 $SkipDNS               = ConvertTo-NmeBoolean    -Value $SkipDNS               -Name 'SkipDNS'
@@ -681,6 +711,15 @@ $NmeReplayMarker = '[completed run] '
 # private.
 $NmeDeferralMarker = '[deferred run] '
 
+# Leads the "Another run of this script is already in progress" line emitted by the sibling-yield exit
+# in Check-LastRunResults below. Same one-variable discipline as $NmeReplayMarker above: emitter and
+# detector must never drift apart. A yield job reports Azure Automation job status Completed (it exits
+# via bare Exit, not Throw - nothing failed) but did no work, so without the candidate scan
+# recognizing and skipping it, a later run inside the window could replay the yield message as if it
+# were a completed run and exit saying "No work was done by this run" - for instance when the older
+# run it yielded to has since failed, leaving the deployment unfinished.
+$NmeYieldMarker = '[yielded run] '
+
 # Prefixes lines echoed from a deferred phase-1 job into phase 2's own output (see the deferred-job
 # branch in Check-LastRunResults below). Distinct from $NmeReplayMarker above: that one means "this
 # job replayed a complete prior run and is exiting here, there is nothing further in this job" - this
@@ -790,7 +829,10 @@ Function Check-LastRunResults {
             continue
         }
         if ($SiblingHash -eq $ThisScriptHash) {
-            Write-Output "Another run of this script is already in progress (job $($SiblingJob.JobId), status $($SiblingJob.Status), started $($SiblingStartUtc.ToString('u'))) - exiting so the two runs do not configure the same resources at the same time. Nothing was changed by this run. If that run does not finish the deployment, re-run this script once it has ended; it is safe to re-run and will pick up wherever the other run stopped."
+            # $NmeYieldMarker must lead this line: Write-Output, not Warning/Verbose, because
+            # Get-AzAutomationJobOutput only returns a truncated summary of each record, so a marker buried
+            # mid-line can be truncated away. See $NmeYieldMarker's declaration above.
+            Write-Output "$($NmeYieldMarker)Another run of this script is already in progress (job $($SiblingJob.JobId), status $($SiblingJob.Status), started $($SiblingStartUtc.ToString('u'))) - exiting so the two runs do not configure the same resources at the same time. Nothing was changed by this run. If that run does not finish the deployment, re-run this script once it has ended; it is safe to re-run and will pick up wherever the other run stopped."
             Exit
         }
     }
@@ -852,10 +894,14 @@ Function Check-LastRunResults {
             # rather than as a second loop.
             $IsReplayJob = $false
             $IsDeferredJob = $false
+            $IsYieldJob = $false
             foreach ($record in $JobOutput) {
                 $RecordSummary = [string]$record.Summary
                 if ($RecordSummary.StartsWith($NmeReplayMarker)) {
                     $IsReplayJob = $true
+                }
+                if ($RecordSummary.StartsWith($NmeYieldMarker)) {
+                    $IsYieldJob = $true
                 }
                 if ($RecordSummary.StartsWith($NmeDeferralMarker)) {
                     $IsDeferredJob = $true
@@ -863,6 +909,10 @@ Function Check-LastRunResults {
             }
             if ($IsReplayJob) {
                 Write-Verbose "Skipping job $($job.JobId): its output is itself a replay of an earlier run, not a run that did work."
+                continue
+            }
+            if ($IsYieldJob) {
+                Write-Verbose "Skipping job $($job.JobId): it yielded to an older concurrent run and did no work."
                 continue
             }
             if ($IsDeferredJob) {
@@ -3644,7 +3694,7 @@ switch ($CssaStorageAccount) {
                     } else {
                         ''
                     }
-                    Write-Warning "No LINKED_NETWORK VNet was found in any readable subscription, so CssaStorageAccount=Restricted changed nothing on the scripted actions storage account. Its public endpoint firewall was NOT set to default-deny, because a default-deny with an empty allow-list would silently be exactly CssaStorageAccount=Private.$UnreadableNote Link the VNet(s) whose session hosts need this storage account to Nerdio Manager under Settings > Azure environment and re-run, or choose CssaStorageAccount=Private deliberately if cutting off public access is intended."
+                    Write-Warning "No LINKED_NETWORK VNet was found in any readable subscription, so CssaStorageAccount=Restricted changed nothing on the scripted actions storage account. Its public endpoint firewall was NOT set to default-deny, because a default-deny with an empty allow-list would silently be exactly CssaStorageAccount=Private.$UnreadableNote Link the VNet(s) whose session hosts need this storage account to Nerdio Manager under System > Settings > Azure and re-run, or choose CssaStorageAccount=Private deliberately if cutting off public access is intended."
                 }
                 else {
                     Write-Warning "$($LinkedNetworkCoverage.LinkedVnetCount) LINKED_NETWORK VNet(s) were found, but no subnet on any of them has the Microsoft.Storage or Microsoft.Storage.Global service endpoint enabled, so CssaStorageAccount=Restricted changed nothing on the scripted actions storage account. Its public endpoint firewall was NOT set to default-deny, because a default-deny with an empty allow-list would silently be exactly CssaStorageAccount=Private. Enable Microsoft.Storage (or Microsoft.Storage.Global for a subnet in another region) on the subnets whose session hosts need this storage account and re-run, or choose CssaStorageAccount=Private deliberately if cutting off public access is intended."
@@ -3750,8 +3800,9 @@ if (($CssaStorageAccount -ne 'Public') -and (Test-NmeCurrentJobIsDownloadMode)) 
     # subsequent scripted action - including a later run of this one - would silently fail to download
     # and do nothing, with no exception raised. Inline Script mode avoids this entirely: the script body
     # is sent as a job parameter instead of fetched from storage.
-    $CssaInlineModeWarning = "CssaStorageAccount=$CssaStorageAccount restricts the scripted actions storage account's public network access. This job ran in download mode (its script was fetched from that same storage account's public endpoint), so every future scripted-action run in this environment - including a later run of this script - will fail to download its script and silently do nothing unless the Azure Runbook Execution Mode is switched to Inline Script first. In Nerdio Manager, go to Settings > Environment > Nerdio tab > Azure Runbooks Scripted Actions, expand the section, and turn on Enable Parameter Execution. See https://nmehelp.getnerdio.com/hc/en-us/articles/26124302308109-Scripted-actions-for-Azure-Runbooks#Runbook-Execution-Mode---Inline-Script"
-    Write-Warning $CssaInlineModeWarning
+    $CssaInlineModeWarning = "CssaStorageAccount=$CssaStorageAccount restricts the scripted actions storage account's public network access. This job ran in download mode (its script was fetched from that same storage account's public endpoint), so every future runbook scripted action in this environment - including a re-run of this script - will fail to download its script and silently do nothing. To prevent that, enable Inline Script mode now: (1) In Nerdio Manager go to System > Settings > Nerdio; (2) scroll to the 'Azure Runbooks Scripted Actions' section and expand it; (3) in 'Current status' select the edit (pencil) control; (4) turn on 'Enable Parameter Execution' and set Runbook Execution Mode to 'Inline Script'; (5) select OK. See https://nmehelp.getnerdio.com/hc/en-us/articles/26124302308109-Scripted-actions-for-Azure-Runbooks#Runbook-Execution-Mode---Inline-Script"
+    # Both streams: NME surfaces them differently, and this breaks every later runbook scripted action.
+    Write-Error $CssaInlineModeWarning -ErrorAction Continue
     Write-Output $CssaInlineModeWarning
 }
 
@@ -3887,7 +3938,7 @@ if ($NmeRtiWebAppName) {
                         } else {
                             ''
                         }
-                        Write-Warning "No LINKED_NETWORK VNet was found in any readable subscription, so RtiAppService=Restricted changed nothing on the RTI app service.$UnreadableNote Link the VNet(s) whose session hosts report to Real Time Insights to Nerdio Manager under Settings > Azure environment and re-run, or choose RtiAppService=Private deliberately if cutting off all reporting is intended."
+                        Write-Warning "No LINKED_NETWORK VNet was found in any readable subscription, so RtiAppService=Restricted changed nothing on the RTI app service.$UnreadableNote Link the VNet(s) whose session hosts report to Real Time Insights to Nerdio Manager under System > Settings > Azure and re-run, or choose RtiAppService=Private deliberately if cutting off all reporting is intended."
                     }
                     else {
                         Write-Warning "$($LinkedNetworkCoverage.LinkedVnetCount) LINKED_NETWORK VNet(s) were found, but no subnet on any of them has the Microsoft.Web service endpoint enabled, so RtiAppService=Restricted changed nothing on the RTI app service. Enable Microsoft.Web on the subnets whose session hosts report to Real Time Insights and re-run, or choose RtiAppService=Private deliberately if cutting off all reporting is intended."
