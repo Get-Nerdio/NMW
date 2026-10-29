@@ -203,9 +203,13 @@ Try {
 
 
   $azurePublicIp = Get-AzPublicIpAddress -Name $azurePublicIpName -ResourceGroupName $AzureResourceGroup
+  $StorageAccountUserB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($StorageAccountUser))
+  $StorageAccountKeyB64  = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($StorageAccountKey))
   $ScriptBlock = @"
   Try {
-    Invoke-Expression "net use $FSLogixFileShare /user:$StorageAccountUser $StorageAccountKey"
+    `$StorageAccountUser = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$StorageAccountUserB64'))
+    `$StorageAccountKey = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$StorageAccountKeyB64'))
+    net use $FSLogixFileShare "/user:`$StorageAccountUser" "`$StorageAccountKey"
     Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/FSLogix/Invoke-FslShrinkDisk/master/Invoke-FslShrinkDisk.ps1' -OutFile 'C:\Windows\Temp\FSLogix-ShrinkDisk.ps1' -usebasicparsing -ea Stop
     Invoke-Expression "C:\Windows\Temp\$InvokeFslShrinkCommand"
     import-csv -Path $FSLogixLogFIle
