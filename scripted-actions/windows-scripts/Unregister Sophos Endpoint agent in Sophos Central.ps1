@@ -84,7 +84,7 @@ $DeleteResponse = (Invoke-RestMethod -Method 'delete' -Headers $TenantsHeader -u
 # Check if request was successful
 Write-Output "INFO: Checking response to confirm deletion"
 Start-Sleep -Seconds 15
-if($DeleteResponse.deleted = "true"){
+if($DeleteResponse.deleted -eq "true"){
     Write-Output "INFO: Successfully deleted $AzureVMName from Sophos Central"
 }
 else {
